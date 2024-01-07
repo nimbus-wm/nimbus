@@ -1,13 +1,28 @@
 use std::{
+    borrow::Cow,
+    cell::RefCell,
+    ffi::c_void,
     future::Future,
+    ptr,
     sync::{self, mpsc::Sender},
     thread,
     time::Instant,
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
+use accessibility_sys::{
+    kAXErrorSuccess, kAXMainWindowChangedNotification, kAXResizedNotification,
+    kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
+    kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
+    kAXWindowMovedNotification, pid_t, AXError, AXObserverAddNotification, AXObserverCreate,
+    AXObserverGetRunLoopSource, AXObserverRef, AXUIElementRef,
+};
 use core_foundation::{
-    array::CFArray, base::TCFType, dictionary::CFDictionaryRef, runloop::CFRunLoopRun,
+    array::CFArray,
+    base::TCFType,
+    dictionary::CFDictionaryRef,
+    runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRun},
+    string::{CFString, CFStringRef},
 };
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
@@ -17,7 +32,7 @@ use core_graphics::{
 use core_graphics_types::geometry::CGRect;
 use icrate::{
     objc2::{
-        declare_class, msg_send_id, mutability, rc::Allocated, rc::Id, sel, ClassType,
+        declare_class, msg_send, msg_send_id, mutability, rc::Allocated, rc::Id, sel, ClassType,
         DeclaredClass, Encode, Encoding,
     },
     AppKit::{self, NSApplication, NSWorkspace},
@@ -59,6 +74,16 @@ struct Window {
     frame: CGRect,
 }
 
+impl Window {
+    fn try_from_ui_element(element: &AXUIElement) -> Result<Self, accessibility::Error> {
+        Ok(Window {
+            title: element.title()?.to_string(),
+            role: element.role()?.to_string(),
+            frame: element.frame()?,
+        })
+    }
+}
+
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {
     let windows: CFArray<CFDictionaryRef> = unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
@@ -74,7 +99,7 @@ async fn get_windows_with_cg(_opt: &Opt, print: bool) {
     println!("main display = {screen:?}");
 }
 
-fn running_apps(opt: &Opt) -> impl Iterator<Item = String> {
+fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
     let bundle = opt.bundle.clone();
     unsafe { NSWorkspace::sharedWorkspace().runningApplications() }
         .into_iter()
@@ -85,18 +110,17 @@ fn running_apps(opt: &Opt) -> impl Iterator<Item = String> {
                     return None;
                 }
             }
-            Some(bundle_id)
+            let pid: pid_t = unsafe { msg_send![&*app, processIdentifier] };
+            Some((pid, bundle_id))
         })
 }
 
 async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     let (sender, mut receiver) = mpsc::unbounded_channel();
-    for bundle_id in running_apps(opt) {
+    for (pid, bundle_id) in running_apps(opt) {
         let sender = sender.clone();
         let task = move || {
-            let Ok(app) = AXUIElement::application_with_bundle(&bundle_id) else {
-                return;
-            };
+            let app = AXUIElement::application(pid);
             let windows = get_windows_for_app(app);
             sender.send((bundle_id, windows)).unwrap()
         };
@@ -123,19 +147,12 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
 }
 
 fn get_windows_for_app(app: AXUIElement) -> Result<Vec<Window>, accessibility::Error> {
-    // TODO: Can't access processIdentifier for some reason.
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
     windows
         .into_iter()
-        .map(|win| {
-            Ok(Window {
-                title: win.title()?.to_string(),
-                role: win.role()?.to_string(),
-                frame: win.frame()?,
-            })
-        })
+        .map(|win| Window::try_from_ui_element(&*win))
         .collect()
 }
 
@@ -175,22 +192,147 @@ fn spawn_event_handler(_opt: &Opt) -> (Sender<Vec<Window>>, Sender<Event>) {
     (initial_windows_tx, events_tx)
 }
 
-fn spawn_app_threads(
-    opt: &Opt,
+fn spawn_app_threads(opt: &Opt, initial_windows_tx: Sender<Vec<Window>>, events_tx: Sender<Event>) {
+    for (pid, bundle_id) in running_apps(opt) {
+        let windows = initial_windows_tx.clone();
+        let events = events_tx.clone();
+        let _ = thread::spawn(move || app_thread_main(pid, bundle_id, windows, events));
+    }
+}
+
+fn app_thread_main(
+    pid: pid_t,
+    bundle_id: String,
     initial_windows_tx: Sender<Vec<Window>>,
-    _events_tx: Sender<Event>,
+    events_tx: Sender<Event>,
 ) {
-    for bundle_id in running_apps(opt) {
-        let tx = initial_windows_tx.clone();
-        let _ = thread::spawn(move || {
-            let Ok(app) = AXUIElement::application_with_bundle(&bundle_id) else {
-                return;
+    let Ok(app) = AXUIElement::application_with_bundle(&bundle_id) else {
+        return;
+    };
+    let Ok(window_elements) = app.windows() else {
+        return;
+    };
+
+    type State = RefCell<StateInner>;
+    struct StateInner {
+        window_elements: Vec<AXUIElement>,
+        events_tx: Sender<Event>,
+    }
+    let state = RefCell::new(StateInner {
+        window_elements: window_elements.into_iter().map(|w| w.clone()).collect(),
+        events_tx,
+    });
+
+    // SAFETY: Notifications can only be delivered inside this function, during
+    // the call to CFRunLoopRun(). We are careful not to move `state`..
+    // TODO: Wrap in a type that releases on drop. Pin the state.
+    let mut observer: AXObserverRef = ptr::null_mut();
+    unsafe {
+        AXObserverCreate(pid, callback, &mut observer);
+        let source = AXObserverGetRunLoopSource(observer);
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+    }
+    const GLOBAL_NOTIFICATIONS: &[&str] = &[
+        kAXWindowCreatedNotification,
+        kAXMainWindowChangedNotification,
+    ];
+    for notif in GLOBAL_NOTIFICATIONS {
+        unsafe {
+            AXObserverAddNotification(
+                observer,
+                app.as_concrete_TypeRef(),
+                CFString::from_static_string(notif).as_concrete_TypeRef(),
+                &state as *const State as *mut c_void,
+            );
+        }
+    }
+
+    const WINDOW_NOTIFICATIONS: &[&str] = &[
+        kAXUIElementDestroyedNotification,
+        kAXWindowMiniaturizedNotification,
+        kAXWindowDeminiaturizedNotification,
+        kAXWindowMovedNotification,
+        kAXResizedNotification,
+        kAXTitleChangedNotification,
+    ];
+    fn register_window_notifs(
+        win: &AXUIElement,
+        state: &State,
+        observer: AXObserverRef,
+    ) -> Result<(), AXError> {
+        for notif in WINDOW_NOTIFICATIONS {
+            let err = unsafe {
+                AXObserverAddNotification(
+                    observer,
+                    win.as_concrete_TypeRef(),
+                    CFString::from_static_string(notif).as_concrete_TypeRef(),
+                    state as *const State as *mut c_void,
+                )
             };
-            let Ok(windows) = get_windows_for_app(app) else {
-                return;
-            };
-            tx.send(windows).unwrap();
-        });
+            if err != kAXErrorSuccess {
+                println!(
+                    "Watching failed with error {} on window {win:#?}",
+                    accessibility_sys::error_string(err)
+                );
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+    state
+        .borrow_mut()
+        .window_elements
+        .retain(|win| register_window_notifs(win, &state, observer).is_ok());
+
+    let Ok(windows) = state
+        .borrow()
+        .window_elements
+        .iter()
+        .map(Window::try_from_ui_element)
+        .collect()
+    else {
+        return;
+    };
+    initial_windows_tx.send(windows).unwrap();
+    drop(initial_windows_tx);
+
+    unsafe extern "C" fn callback(
+        observer: AXObserverRef,
+        elem: AXUIElementRef,
+        notif: CFStringRef,
+        data: *mut c_void,
+    ) {
+        let state = unsafe { &*(data as *const State) };
+        let notif = unsafe { CFString::wrap_under_get_rule(notif) };
+        let notif = Cow::<str>::from(&notif);
+        let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
+        println!("Got {notif:?} on {elem:?}");
+
+        #[allow(non_upper_case_globals)]
+        match &*notif {
+            kAXWindowCreatedNotification => {
+                if register_window_notifs(&elem, state, observer).is_ok() {
+                    state.borrow_mut().window_elements.push(elem);
+                }
+            }
+            kAXUIElementDestroyedNotification => {
+                state.borrow_mut().window_elements.retain(|w| *w != elem);
+            }
+            kAXWindowMovedNotification => {
+                state
+                    .borrow_mut()
+                    .events_tx
+                    .send(Event::WindowMoved)
+                    .unwrap();
+            }
+            _ => {
+                // println!("Unexpected notification {notif:?} on {elem:#?}");
+            }
+        }
+    }
+
+    unsafe {
+        CFRunLoopRun();
     }
 }
 
