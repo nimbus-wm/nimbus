@@ -14,8 +14,9 @@ use accessibility_sys::{
     kAXErrorSuccess, kAXMainWindowChangedNotification, kAXResizedNotification,
     kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
-    kAXWindowMovedNotification, pid_t, AXError, AXObserverAddNotification, AXObserverCreate,
-    AXObserverGetRunLoopSource, AXObserverRef, AXUIElementRef,
+    kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole, pid_t,
+    AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
+    AXUIElementRef,
 };
 use core_foundation::{
     array::CFArray,
@@ -38,6 +39,7 @@ use icrate::{
     AppKit::{self, NSApplication, NSWorkspace},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
+use log::{debug, error, info, trace, warn};
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 
@@ -49,6 +51,7 @@ pub struct Opt {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    env_logger::init();
     let opt = Opt::from_args();
     //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
     time("core-graphics", || get_windows_with_cg(&opt, true)).await;
@@ -177,16 +180,16 @@ fn spawn_event_handler(_opt: &Opt) -> (Sender<Vec<Window>>, Sender<Event>) {
     let (initial_windows_tx, initial_windows) = sync::mpsc::channel();
     let (events_tx, events) = sync::mpsc::channel::<Event>();
     thread::spawn(move || {
-        println!("\nInitial windows:");
+        debug!("\nInitial windows:");
         for windows in initial_windows {
             for window in windows {
-                println!("- {window:?}");
+                debug!("- {window:?}");
             }
         }
-        println!();
+        debug!("");
 
         for event in events {
-            println!("Event {event:?}")
+            info!("Event {event:?}")
         }
     });
     (initial_windows_tx, events_tx)
@@ -270,7 +273,7 @@ fn app_thread_main(
                 )
             };
             if err != kAXErrorSuccess {
-                println!(
+                trace!(
                     "Watching failed with error {} on window {win:#?}",
                     accessibility_sys::error_string(err)
                 );
@@ -306,7 +309,7 @@ fn app_thread_main(
         let notif = unsafe { CFString::wrap_under_get_rule(notif) };
         let notif = Cow::<str>::from(&notif);
         let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
-        println!("Got {notif:?} on {elem:?}");
+        trace!("Got {notif:?} on {elem:?}");
 
         #[allow(non_upper_case_globals)]
         match &*notif {
@@ -325,8 +328,12 @@ fn app_thread_main(
                     .send(Event::WindowMoved)
                     .unwrap();
             }
+            kAXWindowResizedNotification => {}
+            kAXWindowMiniaturizedNotification => {}
+            kAXWindowDeminiaturizedNotification => {}
+            kAXTitleChangedNotification => {}
             _ => {
-                // println!("Unexpected notification {notif:?} on {elem:#?}");
+                error!("Unhandled notification {notif:?} on {elem:#?}");
             }
         }
     }
@@ -404,7 +411,7 @@ fn watch_for_notifications(events_tx: Sender<Event>) {
 
         fn send_event(&self, event: Event) {
             if let Err(err) = self.ivars().events_tx.send(event) {
-                eprintln!("Warning: Failed to send event: {err:?}");
+                warn!("Failed to send event: {err:?}");
             }
         }
     }
