@@ -252,17 +252,19 @@ fn app_thread_main(
 
     const WINDOW_NOTIFICATIONS: &[&str] = &[
         kAXUIElementDestroyedNotification,
-        kAXWindowMiniaturizedNotification,
-        kAXWindowDeminiaturizedNotification,
         kAXWindowMovedNotification,
         kAXResizedNotification,
+        kAXWindowMiniaturizedNotification,
+        kAXWindowDeminiaturizedNotification,
         kAXTitleChangedNotification,
     ];
-    fn register_window_notifs(
-        win: &AXUIElement,
-        state: &State,
-        observer: AXObserverRef,
-    ) -> Result<(), AXError> {
+    #[must_use]
+    fn register_window_notifs(win: &AXUIElement, state: &State, observer: AXObserverRef) -> bool {
+        // Filter out elements that aren't regular windows.
+        match win.role() {
+            Ok(role) if role == kAXWindowRole => (),
+            _ => return false,
+        }
         for notif in WINDOW_NOTIFICATIONS {
             let err = unsafe {
                 AXObserverAddNotification(
@@ -277,15 +279,15 @@ fn app_thread_main(
                     "Watching failed with error {} on window {win:#?}",
                     accessibility_sys::error_string(err)
                 );
-                return Err(err);
+                return false;
             }
         }
-        Ok(())
+        true
     }
     state
         .borrow_mut()
         .window_elements
-        .retain(|win| register_window_notifs(win, &state, observer).is_ok());
+        .retain(|win| register_window_notifs(win, &state, observer));
 
     let Ok(windows) = state
         .borrow()
@@ -314,7 +316,7 @@ fn app_thread_main(
         #[allow(non_upper_case_globals)]
         match &*notif {
             kAXWindowCreatedNotification => {
-                if register_window_notifs(&elem, state, observer).is_ok() {
+                if register_window_notifs(&elem, state, observer) {
                     state.borrow_mut().window_elements.push(elem);
                 }
             }
