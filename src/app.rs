@@ -5,19 +5,21 @@ use accessibility_sys::{
     kAXErrorSuccess, kAXMainWindowChangedNotification, kAXTitleChangedNotification,
     kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
-    kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole, pid_t,
+    kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
     AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
     AXUIElementRef,
 };
 use core_foundation::{
     base::TCFType,
-    runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRun},
+    runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
 use icrate::{objc2::msg_send, AppKit::NSWorkspace};
-use log::{error, trace};
+use log::{debug, error, info, trace};
 
 use crate::{Event, Opt, Window};
+
+pub use accessibility_sys::pid_t;
 
 pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
     let bundle = opt.bundle.clone();
@@ -35,30 +37,21 @@ pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
         })
 }
 
-pub(crate) fn spawn_app_threads(
-    opt: &Opt,
-    initial_windows_tx: Sender<Vec<Window>>,
-    events_tx: Sender<Event>,
-) {
-    for (pid, bundle_id) in running_apps(opt) {
-        let windows = initial_windows_tx.clone();
-        let events = events_tx.clone();
-        let _ = thread::spawn(move || app_thread_main(pid, bundle_id, windows, events));
+#[derive(Debug)]
+pub(crate) struct ThreadHandle {}
+
+pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
+    for (pid, _bundle_id) in running_apps(opt) {
+        spawn_app_thread(pid, events_tx.clone());
     }
 }
 
-pub(crate) fn app_thread_main(
-    pid: pid_t,
-    bundle_id: String,
-    initial_windows_tx: Sender<Vec<Window>>,
-    events_tx: Sender<Event>,
-) {
-    let Ok(app) = AXUIElement::application_with_bundle(&bundle_id) else {
-        return;
-    };
-    let Ok(window_elements) = app.windows() else {
-        return;
-    };
+pub(crate) fn spawn_app_thread(pid: pid_t, events_tx: Sender<Event>) {
+    thread::spawn(move || app_thread_main(pid, events_tx));
+}
+
+pub(crate) fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
+    let app = AXUIElement::application(pid);
 
     type State = RefCell<StateInner>;
     struct StateInner {
@@ -66,9 +59,10 @@ pub(crate) fn app_thread_main(
         events_tx: Sender<Event>,
     }
     let state = RefCell::new(StateInner {
-        window_elements: window_elements.into_iter().map(|w| w.clone()).collect(),
+        window_elements: vec![],
         events_tx,
     });
+    let mut state_ref = state.borrow_mut();
 
     // SAFETY: Notifications can only be delivered inside this function, during
     // the call to CFRunLoopRun(). We are careful not to move `state`..
@@ -79,6 +73,8 @@ pub(crate) fn app_thread_main(
         let source = AXObserverGetRunLoopSource(observer);
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
     }
+
+    // Register for notifications on the application element.
     const GLOBAL_NOTIFICATIONS: &[&str] = &[
         kAXWindowCreatedNotification,
         kAXMainWindowChangedNotification,
@@ -94,6 +90,42 @@ pub(crate) fn app_thread_main(
         }
     }
 
+    // Now that we will observe new window events, read the list of windows.
+    let Ok(initial_window_elements) = app.windows() else {
+        // This is probably not a normal application, or it has exited.
+        return;
+    };
+
+    // Process the list and register notifications on all windows.
+    let mut window_elements = Vec::with_capacity(initial_window_elements.len() as usize);
+    let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
+    for elem in initial_window_elements.iter() {
+        let elem = elem.clone();
+        let Ok(window) = Window::try_from_ui_element(&elem) else {
+            continue;
+        };
+        if !register_window_notifs(&elem, &state, observer) {
+            continue;
+        }
+        window_elements.push(elem);
+        windows.push(window);
+    }
+    state_ref.window_elements = window_elements;
+
+    // Send the ApplicationLaunched event.
+    let Ok(()) =
+        state_ref
+            .events_tx
+            .send(Event::ApplicationLaunched(pid, ThreadHandle {}, windows))
+    else {
+        debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
+        return;
+    };
+
+    // Finally, invoke the run loop to handle events.
+    drop(state_ref);
+    CFRunLoop::run_current();
+
     const WINDOW_NOTIFICATIONS: &[&str] = &[
         kAXUIElementDestroyedNotification,
         kAXWindowMovedNotification,
@@ -102,6 +134,7 @@ pub(crate) fn app_thread_main(
         kAXWindowDeminiaturizedNotification,
         kAXTitleChangedNotification,
     ];
+
     #[must_use]
     fn register_window_notifs(win: &AXUIElement, state: &State, observer: AXObserverRef) -> bool {
         // Filter out elements that aren't regular windows.
@@ -128,22 +161,6 @@ pub(crate) fn app_thread_main(
         }
         true
     }
-    state
-        .borrow_mut()
-        .window_elements
-        .retain(|win| register_window_notifs(win, &state, observer));
-
-    let Ok(windows) = state
-        .borrow()
-        .window_elements
-        .iter()
-        .map(Window::try_from_ui_element)
-        .collect()
-    else {
-        return;
-    };
-    initial_windows_tx.send(windows).unwrap();
-    drop(initial_windows_tx);
 
     unsafe extern "C" fn callback(
         observer: AXObserverRef,
@@ -185,9 +202,5 @@ pub(crate) fn app_thread_main(
                 error!("Unhandled notification {notif:?} on {elem:#?}");
             }
         }
-    }
-
-    unsafe {
-        CFRunLoopRun();
     }
 }

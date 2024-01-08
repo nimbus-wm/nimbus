@@ -42,8 +42,8 @@ async fn main() {
         get_windows_with_ax(&opt, false, false)
     })
     .await;
-    let (init, events) = spawn_event_handler(&opt);
-    app::spawn_app_threads(&opt, init, events.clone());
+    let events = spawn_event_handler(&opt);
+    app::spawn_initial_app_threads(&opt, events.clone());
     notification_center::watch_for_notifications(events)
 }
 
@@ -133,28 +133,19 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
 enum Event {
     WindowMoved,
     ApplicationActivated,
-    ApplicationLaunched(i32),
-    ApplicationTerminated(i32),
+    ApplicationLaunched(app::pid_t, app::ThreadHandle, Vec<Window>),
+    ApplicationTerminated(app::pid_t),
     ScreenParametersChanged,
 }
 
-fn spawn_event_handler(_opt: &Opt) -> (Sender<Vec<Window>>, Sender<Event>) {
-    let (initial_windows_tx, initial_windows) = sync::mpsc::channel();
+fn spawn_event_handler(_opt: &Opt) -> Sender<Event> {
     let (events_tx, events) = sync::mpsc::channel::<Event>();
     thread::spawn(move || {
-        debug!("\nInitial windows:");
-        for windows in initial_windows {
-            for window in windows {
-                debug!("- {window:?}");
-            }
-        }
-        debug!("");
-
         for event in events {
             info!("Event {event:?}")
         }
     });
-    (initial_windows_tx, events_tx)
+    events_tx
 }
 
 // Next:

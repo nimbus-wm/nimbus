@@ -12,8 +12,9 @@ use icrate::{
     },
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
-use log::warn;
+use log::{info, warn};
 
+use crate::app;
 use crate::Event;
 
 pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
@@ -58,8 +59,8 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
 
             #[method(handleLaunched:)]
             fn handle_launched(&self, _notif: &NSNotification) {
-                // TODO: pid
-                self.send_event(Event::ApplicationLaunched(0));
+                info!("{_notif:#?}");
+                //app::spawn_app_thread(pid, self.events_tx());
             }
 
             #[method(handleTerminated:)]
