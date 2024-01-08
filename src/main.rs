@@ -17,7 +17,7 @@ use core_graphics::{
 };
 use core_graphics_types::geometry::CGRect;
 
-use log::{debug, info};
+use log::info;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 

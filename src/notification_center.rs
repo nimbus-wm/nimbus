@@ -1,6 +1,6 @@
 use std::{mem, sync::mpsc::Sender};
 
-use core_foundation::runloop::CFRunLoopRun;
+use core_foundation::runloop::CFRunLoop;
 use icrate::{
     objc2::{
         declare_class, msg_send_id, mutability,
@@ -155,7 +155,5 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
         );
     };
 
-    unsafe {
-        CFRunLoopRun();
-    }
+    CFRunLoop::run_current();
 }

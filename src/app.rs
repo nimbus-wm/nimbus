@@ -18,7 +18,7 @@ use icrate::{
     objc2::msg_send,
     AppKit::{NSRunningApplication, NSWorkspace},
 };
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 
 use crate::{Event, Opt, Window};
 
