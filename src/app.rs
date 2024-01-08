@@ -159,6 +159,7 @@ pub(crate) fn app_thread_main(
 
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
+        // TODO: Handle all of these.
         match &*notif {
             kAXWindowCreatedNotification => {
                 if register_window_notifs(&elem, state, observer) {
@@ -168,6 +169,7 @@ pub(crate) fn app_thread_main(
             kAXUIElementDestroyedNotification => {
                 state.borrow_mut().window_elements.retain(|w| *w != elem);
             }
+            kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {
                 state
                     .borrow_mut()
