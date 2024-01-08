@@ -1,19 +1,13 @@
 //! Helpers for managing run loops.
 
-use std::{
-    ffi::c_void,
-    mem,
-    ops::Deref,
-    ptr,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{ffi::c_void, mem, ptr};
 
 use core_foundation::{
     base::TCFType,
     mach_port::CFIndex,
     runloop::{
-        CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopSourceCreate,
-        CFRunLoopSourceSignal, CFRunLoopWakeUp,
+        kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext,
+        CFRunLoopSourceCreate, CFRunLoopSourceSignal, CFRunLoopWakeUp,
     },
 };
 
@@ -25,46 +19,53 @@ use core_foundation::{
 /// More information is available in the Apple documentation at
 /// https://developer.apple.com/documentation/corefoundation/cfrunloopsource-rhr.
 #[derive(Clone, PartialEq)]
-pub struct RunLoopSource(CFRunLoopSource);
+pub struct WakeupHandle(CFRunLoopSource, CFRunLoop);
 
-struct Handler<F: Send + Sync> {
-    ref_count: AtomicUsize,
+// SAFETY:
+// - CFRunLoopSource and CFRunLoop are ObjC objects which are allowed to be used
+//   from multiple threads.
+// - We only allow signaling the source from this handle. No access to the
+//   underlying handler is given, so it does not need to be Send or Sync.
+unsafe impl Send for WakeupHandle {}
+
+struct Handler<F> {
+    ref_count: isize,
     func: F,
 }
 
-// SAFETY:
-// - CFRunLoopSource is an ObjC object, which are Send.
-// - We conceptually own a Handler and may give references to it to other threads.
-//   The Send + Sync bounds on its type parameter ensure this is safe:
-//   - Sync so we can call the function from other threads without synchronization.
-//   - Send so we can drop the function on other threads.
-unsafe impl Send for RunLoopSource {}
-
-impl RunLoopSource {
-    /// Creates a manual source for a run loop.
+impl WakeupHandle {
+    /// Creates and adds a manual source for the current [`CFRunLoop`].
     ///
-    /// The supplied function `f` is called inside the run loop when this source
-    /// has been signalled and the run loop is awake.
+    /// The supplied function `handler` is called inside the run loop when this
+    /// handle has been woken and the run loop is running.
     ///
-    /// Note that the handler is not
-    pub fn new_with_handler<F: Fn() + Send + Sync + 'static>(order: CFIndex, handler: F) -> Self {
+    /// The handler is run in all common modes. `order` controls the order it is
+    /// run in relative to other run loop sources, and should normally be set to
+    /// 0.
+    pub fn for_current_thread<F: Fn() + 'static>(order: CFIndex, handler: F) -> WakeupHandle {
         let handler = Box::into_raw(Box::new(Handler {
-            ref_count: AtomicUsize::new(0),
+            ref_count: 0,
             func: handler,
         }));
 
-        extern "C" fn perform<F: Fn() + Send + Sync + 'static>(info: *const c_void) {
-            let handler = unsafe { &*(info as *mut Handler<F>) };
+        extern "C" fn perform<F: Fn() + 'static>(info: *const c_void) {
+            // SAFETY: Only one thread may call these functions, and the mutable
+            // reference lives only during the function call. No other code has
+            // access to the handler.
+            let handler = unsafe { &mut *(info as *mut Handler<F>) };
             (handler.func)();
         }
-        extern "C" fn retain<F: Send + Sync>(info: *const c_void) -> *const c_void {
-            let handler = unsafe { &*(info as *mut Handler<F>) };
-            handler.ref_count.fetch_add(1, Ordering::Acquire);
+        extern "C" fn retain<F>(info: *const c_void) -> *const c_void {
+            // SAFETY: As above.
+            let handler = unsafe { &mut *(info as *mut Handler<F>) };
+            handler.ref_count += 1;
             info
         }
-        extern "C" fn release<F: Send + Sync>(info: *const c_void) {
-            let handler = unsafe { &*(info as *mut Handler<F>) };
-            if handler.ref_count.fetch_sub(1, Ordering::Release) == 1 {
+        extern "C" fn release<F>(info: *const c_void) {
+            // SAFETY: As above.
+            let handler = unsafe { &mut *(info as *mut Handler<F>) };
+            handler.ref_count -= 1;
+            if handler.ref_count == 0 {
                 mem::drop(unsafe { Box::from_raw(info as *mut Handler<F>) });
             }
         }
@@ -81,44 +82,26 @@ impl RunLoopSource {
             cancel: None,
             perform: perform::<F>,
         };
-        unsafe {
-            let obj = CFRunLoopSourceCreate(ptr::null(), order, &mut context as *mut _);
-            Self(CFRunLoopSource::wrap_under_create_rule(obj))
-        }
+
+        let source = unsafe {
+            let source = CFRunLoopSourceCreate(ptr::null(), order, &mut context as *mut _);
+            CFRunLoopSource::wrap_under_create_rule(source)
+        };
+        let run_loop = CFRunLoop::get_current();
+        run_loop.add_source(&source, unsafe { kCFRunLoopCommonModes });
+
+        WakeupHandle(source, run_loop)
     }
 
-    /// Signal this source and wake the supplied run loop.
-    ///
-    /// Usually when a source is signaled manually, the corresponding run loop
-    /// also needs to be awoken. This method performs both actions. Make sure
-    /// that this source has actually been added to the supplied run loop, or
-    /// the handler may not be called.
+    /// Wakes the run loop that owns the target of this handle and schedules its
+    /// handler to be called.
     ///
     /// Multiple signals may be collapsed into a single call of the handler.
-    pub fn signal_and_wake(&self, runloop: &CFRunLoop) {
-        self.signal_only();
-        unsafe {
-            CFRunLoopWakeUp(runloop.as_concrete_TypeRef());
-        }
-    }
-
-    /// Signal this source without waking a corresponding run loop.
-    ///
-    /// When this method is called, it is up to the caller to wake a run loop
-    /// that the source has been added to.
-    ///
-    /// Multiple signals may be collapsed into a single call of the handler.
-    pub fn signal_only(&self) {
+    pub fn wake(&self) {
         unsafe {
             CFRunLoopSourceSignal(self.0.as_concrete_TypeRef());
+            CFRunLoopWakeUp(self.1.as_concrete_TypeRef());
         }
-    }
-}
-
-impl Deref for RunLoopSource {
-    type Target = CFRunLoopSource;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -126,129 +109,114 @@ impl Deref for RunLoopSource {
 mod tests {
     use std::{
         sync::{
-            atomic::{AtomicI32, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
             mpsc::{channel, Receiver, Sender},
             Arc,
         },
-        thread,
+        thread::JoinHandle,
     };
 
-    use core_foundation::{
-        base::TCFType,
-        runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopWakeUp},
-        string::CFStringRef,
-    };
+    use core_foundation::runloop::CFRunLoop;
 
-    use super::RunLoopSource;
+    use super::WakeupHandle;
 
-    fn common_modes() -> CFStringRef {
-        unsafe { kCFRunLoopCommonModes }
+    struct RunLoopThread {
+        num_wakeups: Arc<AtomicI32>,
+        shutdown: Arc<AtomicBool>,
+        channel: Receiver<Option<WakeupHandle>>,
+        drop_tracker: DropTracker,
+        thread: JoinHandle<()>,
     }
 
-    #[test]
-    fn it_works_when_added_inside_the_thread() {
-        let data = Arc::new(AtomicI32::new(0));
-        let handler_data = data.clone();
+    fn spawn_run_loop_thread(run: bool) -> RunLoopThread {
+        let num_wakeups = Arc::new(AtomicI32::new(0));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (handler_wakeups, handler_shutdown) = (num_wakeups.clone(), shutdown.clone());
         let (tx, rx) = channel();
+        let (drop_tracker, drop_signaler) = DropTracker::new();
         let thread = std::thread::spawn(move || {
-            let source = RunLoopSource::new_with_handler(0, move || {
+            let handler_tx = tx.clone();
+            let wakeup = WakeupHandle::for_current_thread(0, move || {
                 println!("handler");
-                handler_data.fetch_add(42, Ordering::SeqCst);
-                CFRunLoop::get_current().stop();
+                let _signaler = &drop_signaler;
+                handler_tx.send(None).unwrap();
+                handler_wakeups.fetch_add(1, Ordering::SeqCst);
+                if handler_shutdown.load(Ordering::SeqCst) {
+                    CFRunLoop::get_current().stop();
+                }
                 println!("done");
             });
-            CFRunLoop::get_current().add_source(&source, common_modes());
-            tx.send((source, CFRunLoop::get_current())).unwrap();
-            CFRunLoop::run_current();
+            tx.send(Some(wakeup)).unwrap();
+            if run {
+                CFRunLoop::run_current();
+            }
         });
-        let (source, runloop) = rx.recv().unwrap();
-        source.signal_and_wake(&runloop);
-        thread.join().unwrap();
-        assert_eq!(42, data.load(Ordering::SeqCst));
+        RunLoopThread {
+            num_wakeups,
+            shutdown,
+            channel: rx,
+            drop_tracker,
+            thread,
+        }
     }
 
     #[test]
-    fn it_works_when_added_outside_the_thread() {
-        let data = Arc::new(AtomicI32::new(0));
-        let (tx, rx) = channel();
-        let thread = std::thread::spawn(move || {
-            // We have to add a dummy source here, because run_current() will
-            // exit immediately if no sources have been added yet.
-            let dummy = RunLoopSource::new_with_handler(0, || ());
-            CFRunLoop::get_current().add_source(&dummy, common_modes());
-            tx.send(CFRunLoop::get_current()).unwrap();
-            CFRunLoop::run_current();
-        });
-        let runloop = rx.recv().unwrap();
-        let handler_data = data.clone();
-        let source = RunLoopSource::new_with_handler(0, move || {
-            handler_data.fetch_add(42, Ordering::SeqCst);
-            CFRunLoop::get_current().stop();
-        });
-        runloop.add_source(&source, common_modes());
-        source.signal_and_wake(&runloop);
+    fn it_works_without_wakeups() {
+        let RunLoopThread {
+            num_wakeups,
+            channel: rx,
+            drop_tracker,
+            thread,
+            ..
+        } = spawn_run_loop_thread(false);
+        let wakeup = rx.recv().unwrap().expect("should receive a wakeup handle");
         thread.join().unwrap();
-        assert_eq!(42, data.load(Ordering::SeqCst));
+        assert_eq!(0, num_wakeups.load(Ordering::SeqCst));
+        drop(wakeup);
+        drop_tracker.wait_for_drop();
     }
 
     #[test]
-    fn it_works_with_multiple_run_loops() {
-        const NUM_THREADS: usize = 4;
-        println!();
-        let wakeups = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = channel();
-        let threads: Vec<_> = (0..NUM_THREADS)
-            .map(|_| {
-                let tx = tx.clone();
-                std::thread::spawn(move || {
-                    println!("thread {:?} starting", thread::current().id());
-                    // We have to add a dummy source here, because run_current() will
-                    // exit immediately if no sources have been added yet.
-                    let dummy = RunLoopSource::new_with_handler(0, || ());
-                    CFRunLoop::get_current().add_source(&dummy, common_modes());
-                    tx.send(Some(CFRunLoop::get_current())).unwrap();
-                    CFRunLoop::run_current();
-                    // Let the main thread know we are exiting.
-                    tx.send(None).unwrap();
-                    println!("thread {:?} exiting", thread::current().id());
-                })
-            })
-            .collect();
-        let handler_wakeups = wakeups.clone();
-        let (drop_tracker, drop_signaler) = DropTracker::new();
-        let source = RunLoopSource::new_with_handler(0, move || {
-            let _signaller = &drop_signaler;
-            println!("handling source on thread {:?}", thread::current().id());
-            handler_wakeups.fetch_add(1, Ordering::SeqCst);
-            CFRunLoop::get_current().stop();
-        });
-        let runloops: Vec<_> = (0..NUM_THREADS)
-            .map(|_| rx.recv().unwrap().unwrap())
-            .collect();
-        for runloop in &runloops {
-            runloop.add_source(&source, common_modes());
-        }
-        for _ in 0..NUM_THREADS {
-            println!("signaling");
-            source.signal_only();
-            // We must signal all runloops, because we don't track which have exited.
-            runloops
-                .iter()
-                .for_each(|rl| unsafe { CFRunLoopWakeUp(rl.as_concrete_TypeRef()) });
-            // Wait until the thread exits. We need this synchronization step,
-            // otherwise a thread might "eat" multiple signals. A source is not
-            // a sempahore!
-            let None = rx.recv().unwrap() else {
-                panic!("should have received None")
-            };
-        }
-        for thread in threads {
-            println!("joining thread {:?}", thread.thread().id());
-            thread.join().unwrap();
-        }
-        assert_eq!(NUM_THREADS, wakeups.load(Ordering::SeqCst));
-        drop(source);
-        drop(runloops);
+    fn it_wakes() {
+        let RunLoopThread {
+            num_wakeups,
+            shutdown,
+            channel: rx,
+            drop_tracker,
+            thread,
+        } = spawn_run_loop_thread(true);
+        let wakeup = rx.recv().unwrap().expect("should receive a wakeup handle");
+        assert_eq!(0, num_wakeups.load(Ordering::SeqCst));
+        shutdown.store(true, Ordering::SeqCst);
+        wakeup.wake();
+        thread.join().unwrap();
+        assert_eq!(1, num_wakeups.load(Ordering::SeqCst));
+        drop(wakeup);
+        drop_tracker.wait_for_drop();
+    }
+
+    #[test]
+    fn it_can_wake_from_multiple_threads() {
+        let RunLoopThread {
+            num_wakeups,
+            shutdown,
+            channel: rx,
+            drop_tracker,
+            thread,
+        } = spawn_run_loop_thread(true);
+        let wakeup = rx.recv().unwrap().expect("should receive a wakeup handle");
+        assert_eq!(0, num_wakeups.load(Ordering::SeqCst));
+        let thread_wakeup = wakeup.clone();
+        std::thread::spawn(move || thread_wakeup.wake())
+            .join()
+            .unwrap();
+        let _ = rx.recv().unwrap();
+        assert_eq!(1, num_wakeups.load(Ordering::SeqCst));
+        shutdown.store(true, Ordering::SeqCst);
+        wakeup.wake();
+        thread.join().unwrap();
+        assert_eq!(2, num_wakeups.load(Ordering::SeqCst));
+        drop(wakeup);
         drop_tracker.wait_for_drop();
     }
 
