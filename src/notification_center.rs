@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use std::{mem, sync::mpsc::Sender};
 
 use core_foundation::runloop::CFRunLoopRun;
 use icrate::{
@@ -7,14 +7,12 @@ use icrate::{
         rc::{Allocated, Id},
         sel, ClassType, DeclaredClass, Encode, Encoding,
     },
-    AppKit::{
-        NSApplication, NSWorkspace, {self},
-    },
+    AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
-use log::{info, warn};
+use log::{trace, warn};
 
-use crate::app;
+use crate::app::{self, NSRunningApplicationExt};
 use crate::Event;
 
 pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
@@ -53,24 +51,32 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
             }
 
             #[method(handleActivated:)]
-            fn handle_activated(&self, _notif: &NSNotification) {
-                self.send_event(Event::ApplicationActivated);
+            fn handle_activated(&self, notif: &NSNotification) {
+                trace!("{notif:#?}");
+                if let Some(app) = self.running_application(notif) {
+                    self.send_event(Event::ApplicationActivated(app.processIdentifier()));
+                }
             }
 
             #[method(handleLaunched:)]
-            fn handle_launched(&self, _notif: &NSNotification) {
-                info!("{_notif:#?}");
-                //app::spawn_app_thread(pid, self.events_tx());
+            fn handle_launched(&self, notif: &NSNotification) {
+                trace!("{notif:#?}");
+                if let Some(app) = self.running_application(notif) {
+                    app::spawn_app_thread(app.processIdentifier(), self.events_tx().clone());
+                }
             }
 
             #[method(handleTerminated:)]
-            fn handle_terminated(&self, _notif: &NSNotification) {
-                // TODO: pid
-                self.send_event(Event::ApplicationTerminated(0));
+            fn handle_terminated(&self, notif: &NSNotification) {
+                trace!("{notif:#?}");
+                if let Some(app) = self.running_application(notif) {
+                    self.send_event(Event::ApplicationTerminated(app.processIdentifier()));
+                }
             }
 
             #[method(handleScreenChanged:)]
-            fn handle_screen_changed(&self, _notif: &NSNotification) {
+            fn handle_screen_changed(&self, notif: &NSNotification) {
+                trace!("{notif:#?}");
                 self.send_event(Event::ScreenParametersChanged);
             }
         }
@@ -84,9 +90,29 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn send_event(&self, event: Event) {
-            if let Err(err) = self.ivars().events_tx.send(event) {
+            if let Err(err) = self.events_tx().send(event) {
                 warn!("Failed to send event: {err:?}");
             }
+        }
+
+        fn events_tx(&self) -> &Sender<Event> {
+            self.ivars().events_tx
+        }
+
+        fn running_application(&self, notif: &NSNotification) -> Option<Id<NSRunningApplication>> {
+            let info = unsafe { notif.userInfo() };
+            let Some(info) = info else {
+                warn!("Got app notification without user info: {notif:?}");
+                return None;
+            };
+            let app = unsafe { info.valueForKey(NSWorkspaceApplicationKey) };
+            let Some(app) = app else {
+                warn!("Got app notification without app object: {notif:?}");
+                return None;
+            };
+            assert!(app.class() == NSRunningApplication::class());
+            let app: Id<NSRunningApplication> = unsafe { mem::transmute(app) };
+            Some(app)
         }
     }
 

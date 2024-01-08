@@ -14,12 +14,26 @@ use core_foundation::{
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
-use icrate::{objc2::msg_send, AppKit::NSWorkspace};
+use icrate::{
+    objc2::msg_send,
+    AppKit::{NSRunningApplication, NSWorkspace},
+};
 use log::{debug, error, info, trace};
 
 use crate::{Event, Opt, Window};
 
 pub use accessibility_sys::pid_t;
+
+pub(crate) trait NSRunningApplicationExt {
+    #[allow(non_snake_case)]
+    fn processIdentifier(&self) -> pid_t;
+}
+impl NSRunningApplicationExt for NSRunningApplication {
+    #[allow(non_snake_case)]
+    fn processIdentifier(&self) -> pid_t {
+        unsafe { msg_send![self, processIdentifier] }
+    }
+}
 
 pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
     let bundle = opt.bundle.clone();
@@ -32,8 +46,7 @@ pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
                     return None;
                 }
             }
-            let pid: pid_t = unsafe { msg_send![&*app, processIdentifier] };
-            Some((pid, bundle_id))
+            Some((app.processIdentifier(), bundle_id))
         })
 }
 
