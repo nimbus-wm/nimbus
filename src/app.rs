@@ -1,4 +1,13 @@
-use std::{borrow::Cow, cell::RefCell, ffi::c_void, ptr, sync::mpsc::Sender, thread};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    ffi::c_void,
+    fmt::Debug,
+    ptr,
+    rc::Rc,
+    sync::mpsc::{channel, Receiver, Sender},
+    thread,
+};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::{
@@ -20,7 +29,7 @@ use icrate::{
 };
 use log::{debug, error, trace};
 
-use crate::{Event, Opt, Window};
+use crate::{run_loop::WakeupHandle, Event, Opt, Window};
 
 pub use accessibility_sys::pid_t;
 
@@ -50,8 +59,27 @@ pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
         })
 }
 
+pub(crate) struct ThreadHandle {
+    requests_tx: Sender<Request>,
+    wakeup: WakeupHandle,
+}
+
+impl ThreadHandle {
+    pub(crate) fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
+        self.requests_tx.send(req)?;
+        self.wakeup.wake();
+        Ok(())
+    }
+}
+
+impl Debug for ThreadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadHandle").finish()
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct ThreadHandle {}
+pub(crate) struct Request;
 
 pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
     for (pid, _bundle_id) in running_apps(opt) {
@@ -63,18 +91,21 @@ pub(crate) fn spawn_app_thread(pid: pid_t, events_tx: Sender<Event>) {
     thread::spawn(move || app_thread_main(pid, events_tx));
 }
 
-pub(crate) fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
+fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
     let app = AXUIElement::application(pid);
 
-    type State = RefCell<StateInner>;
+    type State = Rc<RefCell<StateInner>>;
     struct StateInner {
         window_elements: Vec<AXUIElement>,
         events_tx: Sender<Event>,
+        requests_rx: Receiver<Request>,
     }
-    let state = RefCell::new(StateInner {
+    let (requests_tx, requests_rx) = channel();
+    let state = Rc::new(RefCell::new(StateInner {
         window_elements: vec![],
         events_tx,
-    });
+        requests_rx,
+    }));
     let mut state_ref = state.borrow_mut();
 
     // SAFETY: Notifications can only be delivered inside this function, during
@@ -125,11 +156,18 @@ pub(crate) fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
     }
     state_ref.window_elements = window_elements;
 
+    // Set up our request handler.
+    let st = state.clone();
+    let wakeup = WakeupHandle::for_current_thread(0, move || handle_requests(&st));
+    let handle = ThreadHandle {
+        requests_tx,
+        wakeup,
+    };
+
     // Send the ApplicationLaunched event.
-    let Ok(()) =
-        state_ref
-            .events_tx
-            .send(Event::ApplicationLaunched(pid, ThreadHandle {}, windows))
+    let Ok(()) = state_ref
+        .events_tx
+        .send(Event::ApplicationLaunched(pid, handle, windows))
     else {
         debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
         return;
@@ -201,11 +239,7 @@ pub(crate) fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
             }
             kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {
-                state
-                    .borrow_mut()
-                    .events_tx
-                    .send(Event::WindowMoved)
-                    .unwrap();
+                state.borrow().events_tx.send(Event::WindowMoved).unwrap();
             }
             kAXWindowResizedNotification => {}
             kAXWindowMiniaturizedNotification => {}
@@ -214,6 +248,16 @@ pub(crate) fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
             _ => {
                 error!("Unhandled notification {notif:?} on {elem:#?}");
             }
+        }
+    }
+
+    fn handle_requests(state: &State) {
+        // Multiple source wakeups can be collapsed into one, so we have to make
+        // sure all pending events are handled eventually. For now just handle
+        // them all.
+        let state = state.borrow();
+        while let Ok(request) = state.requests_rx.try_recv() {
+            debug!("Got request: {request:?}");
         }
     }
 }

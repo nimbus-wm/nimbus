@@ -21,6 +21,8 @@ use log::info;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 
+use crate::app::Request;
+
 #[derive(StructOpt)]
 pub struct Opt {
     pub bundle: Option<String>,
@@ -142,7 +144,11 @@ fn spawn_event_handler(_opt: &Opt) -> Sender<Event> {
     let (events_tx, events) = sync::mpsc::channel::<Event>();
     thread::spawn(move || {
         for event in events {
-            info!("Event {event:?}")
+            info!("Event {event:?}");
+            match event {
+                Event::ApplicationLaunched(_, handle, _) => handle.send(Request).unwrap(),
+                _ => (),
+            };
         }
     });
     events_tx
