@@ -132,8 +132,8 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
 #[derive(Debug)]
 enum Event {
     WindowMoved,
-    ApplicationActivated(app::pid_t),
     ApplicationLaunched(app::pid_t, app::ThreadHandle, Vec<Window>),
+    ApplicationActivated(app::pid_t),
     ApplicationTerminated(app::pid_t),
     ScreenParametersChanged,
 }
