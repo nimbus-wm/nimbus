@@ -16,7 +16,7 @@ use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
-use core_graphics_types::geometry::CGRect;
+use core_graphics_types::geometry::{CGPoint, CGRect};
 
 use log::info;
 use structopt::StructOpt;
@@ -147,7 +147,15 @@ fn spawn_event_handler(_opt: &Opt) -> Sender<Event> {
         for event in events {
             info!("Event {event:?}");
             match event {
-                Event::ApplicationLaunched(_, _, handle, _) => handle.send(Request).unwrap(),
+                Event::ApplicationLaunched(_, info, handle, windows) => {
+                    if let Some("TextEdit") = info.localized_name.as_deref() {
+                        if !windows.is_empty() {
+                            handle
+                                .send(Request::MoveWindow(0, CGPoint::new(100.0, 100.0)))
+                                .unwrap();
+                        }
+                    }
+                }
                 _ => (),
             };
         }

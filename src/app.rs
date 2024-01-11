@@ -23,6 +23,7 @@ use core_foundation::{
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
+use core_graphics_types::geometry::CGPoint;
 use icrate::{
     objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
@@ -102,8 +103,10 @@ impl Debug for AppThreadHandle {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Request;
+#[derive(Debug, Clone)]
+pub(crate) enum Request {
+    MoveWindow(usize, CGPoint),
+}
 
 pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
     for (pid, info) in running_apps(opt) {
@@ -123,12 +126,16 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         window_elements: Vec<AXUIElement>,
         events_tx: Sender<Event>,
         requests_rx: Receiver<Request>,
+        pid: pid_t,
+        bundle_id: Option<String>,
     }
     let (requests_tx, requests_rx) = channel();
     let state = Rc::new(RefCell::new(StateInner {
         window_elements: vec![],
         events_tx,
         requests_rx,
+        pid,
+        bundle_id: info.bundle_id.clone(),
     }));
     let mut state_ref = state.borrow_mut();
 
@@ -281,7 +288,31 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         // them all.
         let state = state.borrow();
         while let Ok(request) = state.requests_rx.try_recv() {
-            debug!("Got request: {request:?}");
+            let StateInner { bundle_id, pid, .. } = &*state;
+            let bundle_id = bundle_id.as_deref().unwrap_or("None");
+            debug!("Got request for {bundle_id}({pid}): {request:?}");
+            match handle_request(&state, request.clone()) {
+                Ok(()) => (),
+                Err(e) => {
+                    let StateInner { bundle_id, pid, .. } = &*state;
+                    let bundle_id = bundle_id.as_deref().unwrap_or("None");
+                    error!("Error handling request for {bundle_id}({pid}): {request:?}: {e:?}");
+                }
+            }
         }
+    }
+
+    fn handle_request(
+        state: &std::cell::Ref<'_, StateInner>,
+        request: Request,
+    ) -> Result<(), accessibility::Error> {
+        match request {
+            Request::MoveWindow(idx, point) => {
+                state.window_elements[idx].set_position(point)?;
+                let new_pos = state.window_elements[idx].position()?;
+                debug!("Position after move: {new_pos:?}");
+            }
+        }
+        Ok(())
     }
 }
