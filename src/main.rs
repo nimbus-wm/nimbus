@@ -10,6 +10,7 @@ use std::{
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
+use app::{pid_t, AppInfo, AppThreadHandle};
 use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef};
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
@@ -98,13 +99,13 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
         }
     }
     drop(sender);
-    while let Some((bundle_id, windows)) = receiver.recv().await {
-        //println!("{bundle_id}");
+    while let Some((info, windows)) = receiver.recv().await {
+        //println!("{info:?}");
         match windows {
             Ok(windows) => {
                 if print {
                     for win in windows {
-                        println!("{win:?} from {bundle_id}");
+                        println!("{win:?} from {}", info.bundle_id.as_deref().unwrap_or("?"));
                     }
                 }
             }
@@ -134,9 +135,9 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
 #[derive(Debug)]
 enum Event {
     WindowMoved,
-    ApplicationLaunched(app::pid_t, app::ThreadHandle, Vec<Window>),
-    ApplicationActivated(app::pid_t),
-    ApplicationTerminated(app::pid_t),
+    ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<Window>),
+    ApplicationActivated(pid_t),
+    ApplicationTerminated(pid_t),
     ScreenParametersChanged,
 }
 
@@ -146,7 +147,7 @@ fn spawn_event_handler(_opt: &Opt) -> Sender<Event> {
         for event in events {
             info!("Event {event:?}");
             match event {
-                Event::ApplicationLaunched(_, handle, _) => handle.send(Request).unwrap(),
+                Event::ApplicationLaunched(_, _, handle, _) => handle.send(Request).unwrap(),
                 _ => (),
             };
         }

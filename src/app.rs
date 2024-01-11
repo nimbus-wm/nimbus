@@ -24,8 +24,9 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use icrate::{
-    objc2::msg_send,
+    objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
+    Foundation::NSString,
 };
 use log::{debug, error, trace};
 
@@ -34,37 +35,60 @@ use crate::{run_loop::WakeupHandle, Event, Opt, Window};
 pub use accessibility_sys::pid_t;
 
 pub(crate) trait NSRunningApplicationExt {
-    #[allow(non_snake_case)]
-    fn processIdentifier(&self) -> pid_t;
+    fn pid(&self) -> pid_t;
+    fn bundle_id(&self) -> Option<Id<NSString>>;
+    fn localized_name(&self) -> Option<Id<NSString>>;
 }
+
 impl NSRunningApplicationExt for NSRunningApplication {
-    #[allow(non_snake_case)]
-    fn processIdentifier(&self) -> pid_t {
+    fn pid(&self) -> pid_t {
         unsafe { msg_send![self, processIdentifier] }
+    }
+    fn bundle_id(&self) -> Option<Id<NSString>> {
+        unsafe { self.bundleIdentifier() }
+    }
+    fn localized_name(&self) -> Option<Id<NSString>> {
+        unsafe { self.localizedName() }
     }
 }
 
-pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, String)> {
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct AppInfo {
+    pub bundle_id: Option<String>,
+    pub localized_name: Option<String>,
+}
+
+impl From<&NSRunningApplication> for AppInfo {
+    fn from(app: &NSRunningApplication) -> Self {
+        AppInfo {
+            bundle_id: app.bundle_id().as_deref().map(ToString::to_string),
+            localized_name: app.localized_name().as_deref().map(ToString::to_string),
+        }
+    }
+}
+
+pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, AppInfo)> {
     let bundle = opt.bundle.clone();
     unsafe { NSWorkspace::sharedWorkspace().runningApplications() }
         .into_iter()
         .flat_map(move |app| {
-            let bundle_id = unsafe { app.bundleIdentifier() }?.to_string();
+            let bundle_id = app.bundle_id()?.to_string();
             if let Some(filter) = &bundle {
                 if !bundle_id.contains(filter) {
                     return None;
                 }
             }
-            Some((app.processIdentifier(), bundle_id))
+            Some((app.pid(), AppInfo::from(&*app)))
         })
 }
 
-pub(crate) struct ThreadHandle {
+pub(crate) struct AppThreadHandle {
     requests_tx: Sender<Request>,
     wakeup: WakeupHandle,
 }
 
-impl ThreadHandle {
+impl AppThreadHandle {
     pub(crate) fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
         self.requests_tx.send(req)?;
         self.wakeup.wake();
@@ -72,7 +96,7 @@ impl ThreadHandle {
     }
 }
 
-impl Debug for ThreadHandle {
+impl Debug for AppThreadHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ThreadHandle").finish()
     }
@@ -82,16 +106,16 @@ impl Debug for ThreadHandle {
 pub(crate) struct Request;
 
 pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
-    for (pid, _bundle_id) in running_apps(opt) {
-        spawn_app_thread(pid, events_tx.clone());
+    for (pid, info) in running_apps(opt) {
+        spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 
-pub(crate) fn spawn_app_thread(pid: pid_t, events_tx: Sender<Event>) {
-    thread::spawn(move || app_thread_main(pid, events_tx));
+pub(crate) fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
+    thread::spawn(move || app_thread_main(pid, info, events_tx));
 }
 
-fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
+fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let app = AXUIElement::application(pid);
 
     type State = Rc<RefCell<StateInner>>;
@@ -159,7 +183,7 @@ fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
     // Set up our request handler.
     let st = state.clone();
     let wakeup = WakeupHandle::for_current_thread(0, move || handle_requests(&st));
-    let handle = ThreadHandle {
+    let handle = AppThreadHandle {
         requests_tx,
         wakeup,
     };
@@ -167,7 +191,7 @@ fn app_thread_main(pid: pid_t, events_tx: Sender<Event>) {
     // Send the ApplicationLaunched event.
     let Ok(()) = state_ref
         .events_tx
-        .send(Event::ApplicationLaunched(pid, handle, windows))
+        .send(Event::ApplicationLaunched(pid, info, handle, windows))
     else {
         debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
         return;

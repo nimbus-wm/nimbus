@@ -12,7 +12,7 @@ use icrate::{
 };
 use log::{trace, warn};
 
-use crate::app::{self, NSRunningApplicationExt};
+use crate::app::{self, AppInfo, NSRunningApplicationExt};
 use crate::Event;
 
 pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
@@ -76,10 +76,10 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
             let Some(app) = self.running_application(notif) else {
                 return;
             };
-            let pid = app.processIdentifier();
+            let pid = app.pid();
             let name = unsafe { &*notif.name() };
             if unsafe { NSWorkspaceDidLaunchApplicationNotification } == name {
-                app::spawn_app_thread(pid, self.events_tx().clone());
+                app::spawn_app_thread(pid, AppInfo::from(&*app), self.events_tx().clone());
             } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
                 self.send_event(Event::ApplicationActivated(pid));
             } else if unsafe { NSWorkspaceDidTerminateApplicationNotification } == name {
