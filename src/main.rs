@@ -18,7 +18,7 @@ use core_graphics::{
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
 use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
-
+use icrate::Foundation::CGRect as NSRect;
 use log::info;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
@@ -141,12 +141,13 @@ enum Event {
     WindowDestroyed(pid_t, WindowIdx),
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
-    ScreenParametersChanged,
+    ScreenParametersChanged(Option<NSRect>),
 }
 
 struct EventHandler {
     windows: Vec<(pid_t, WindowIdx)>,
     apps: HashMap<pid_t, AppState>,
+    main_screen: Option<NSRect>,
 }
 
 struct AppState {
@@ -162,6 +163,7 @@ impl EventHandler {
             let mut handler = EventHandler {
                 windows: Vec::new(),
                 apps: HashMap::new(),
+                main_screen: None,
             };
             for event in events {
                 handler.handle_event(event);
@@ -195,6 +197,9 @@ impl EventHandler {
             }
             Event::WindowResized(pid, idx, size) => {
                 self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
+            }
+            Event::ScreenParametersChanged(frame) => {
+                self.main_screen = frame;
             }
             _ => return,
         }

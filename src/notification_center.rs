@@ -7,7 +7,9 @@ use icrate::{
         rc::{Allocated, Id},
         sel, ClassType, DeclaredClass, Encode, Encoding,
     },
-    AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
+    AppKit::{
+        self, NSApplication, NSRunningApplication, NSScreen, NSWorkspace, NSWorkspaceApplicationKey,
+    },
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
 use log::{trace, warn};
@@ -90,7 +92,13 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn handle_screen_changed_event(&self, _notif: &NSNotification) {
-            self.send_event(Event::ScreenParametersChanged);
+            self.send_screen_parameters();
+        }
+
+        fn send_screen_parameters(&self) {
+            let frame = NSScreen::mainScreen(MainThreadMarker::new().unwrap())
+                .map(|screen| screen.visibleFrame());
+            self.send_event(Event::ScreenParametersChanged(frame));
         }
 
         fn send_event(&self, event: Event) {
@@ -159,5 +167,6 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
         );
     };
 
+    handler.send_screen_parameters();
     CFRunLoop::run_current();
 }
