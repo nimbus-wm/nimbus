@@ -31,7 +31,7 @@ use icrate::{
 };
 use log::{debug, error, trace};
 
-use crate::{run_loop::WakeupHandle, Event, Opt, Window};
+use crate::{run_loop::WakeupHandle, Event, Opt, Window, WindowIdx};
 
 pub use accessibility_sys::pid_t;
 
@@ -190,10 +190,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     // Set up our request handler.
     let st = state.clone();
     let wakeup = WakeupHandle::for_current_thread(0, move || handle_requests(&st));
-    let handle = AppThreadHandle {
-        requests_tx,
-        wakeup,
-    };
+    let handle = AppThreadHandle { requests_tx, wakeup };
 
     // Send the ApplicationLaunched event.
     let Ok(()) = state_ref
@@ -261,12 +258,29 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         // TODO: Handle all of these.
         match &*notif {
             kAXWindowCreatedNotification => {
-                if register_window_notifs(&elem, state, observer) {
-                    state.borrow_mut().window_elements.push(elem);
+                let Ok(window) = Window::try_from_ui_element(&elem) else {
+                    return;
+                };
+                if !register_window_notifs(&elem, state, observer) {
+                    return;
                 }
+                let mut state = state.borrow_mut();
+                state.window_elements.push(elem);
+                state
+                    .events_tx
+                    .send(Event::WindowCreated(state.pid, window))
+                    .unwrap();
             }
             kAXUIElementDestroyedNotification => {
-                state.borrow_mut().window_elements.retain(|w| *w != elem);
+                let mut state = state.borrow_mut();
+                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                    return;
+                };
+                state.window_elements.remove(idx);
+                state
+                    .events_tx
+                    .send(Event::WindowDestroyed(state.pid, idx as WindowIdx))
+                    .unwrap();
             }
             kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {

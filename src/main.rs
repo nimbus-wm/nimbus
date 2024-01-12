@@ -3,6 +3,7 @@ mod notification_center;
 mod run_loop;
 
 use std::{
+    collections::HashMap,
     future::Future,
     sync::{self, mpsc::Sender},
     thread,
@@ -45,7 +46,7 @@ async fn main() {
         get_windows_with_ax(&opt, false, false)
     })
     .await;
-    let events = spawn_event_handler(&opt);
+    let events = EventHandler::spawn(&opt);
     app::spawn_initial_app_threads(&opt, events.clone());
     notification_center::watch_for_notifications(events)
 }
@@ -118,10 +119,7 @@ fn get_windows_for_app(app: AXUIElement) -> Result<Vec<Window>, accessibility::E
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows
-        .into_iter()
-        .map(|win| Window::try_from_ui_element(&*win))
-        .collect()
+    windows.into_iter().map(|win| Window::try_from_ui_element(&*win)).collect()
 }
 
 async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O {
@@ -132,35 +130,79 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
     out
 }
 
+type WindowIdx = u32;
+
 #[derive(Debug)]
 enum Event {
-    WindowMoved,
     ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<Window>),
-    ApplicationActivated(pid_t),
     ApplicationTerminated(pid_t),
+    ApplicationActivated(pid_t),
+    WindowCreated(pid_t, Window),
+    WindowDestroyed(pid_t, WindowIdx),
+    WindowMoved,
     ScreenParametersChanged,
 }
 
-fn spawn_event_handler(_opt: &Opt) -> Sender<Event> {
-    let (events_tx, events) = sync::mpsc::channel::<Event>();
-    thread::spawn(move || {
-        for event in events {
-            info!("Event {event:?}");
-            match event {
-                Event::ApplicationLaunched(_, info, handle, windows) => {
-                    if let Some("TextEdit") = info.localized_name.as_deref() {
-                        if !windows.is_empty() {
-                            handle
-                                .send(Request::MoveWindow(0, CGPoint::new(100.0, 100.0)))
-                                .unwrap();
-                        }
-                    }
-                }
-                _ => (),
+struct EventHandler {
+    windows: Vec<(pid_t, WindowIdx)>,
+    apps: HashMap<pid_t, AppState>,
+}
+
+struct AppState {
+    info: AppInfo,
+    handle: AppThreadHandle,
+    windows: Vec<Window>,
+}
+
+impl EventHandler {
+    fn spawn(_opt: &Opt) -> Sender<Event> {
+        let (events_tx, events) = sync::mpsc::channel::<Event>();
+        thread::spawn(move || {
+            let mut handler = EventHandler {
+                windows: Vec::new(),
+                apps: HashMap::new(),
             };
+            for event in events {
+                handler.handle_event(event);
+            }
+        });
+        events_tx
+    }
+
+    fn handle_event(&mut self, event: Event) {
+        info!("Event {event:?}");
+        match event {
+            Event::ApplicationLaunched(pid, info, handle, windows) => {
+                self.windows.extend((0..windows.len()).map(|w| (pid, w as WindowIdx)));
+                self.apps.insert(pid, AppState { info, handle, windows });
+            }
+            Event::ApplicationTerminated(pid) => {
+                self.windows.retain(|(w_pid, _)| *w_pid != pid);
+                self.apps.remove(&pid).unwrap();
+            }
+            Event::WindowCreated(pid, window) => {
+                let app = self.apps.get_mut(&pid).unwrap();
+                self.windows.push((pid, app.windows.len() as WindowIdx));
+                app.windows.push(window);
+            }
+            Event::WindowDestroyed(pid, idx) => {
+                self.windows.retain(|wid| *wid != (pid, idx));
+                self.apps.get_mut(&pid).unwrap().windows.remove(idx as usize);
+            }
+            _ => return,
         }
-    });
-    events_tx
+        let list: Vec<_> = self
+            .windows
+            .iter()
+            .map(|(pid, widx)| {
+                (
+                    &self.apps[pid].info,
+                    &self.apps[pid].windows[*widx as usize],
+                )
+            })
+            .collect();
+        info!("Window list: {list:#?}");
+    }
 }
 
 // Next:
