@@ -1,29 +1,18 @@
 mod app;
 mod notification_center;
+mod reactor;
 mod run_loop;
 
-use std::{
-    collections::HashMap,
-    future::Future,
-    sync::{self, mpsc::Sender},
-    thread,
-    time::Instant,
-};
+use std::{future::Future, time::Instant};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
-use app::{pid_t, AppInfo, AppThreadHandle};
 use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef};
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
-use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
-use icrate::Foundation::CGRect as NSRect;
-use log::info;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
-
-use crate::app::Request;
 
 #[derive(StructOpt)]
 pub struct Opt {
@@ -46,22 +35,14 @@ async fn main() {
         get_windows_with_ax(&opt, false, false)
     })
     .await;
-    let events = EventHandler::spawn(&opt);
+    let events = reactor::Reactor::spawn(&opt);
     app::spawn_initial_app_threads(&opt, events.clone());
     notification_center::watch_for_notifications(events)
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
-struct Window {
-    title: String,
-    role: String,
-    frame: CGRect,
-}
-
-impl Window {
+impl reactor::Window {
     fn try_from_ui_element(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(Window {
+        Ok(reactor::Window {
             title: element.title()?.to_string(),
             role: element.role()?.to_string(),
             frame: element.frame()?,
@@ -115,11 +96,14 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
 }
 
-fn get_windows_for_app(app: AXUIElement) -> Result<Vec<Window>, accessibility::Error> {
+fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::Window>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows.into_iter().map(|win| Window::try_from_ui_element(&*win)).collect()
+    windows
+        .into_iter()
+        .map(|win| reactor::Window::try_from_ui_element(&*win))
+        .collect()
 }
 
 async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O {
@@ -128,126 +112,4 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
     let end = Instant::now();
     println!("{desc} took {:?}", end - start);
     out
-}
-
-type WindowIdx = u32;
-
-#[derive(Debug)]
-enum Event {
-    ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<Window>),
-    ApplicationTerminated(pid_t),
-    ApplicationActivated(pid_t),
-    WindowCreated(pid_t, Window),
-    WindowDestroyed(pid_t, WindowIdx),
-    WindowMoved(pid_t, WindowIdx, CGPoint),
-    WindowResized(pid_t, WindowIdx, CGSize),
-    ScreenParametersChanged(Option<NSRect>),
-}
-
-struct EventHandler {
-    windows: Vec<(pid_t, WindowIdx)>,
-    apps: HashMap<pid_t, AppState>,
-    main_screen: Option<NSRect>,
-}
-
-struct AppState {
-    info: AppInfo,
-    handle: AppThreadHandle,
-    windows: Vec<Window>,
-}
-
-impl EventHandler {
-    fn spawn(_opt: &Opt) -> Sender<Event> {
-        let (events_tx, events) = sync::mpsc::channel::<Event>();
-        thread::spawn(move || {
-            let mut handler = EventHandler {
-                windows: Vec::new(),
-                apps: HashMap::new(),
-                main_screen: None,
-            };
-            for event in events {
-                handler.handle_event(event);
-            }
-        });
-        events_tx
-    }
-
-    fn handle_event(&mut self, event: Event) {
-        info!("Event {event:?}");
-        match event {
-            Event::ApplicationLaunched(pid, info, handle, windows) => {
-                self.windows.extend((0..windows.len()).map(|w| (pid, w as WindowIdx)));
-                self.apps.insert(pid, AppState { info, handle, windows });
-            }
-            Event::ApplicationTerminated(pid) => {
-                self.windows.retain(|(w_pid, _)| *w_pid != pid);
-                self.apps.remove(&pid).unwrap();
-            }
-            Event::WindowCreated(pid, window) => {
-                let app = self.apps.get_mut(&pid).unwrap();
-                self.windows.push((pid, app.windows.len() as WindowIdx));
-                app.windows.push(window);
-            }
-            Event::WindowDestroyed(pid, idx) => {
-                self.windows.retain(|wid| *wid != (pid, idx));
-                self.apps.get_mut(&pid).unwrap().windows.remove(idx as usize);
-            }
-            Event::WindowMoved(pid, idx, pos) => {
-                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.origin = pos;
-            }
-            Event::WindowResized(pid, idx, size) => {
-                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
-            }
-            Event::ScreenParametersChanged(frame) => {
-                self.main_screen = frame;
-            }
-            _ => return,
-        }
-        self.update_layout();
-    }
-
-    fn update_layout(&mut self) {
-        let Some(main_screen) = self.main_screen else { return };
-        let list: Vec<_> = self
-            .windows
-            .iter()
-            .map(|(pid, widx)| {
-                (
-                    &self.apps[pid].info,
-                    &self.apps[pid].windows[*widx as usize],
-                )
-            })
-            .collect();
-        info!("Window list: {list:#?}");
-        info!("Screen: {main_screen:?}");
-        let layout = calculate_layout(main_screen.clone(), &list);
-        info!("Layout: {layout:?}");
-        for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
-            // TODO: Check if existing frame matches
-            self.apps
-                .get_mut(pid)
-                .unwrap()
-                .handle
-                .send(Request::SetWindowFrame(*widx, target))
-                .unwrap();
-        }
-    }
-}
-
-fn calculate_layout(screen: NSRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
-    let num_windows: u32 = windows.len().try_into().unwrap();
-    let width = screen.size.width / f64::from(num_windows);
-    // TODO: Convert between coordinate systems.
-    (0..num_windows)
-        .map(|i| CGRect {
-            origin: CGPoint {
-                x: screen.origin.x + f64::from(i) * width,
-                y: screen.origin.y,
-            },
-            size: CGSize {
-                width,
-                height: screen.size.height,
-            },
-        })
-        .collect()
 }

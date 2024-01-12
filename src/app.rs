@@ -10,6 +10,7 @@ use std::{
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
+pub use accessibility_sys::pid_t;
 use accessibility_sys::{
     kAXErrorSuccess, kAXMainWindowChangedNotification, kAXTitleChangedNotification,
     kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
@@ -31,9 +32,11 @@ use icrate::{
 };
 use log::{debug, error, trace};
 
-use crate::{run_loop::WakeupHandle, Event, Opt, Window, WindowIdx};
-
-pub use accessibility_sys::pid_t;
+use crate::{
+    reactor::{Event, Window, WindowIdx},
+    run_loop::WakeupHandle,
+    Opt,
+};
 
 pub(crate) trait NSRunningApplicationExt {
     fn pid(&self) -> pid_t;

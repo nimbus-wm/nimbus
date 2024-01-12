@@ -43,10 +43,7 @@ impl WakeupHandle {
     /// run in relative to other run loop sources, and should normally be set to
     /// 0.
     pub fn for_current_thread<F: Fn() + 'static>(order: CFIndex, handler: F) -> WakeupHandle {
-        let handler = Box::into_raw(Box::new(Handler {
-            ref_count: 0,
-            func: handler,
-        }));
+        let handler = Box::into_raw(Box::new(Handler { ref_count: 0, func: handler }));
 
         extern "C" fn perform<F: Fn() + 'static>(info: *const c_void) {
             // SAFETY: Only one thread may call these functions, and the mutable
@@ -207,9 +204,7 @@ mod tests {
         let wakeup = rx.recv().unwrap().expect("should receive a wakeup handle");
         assert_eq!(0, num_wakeups.load(Ordering::SeqCst));
         let thread_wakeup = wakeup.clone();
-        std::thread::spawn(move || thread_wakeup.wake())
-            .join()
-            .unwrap();
+        std::thread::spawn(move || thread_wakeup.wake()).join().unwrap();
         let _ = rx.recv().unwrap();
         assert_eq!(1, num_wakeups.load(Ordering::SeqCst));
         shutdown.store(true, Ordering::SeqCst);

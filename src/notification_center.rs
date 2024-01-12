@@ -14,8 +14,10 @@ use icrate::{
 };
 use log::{trace, warn};
 
-use crate::app::{self, AppInfo, NSRunningApplicationExt};
-use crate::Event;
+use crate::{
+    app::{self, AppInfo, NSRunningApplicationExt},
+    reactor::Event,
+};
 
 pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
     #[repr(C)]
