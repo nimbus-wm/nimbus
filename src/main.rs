@@ -203,6 +203,11 @@ impl EventHandler {
             }
             _ => return,
         }
+        self.update_layout();
+    }
+
+    fn update_layout(&mut self) {
+        let Some(main_screen) = self.main_screen else { return };
         let list: Vec<_> = self
             .windows
             .iter()
@@ -214,14 +219,35 @@ impl EventHandler {
             })
             .collect();
         info!("Window list: {list:#?}");
+        info!("Screen: {main_screen:?}");
+        let layout = calculate_layout(main_screen.clone(), &list);
+        info!("Layout: {layout:?}");
+        for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
+            // TODO: Check if existing frame matches
+            self.apps
+                .get_mut(pid)
+                .unwrap()
+                .handle
+                .send(Request::SetWindowFrame(*widx, target))
+                .unwrap();
+        }
     }
 }
 
-// Next:
-// - Define a synchronous, long-lived task for each application.
-// - Spawn each of these onto a thread pool. Ideally one thread per app.
-// - Register AX observers on that thread's run loop.
-// - Turn events into messages sent from the app threads and the main threads to
-//   a single "wm logic" thread.
-// - Bidirectional communication between this thread and the others becomes the
-//   thing that async ops are built on (if we do that).
+fn calculate_layout(screen: NSRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
+    let num_windows: u32 = windows.len().try_into().unwrap();
+    let width = screen.size.width / f64::from(num_windows);
+    // TODO: Convert between coordinate systems.
+    (0..num_windows)
+        .map(|i| CGRect {
+            origin: CGPoint {
+                x: screen.origin.x + f64::from(i) * width,
+                y: screen.origin.y,
+            },
+            size: CGSize {
+                width,
+                height: screen.size.height,
+            },
+        })
+        .collect()
+}

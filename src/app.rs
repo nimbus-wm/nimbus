@@ -23,7 +23,7 @@ use core_foundation::{
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
-use core_graphics_types::geometry::CGPoint;
+use core_graphics_types::geometry::CGRect;
 use icrate::{
     objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
@@ -105,7 +105,7 @@ impl Debug for AppThreadHandle {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Request {
-    MoveWindow(usize, CGPoint),
+    SetWindowFrame(WindowIdx, CGRect),
 }
 
 pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
@@ -340,10 +340,12 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         request: Request,
     ) -> Result<(), accessibility::Error> {
         match request {
-            Request::MoveWindow(idx, point) => {
-                state.window_elements[idx].set_position(point)?;
-                let new_pos = state.window_elements[idx].position()?;
-                debug!("Position after move: {new_pos:?}");
+            Request::SetWindowFrame(idx, frame) => {
+                let idx: usize = idx.try_into().unwrap();
+                state.window_elements[idx].set_position(frame.origin)?;
+                state.window_elements[idx].set_size(frame.size)?;
+                let new_frame = state.window_elements[idx].frame()?;
+                debug!("Frame after move: {new_frame:?}");
             }
         }
         Ok(())
