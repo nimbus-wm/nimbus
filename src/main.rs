@@ -17,7 +17,7 @@ use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
-use core_graphics_types::geometry::{CGPoint, CGRect};
+use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
 
 use log::info;
 use structopt::StructOpt;
@@ -139,7 +139,8 @@ enum Event {
     ApplicationActivated(pid_t),
     WindowCreated(pid_t, Window),
     WindowDestroyed(pid_t, WindowIdx),
-    WindowMoved,
+    WindowMoved(pid_t, WindowIdx, CGPoint),
+    WindowResized(pid_t, WindowIdx, CGSize),
     ScreenParametersChanged,
 }
 
@@ -188,6 +189,12 @@ impl EventHandler {
             Event::WindowDestroyed(pid, idx) => {
                 self.windows.retain(|wid| *wid != (pid, idx));
                 self.apps.get_mut(&pid).unwrap().windows.remove(idx as usize);
+            }
+            Event::WindowMoved(pid, idx, pos) => {
+                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.origin = pos;
+            }
+            Event::WindowResized(pid, idx, size) => {
+                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
             }
             _ => return,
         }

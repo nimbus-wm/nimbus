@@ -193,9 +193,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let handle = AppThreadHandle { requests_tx, wakeup };
 
     // Send the ApplicationLaunched event.
-    let Ok(()) = state_ref
-        .events_tx
-        .send(Event::ApplicationLaunched(pid, info, handle, windows))
+    let Ok(()) = state_ref.events_tx.send(Event::ApplicationLaunched(pid, info, handle, windows))
     else {
         debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
         return;
@@ -247,11 +245,13 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         notif: CFStringRef,
         data: *mut c_void,
     ) {
-        let state = unsafe { &*(data as *const State) };
+        let state_ref = unsafe { &*(data as *const State) };
         let notif = unsafe { CFString::wrap_under_get_rule(notif) };
         let notif = Cow::<str>::from(&notif);
         let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
         trace!("Got {notif:?} on {elem:?}");
+
+        let mut state = state_ref.borrow_mut();
 
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
@@ -261,32 +261,51 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 let Ok(window) = Window::try_from_ui_element(&elem) else {
                     return;
                 };
-                if !register_window_notifs(&elem, state, observer) {
+                if !register_window_notifs(&elem, state_ref, observer) {
                     return;
                 }
-                let mut state = state.borrow_mut();
                 state.window_elements.push(elem);
-                state
-                    .events_tx
-                    .send(Event::WindowCreated(state.pid, window))
-                    .unwrap();
+                state.events_tx.send(Event::WindowCreated(state.pid, window)).unwrap();
             }
             kAXUIElementDestroyedNotification => {
-                let mut state = state.borrow_mut();
                 let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
                     return;
                 };
                 state.window_elements.remove(idx);
                 state
                     .events_tx
-                    .send(Event::WindowDestroyed(state.pid, idx as WindowIdx))
+                    .send(Event::WindowDestroyed(state.pid, idx.try_into().unwrap()))
                     .unwrap();
             }
             kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {
-                state.borrow().events_tx.send(Event::WindowMoved).unwrap();
+                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                    return;
+                };
+                let Ok(pos) = state.window_elements[idx].position() else {
+                    return;
+                };
+                state
+                    .events_tx
+                    .send(Event::WindowMoved(state.pid, idx.try_into().unwrap(), pos))
+                    .unwrap();
             }
-            kAXWindowResizedNotification => {}
+            kAXWindowResizedNotification => {
+                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                    return;
+                };
+                let Ok(size) = state.window_elements[idx].size() else {
+                    return;
+                };
+                state
+                    .events_tx
+                    .send(Event::WindowResized(
+                        state.pid,
+                        idx.try_into().unwrap(),
+                        size,
+                    ))
+                    .unwrap();
+            }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}
             kAXTitleChangedNotification => {}
