@@ -33,7 +33,7 @@ use icrate::{
 use log::{debug, error, trace};
 
 use crate::{
-    reactor::{Event, Window, WindowIdx},
+    reactor::{self, Event, Window, WindowIdx},
     run_loop::WakeupHandle,
     Opt,
 };
@@ -53,6 +53,17 @@ impl NSRunningApplicationExt for NSRunningApplication {
     }
     fn localized_name(&self) -> Option<Id<NSString>> {
         unsafe { self.localizedName() }
+    }
+}
+
+impl TryFrom<&AXUIElement> for reactor::Window {
+    type Error = accessibility::Error;
+    fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
+        Ok(reactor::Window {
+            title: element.title()?.to_string(),
+            role: element.role()?.to_string(),
+            frame: element.frame()?,
+        })
     }
 }
 
@@ -179,7 +190,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
     for elem in initial_window_elements.iter() {
         let elem = elem.clone();
-        let Ok(window) = Window::try_from_ui_element(&elem) else {
+        let Ok(window) = Window::try_from(&elem) else {
             continue;
         };
         if !register_window_notifs(&elem, &state, observer) {
@@ -261,7 +272,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         // TODO: Handle all of these.
         match &*notif {
             kAXWindowCreatedNotification => {
-                let Ok(window) = Window::try_from_ui_element(&elem) else {
+                let Ok(window) = Window::try_from(&elem) else {
                     return;
                 };
                 if !register_window_notifs(&elem, state_ref, observer) {

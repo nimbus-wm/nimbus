@@ -40,16 +40,6 @@ async fn main() {
     notification_center::watch_for_notifications(events)
 }
 
-impl reactor::Window {
-    fn try_from_ui_element(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(reactor::Window {
-            title: element.title()?.to_string(),
-            role: element.role()?.to_string(),
-            frame: element.frame()?,
-        })
-    }
-}
-
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {
     let windows: CFArray<CFDictionaryRef> = unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
@@ -100,10 +90,7 @@ fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::Window>, accessi
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows
-        .into_iter()
-        .map(|win| reactor::Window::try_from_ui_element(&*win))
-        .collect()
+    windows.into_iter().map(|win| reactor::Window::try_from(&*win)).collect()
 }
 
 async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O {
