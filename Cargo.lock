@@ -5,7 +5,7 @@ version = 3
 [[package]]
 name = "accessibility"
 version = "0.1.6"
-source = "git+https://github.com/tmandry/accessibility?branch=master#c9eb1925e4eb4665d279a135d95d5718c85a8105"
+source = "git+https://github.com/tmandry/accessibility?branch=master#fc84e96802936f4b10077b438c576220734a741b"
 dependencies = [
  "accessibility-sys",
  "cocoa",
@@ -18,7 +18,7 @@ dependencies = [
 [[package]]
 name = "accessibility-sys"
 version = "0.1.3"
-source = "git+https://github.com/tmandry/accessibility?branch=master#c9eb1925e4eb4665d279a135d95d5718c85a8105"
+source = "git+https://github.com/tmandry/accessibility?branch=master#fc84e96802936f4b10077b438c576220734a741b"
 dependencies = [
  "core-foundation-sys",
 ]
