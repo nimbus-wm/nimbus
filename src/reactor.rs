@@ -36,8 +36,8 @@ pub(crate) struct AppState {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct Window {
+    pub(crate) is_standard: bool,
     pub(crate) title: String,
-    pub(crate) role: String,
     pub(crate) frame: CGRect,
 }
 
@@ -102,6 +102,7 @@ impl Reactor {
                     &self.apps[pid].windows[*widx as usize],
                 )
             })
+            .filter(|(_app, win)| win.is_standard)
             .collect();
         info!("Window list: {list:#?}");
         info!("Screen: {main_screen:?}");

@@ -13,8 +13,8 @@ use std::{
 use accessibility::{AXUIElement, AXUIElementAttributes};
 pub use accessibility_sys::pid_t;
 use accessibility_sys::{
-    kAXErrorSuccess, kAXMainWindowChangedNotification, kAXTitleChangedNotification,
-    kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
+    kAXErrorSuccess, kAXMainWindowChangedNotification, kAXStandardWindowSubrole,
+    kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
     AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
@@ -61,8 +61,9 @@ impl TryFrom<&AXUIElement> for reactor::Window {
     type Error = accessibility::Error;
     fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
         Ok(reactor::Window {
+            is_standard: element.role()? == kAXWindowRole
+                && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
-            role: element.role()?.to_string(),
             frame: element.frame()?,
         })
     }
