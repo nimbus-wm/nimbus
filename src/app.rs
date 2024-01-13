@@ -341,10 +341,10 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
             debug!("Got request for {bundle_id}({pid}): {request:?}");
             match handle_request(&state, request.clone()) {
                 Ok(()) => (),
-                Err(e) => {
+                Err(err) => {
                     let StateInner { bundle_id, pid, .. } = &*state;
                     let bundle_id = bundle_id.as_deref().unwrap_or("None");
-                    error!("Error handling request for {bundle_id}({pid}): {request:?}: {e:?}");
+                    error!("Error handling request for {bundle_id}({pid}): {request:?}: {err}");
                 }
             }
         }
@@ -357,13 +357,9 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         match request {
             Request::SetWindowFrame(idx, frame) => {
                 let idx: usize = idx.try_into().unwrap();
-                // trace!("Setting frame for {:#?}", state.window_elements[idx]);
-                time("set_position", || {
-                    state.window_elements[idx].set_position(frame.origin)
-                })?;
-                time("set_size", || {
-                    state.window_elements[idx].set_size(frame.size)
-                })?;
+                let window = &state.window_elements[idx];
+                trace("set_position", window, || window.set_position(frame.origin))?;
+                trace("set_size", window, || window.set_size(frame.size))?;
                 let new_frame = state.window_elements[idx].frame()?;
                 debug!("Frame after move: {new_frame:?}");
             }
@@ -371,11 +367,20 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         Ok(())
     }
 
-    fn time<O>(desc: &str, f: impl FnOnce() -> O) -> O {
+    fn trace<T>(
+        desc: &str,
+        elem: &AXUIElement,
+        f: impl FnOnce() -> Result<T, accessibility::Error>,
+    ) -> Result<T, accessibility::Error> {
         let start = Instant::now();
         let out = f();
         let end = Instant::now();
         trace!("{desc} took {:?}", end - start);
+        trace!("for element {elem:#?}");
+        if let Err(err) = &out {
+            let app = elem.parent();
+            error!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
+        }
         out
     }
 }
