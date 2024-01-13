@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
     sync::mpsc::{channel, Receiver, Sender},
     thread,
+    time::Instant,
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
@@ -356,13 +357,25 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         match request {
             Request::SetWindowFrame(idx, frame) => {
                 let idx: usize = idx.try_into().unwrap();
-                trace!("Setting frame for {:#?}", state.window_elements[idx]);
-                state.window_elements[idx].set_position(frame.origin)?;
-                state.window_elements[idx].set_size(frame.size)?;
+                // trace!("Setting frame for {:#?}", state.window_elements[idx]);
+                time("set_position", || {
+                    state.window_elements[idx].set_position(frame.origin)
+                })?;
+                time("set_size", || {
+                    state.window_elements[idx].set_size(frame.size)
+                })?;
                 let new_frame = state.window_elements[idx].frame()?;
                 debug!("Frame after move: {new_frame:?}");
             }
         }
         Ok(())
+    }
+
+    fn time<O>(desc: &str, f: impl FnOnce() -> O) -> O {
+        let start = Instant::now();
+        let out = f();
+        let end = Instant::now();
+        trace!("{desc} took {:?}", end - start);
+        out
     }
 }
