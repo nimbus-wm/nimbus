@@ -11,6 +11,7 @@ use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
+use log::debug;
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 
@@ -48,11 +49,11 @@ async fn get_windows_with_cg(_opt: &Opt, print: bool) {
         ))
     };
     if print {
-        println!("{windows:?}");
+        debug!("{windows:?}");
     }
     let display_id = unsafe { CGMainDisplayID() };
     let screen = unsafe { CGDisplayBounds(display_id) };
-    println!("main display = {screen:?}");
+    debug!("main display = {screen:?}");
 }
 
 async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
@@ -72,16 +73,16 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
     drop(sender);
     while let Some((info, windows)) = receiver.recv().await {
-        //println!("{info:?}");
+        //debug!("{info:?}");
         match windows {
             Ok(windows) => {
                 if print {
                     for win in windows {
-                        println!("{win:?} from {}", info.bundle_id.as_deref().unwrap_or("?"));
+                        debug!("{win:?} from {}", info.bundle_id.as_deref().unwrap_or("?"));
                     }
                 }
             }
-            Err(_) => (), //println!("  * Error reading windows: {err:?}"),
+            Err(_) => (), //debug!("  * Error reading windows: {err:?}"),
         }
     }
 }
@@ -97,6 +98,6 @@ async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O 
     let start = Instant::now();
     let out = f().await;
     let end = Instant::now();
-    println!("{desc} took {:?}", end - start);
+    debug!("{desc} took {:?}", end - start);
     out
 }
