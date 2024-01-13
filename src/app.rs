@@ -380,7 +380,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         trace!("for element {elem:#?}");
         if let Err(err) = &out {
             let app = elem.parent();
-            error!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
+            debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
         }
         out
     }
