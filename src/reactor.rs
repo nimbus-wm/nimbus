@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync, sync::mpsc::Sender, thread};
+use std::{collections::HashMap, sync, thread};
 
 use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
 use icrate::Foundation::CGRect as NSRect;
@@ -8,6 +8,8 @@ use super::Opt;
 use crate::app::{pid_t, AppInfo, AppThreadHandle, Request};
 
 pub(crate) type WindowIdx = u32;
+
+pub use std::sync::mpsc::Sender;
 
 #[derive(Debug)]
 pub(crate) enum Event {
@@ -19,6 +21,13 @@ pub(crate) enum Event {
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
     ScreenParametersChanged(Option<NSRect>),
+    Command(Command),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Command {
+    Hello,
+    Shuffle,
 }
 
 pub(crate) struct Reactor {
@@ -68,6 +77,7 @@ impl Reactor {
                 self.windows.retain(|(w_pid, _)| *w_pid != pid);
                 self.apps.remove(&pid).unwrap();
             }
+            Event::ApplicationActivated(_) => (),
             Event::WindowCreated(pid, window) => {
                 let app = self.apps.get_mut(&pid).unwrap();
                 self.windows.push((pid, app.windows.len() as WindowIdx));
@@ -86,7 +96,10 @@ impl Reactor {
             Event::ScreenParametersChanged(frame) => {
                 self.main_screen = frame;
             }
-            _ => return,
+            Event::Command(Command::Hello) => {
+                println!("Hello, world!");
+            }
+            Event::Command(Command::Shuffle) => (),
         }
         self.update_layout();
     }

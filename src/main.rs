@@ -1,4 +1,5 @@
 mod app;
+mod hotkey;
 mod notification_center;
 mod reactor;
 mod run_loop;
@@ -11,7 +12,9 @@ use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
+use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use log::debug;
+use reactor::{Command, Event, Sender};
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 
@@ -38,7 +41,15 @@ async fn main() {
     .await;
     let events = reactor::Reactor::spawn(&opt);
     app::spawn_initial_app_threads(&opt, events.clone());
+    let _mgr = register_hotkeys(events.clone());
     notification_center::watch_for_notifications(events)
+}
+
+fn register_hotkeys(events: Sender<Event>) -> HotkeyManager {
+    let mgr = HotkeyManager::new(events);
+    mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
+    mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
+    mgr
 }
 
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {
