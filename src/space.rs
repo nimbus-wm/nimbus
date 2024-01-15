@@ -38,33 +38,36 @@ impl<S: System> ScreenCache<S> {
     }
 
     /// Returns a list of screen frames and updates the internal cache.
+    ///
+    /// Note that there may be no screens. If there are, the main screen is
+    /// always first.
     #[forbid(unsafe_code)] // called from test
     pub fn screen_frames(&mut self) -> Result<Vec<CGRect>, CGError> {
-        let cg_screens = self.system.cg_screens()?;
+        let mut cg_screens = self.system.cg_screens()?;
         debug!("cg_screens={cg_screens:?}");
         if cg_screens.is_empty() {
             return Ok(vec![]);
         };
 
+        // Ensure that the main screen is always first.
+        let main_screen_idx = cg_screens
+            .iter()
+            .position(|s| s.bounds.origin == CGPoint::ZERO)
+            .expect("Could not find the main screen");
+        cg_screens.swap(0, main_screen_idx);
+
         self.uuids = cg_screens
             .iter()
             .map(|screen| self.system.uuid_for_rect(screen.bounds))
             .collect();
-        let ns_screens = self.system.ns_screens();
-        debug!("ns_screens={ns_screens:?}");
 
         // We want to get the visible_frame of the NSScreenInfo, but in CG's
         // top-left coordinates from NSScreen's bottom-left.
+        let ns_screens = self.system.ns_screens();
+        debug!("ns_screens={ns_screens:?}");
 
-        // The main screen is always the one with origin (0, 0) in both
-        // coordinate systems.
-        let ns_origin_y = cg_screens
-            .iter()
-            .find(|s| s.bounds.origin == CGPoint::ZERO)
-            .expect("Could not find the main screen")
-            .bounds
-            .max()
-            .y;
+        // The main screen has origin (0, 0) in both coordinate systems.
+        let ns_origin_y = cg_screens[0].bounds.max().y;
 
         let visible_frames = cg_screens
             .iter()
@@ -320,12 +323,12 @@ mod test {
         let stub = Stub {
             cg_screens: vec![
                 CGScreenInfo {
-                    cg_id: 3,
-                    bounds: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(3840.0, 2160.0)),
-                },
-                CGScreenInfo {
                     cg_id: 1,
                     bounds: CGRect::new(CGPoint::new(3840.0, 1080.0), CGSize::new(1512.0, 982.0)),
+                },
+                CGScreenInfo {
+                    cg_id: 3,
+                    bounds: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(3840.0, 2160.0)),
                 },
             ],
             ns_screens: vec![
