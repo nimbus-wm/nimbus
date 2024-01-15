@@ -12,7 +12,10 @@ use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
 use structopt::StructOpt;
 use tokio::sync::mpsc;
 
-use nimbus::{app, reactor, space};
+use nimbus::{
+    app, reactor,
+    space::{self, ScreenCache},
+};
 
 #[derive(StructOpt)]
 pub struct Opt {
@@ -22,6 +25,7 @@ pub struct Opt {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    env_logger::init();
     let opt = Opt::from_args();
     //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
     time("core-graphics", || get_windows_with_cg(&opt, true)).await;
@@ -39,15 +43,16 @@ async fn main() {
     println!("Visible spaces: {:?}", space::visible_spaces());
     println!("All spaces: {:?}", space::all_spaces());
     println!("{:?}", space::managed_display_spaces());
-    println!("CG screens: {:?}, main={}", space::screens(), unsafe {
-        CGMainDisplayID()
-    });
-    println!("{:?}", space::managed_displays());
+
+    dbg!(space::managed_displays());
     let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
     let frames: Vec<_> = screens.iter().map(|screen| screen.visibleFrame()).collect();
-    println!("Screen sizes: {frames:?}");
-    let descrs: Vec<_> = screens.iter().map(|screen| screen.deviceDescription()).collect();
-    println!("Screen descrs: {descrs:?}");
+    println!("NSScreen sizes: {frames:?}");
+
+    println!();
+    let mut sc = ScreenCache::new(MainThreadMarker::new().unwrap());
+    println!("Frames: {:?}", sc.screen_frames());
+    println!("Spaces: {:?}", sc.screen_spaces());
 }
 
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {
