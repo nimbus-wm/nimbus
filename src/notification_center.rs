@@ -20,7 +20,7 @@ use crate::{
     space,
 };
 
-pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
+pub fn watch_for_notifications(events_tx: Sender<Event>) {
     #[repr(C)]
     struct Instance {
         events_tx: &'static mut Sender<Event>,

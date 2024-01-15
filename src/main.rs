@@ -40,8 +40,8 @@ async fn main() {
         get_windows_with_ax(&opt, false, false)
     })
     .await;
-    let events = reactor::Reactor::spawn(&opt);
-    app::spawn_initial_app_threads(&opt, events.clone());
+    let events = reactor::Reactor::spawn();
+    app::spawn_initial_app_threads(events.clone());
     let _mgr = register_hotkeys(events.clone());
     notification_center::watch_for_notifications(events)
 }
@@ -70,7 +70,7 @@ async fn get_windows_with_cg(_opt: &Opt, print: bool) {
 
 async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     let (sender, mut receiver) = mpsc::unbounded_channel();
-    for (pid, bundle_id) in app::running_apps(opt) {
+    for (pid, bundle_id) in app::running_apps(opt.bundle.clone()) {
         let sender = sender.clone();
         let task = move || {
             let app = AXUIElement::application(pid);

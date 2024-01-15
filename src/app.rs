@@ -36,10 +36,9 @@ use log::{debug, error, trace};
 use crate::{
     reactor::{self, Event, Window, WindowIdx},
     run_loop::WakeupHandle,
-    Opt,
 };
 
-pub(crate) trait NSRunningApplicationExt {
+pub trait NSRunningApplicationExt {
     fn pid(&self) -> pid_t;
     fn bundle_id(&self) -> Option<Id<NSString>>;
     fn localized_name(&self) -> Option<Id<NSString>>;
@@ -71,7 +70,7 @@ impl TryFrom<&AXUIElement> for reactor::Window {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) struct AppInfo {
+pub struct AppInfo {
     pub bundle_id: Option<String>,
     pub localized_name: Option<String>,
 }
@@ -85,8 +84,7 @@ impl From<&NSRunningApplication> for AppInfo {
     }
 }
 
-pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, AppInfo)> {
-    let bundle = opt.bundle.clone();
+pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
     unsafe { NSWorkspace::sharedWorkspace().runningApplications() }
         .into_iter()
         .flat_map(move |app| {
@@ -100,13 +98,13 @@ pub(crate) fn running_apps(opt: &Opt) -> impl Iterator<Item = (pid_t, AppInfo)> 
         })
 }
 
-pub(crate) struct AppThreadHandle {
+pub struct AppThreadHandle {
     requests_tx: Sender<Request>,
     wakeup: WakeupHandle,
 }
 
 impl AppThreadHandle {
-    pub(crate) fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
+    pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
         self.requests_tx.send(req)?;
         self.wakeup.wake();
         Ok(())
@@ -120,17 +118,17 @@ impl Debug for AppThreadHandle {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Request {
+pub enum Request {
     SetWindowFrame(WindowIdx, CGRect),
 }
 
-pub(crate) fn spawn_initial_app_threads(opt: &Opt, events_tx: Sender<Event>) {
-    for (pid, info) in running_apps(opt) {
+pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
+    for (pid, info) in running_apps(None) {
         spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 
-pub(crate) fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
+pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     thread::spawn(move || app_thread_main(pid, info, events_tx));
 }
 

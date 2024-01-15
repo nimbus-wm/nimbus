@@ -4,18 +4,17 @@ use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
 use icrate::Foundation::CGRect as NSRect;
 use log::{debug, info};
 
-use super::Opt;
 use crate::{
     app::{pid_t, AppInfo, AppThreadHandle, Request},
     space::{cur_space, SpaceId},
 };
 
-pub(crate) type WindowIdx = u32;
+pub type WindowIdx = u32;
 
 pub use std::sync::mpsc::Sender;
 
 #[derive(Debug)]
-pub(crate) enum Event {
+pub enum Event {
     ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<Window>),
     ApplicationTerminated(pid_t),
     ApplicationActivated(pid_t),
@@ -29,33 +28,33 @@ pub(crate) enum Event {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Command {
+pub enum Command {
     Hello,
     Shuffle,
 }
 
-pub(crate) struct Reactor {
-    pub(crate) windows: Vec<(pid_t, WindowIdx)>,
-    pub(crate) apps: HashMap<pid_t, AppState>,
-    pub(crate) main_screen: Option<NSRect>,
+pub struct Reactor {
+    pub windows: Vec<(pid_t, WindowIdx)>,
+    pub apps: HashMap<pid_t, AppState>,
+    pub main_screen: Option<NSRect>,
 }
 
-pub(crate) struct AppState {
-    pub(crate) info: AppInfo,
-    pub(crate) handle: AppThreadHandle,
-    pub(crate) windows: Vec<Window>,
+pub struct AppState {
+    pub info: AppInfo,
+    pub handle: AppThreadHandle,
+    pub windows: Vec<Window>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub(crate) struct Window {
-    pub(crate) is_standard: bool,
-    pub(crate) title: String,
-    pub(crate) frame: CGRect,
+pub struct Window {
+    pub is_standard: bool,
+    pub title: String,
+    pub frame: CGRect,
 }
 
 impl Reactor {
-    pub(crate) fn spawn(_opt: &Opt) -> Sender<Event> {
+    pub fn spawn() -> Sender<Event> {
         let (events_tx, events) = sync::mpsc::channel::<Event>();
         thread::spawn(move || {
             let mut handler = Reactor {
@@ -70,7 +69,7 @@ impl Reactor {
         events_tx
     }
 
-    pub(crate) fn handle_event(&mut self, event: Event) {
+    pub fn handle_event(&mut self, event: Event) {
         info!("Event {event:?}");
         match event {
             Event::ApplicationLaunched(pid, info, handle, windows) => {
@@ -109,7 +108,7 @@ impl Reactor {
         self.update_layout();
     }
 
-    pub(crate) fn update_layout(&mut self) {
+    pub fn update_layout(&mut self) {
         let Some(main_screen) = self.main_screen else { return };
         let list: Vec<_> = self
             .windows
@@ -139,7 +138,7 @@ impl Reactor {
     }
 }
 
-pub(crate) fn calculate_layout(screen: NSRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
+pub fn calculate_layout(screen: NSRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
     let num_windows: u32 = windows.len().try_into().unwrap();
     let width = screen.size.width / f64::from(num_windows);
     // TODO: Convert between coordinate systems.
