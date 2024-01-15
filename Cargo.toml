@@ -16,6 +16,8 @@ env_logger = "0.10.1"
 icrate = { version = "0.1.0", features = ["Foundation_NSString", "AppKit_NSRunningApplication", "Foundation_NSArray", "AppKit_NSWorkspace", "AppKit", "Foundation_NSNotificationCenter", "Foundation_NSNotification", "Foundation_NSThread", "AppKit_NSScreen"] }
 livesplit-hotkey = "0.7.0"
 log = "0.4.20"
+
+[dev-dependencies]
 structopt = "0.3.26"
 tokio = { version = "1.35.1", features = ["rt", "sync", "macros"] }
 
