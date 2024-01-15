@@ -742,6 +742,7 @@ version = "0.1.0"
 dependencies = [
  "accessibility",
  "accessibility-sys",
+ "bitflags 2.4.1",
  "core-foundation",
  "core-graphics 0.23.1",
  "core-graphics-types",
