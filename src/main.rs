@@ -3,6 +3,7 @@ mod hotkey;
 mod notification_center;
 mod reactor;
 mod run_loop;
+mod space;
 
 use std::{future::Future, time::Instant};
 

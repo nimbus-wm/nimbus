@@ -2,10 +2,13 @@ use std::{collections::HashMap, sync, thread};
 
 use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
 use icrate::Foundation::CGRect as NSRect;
-use log::info;
+use log::{debug, info};
 
 use super::Opt;
-use crate::app::{pid_t, AppInfo, AppThreadHandle, Request};
+use crate::{
+    app::{pid_t, AppInfo, AppThreadHandle, Request},
+    space::{cur_space, SpaceId},
+};
 
 pub(crate) type WindowIdx = u32;
 
@@ -21,6 +24,7 @@ pub(crate) enum Event {
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
     ScreenParametersChanged(Option<NSRect>),
+    SpaceChanged(SpaceId),
     Command(Command),
 }
 
@@ -100,6 +104,7 @@ impl Reactor {
                 println!("Hello, world!");
             }
             Event::Command(Command::Shuffle) => (),
+            Event::SpaceChanged(_space) => (),
         }
         self.update_layout();
     }
@@ -117,10 +122,11 @@ impl Reactor {
             })
             .filter(|(_app, win)| win.is_standard)
             .collect();
-        info!("Window list: {list:#?}");
+        debug!("Window list: {list:#?}");
         info!("Screen: {main_screen:?}");
         let layout = calculate_layout(main_screen.clone(), &list);
         info!("Layout: {layout:?}");
+        info!("Space: {:?}", cur_space());
         for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
             // TODO: Check if existing frame matches
             self.apps

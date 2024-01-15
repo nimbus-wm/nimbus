@@ -17,6 +17,7 @@ use log::{trace, warn};
 use crate::{
     app::{self, AppInfo, NSRunningApplicationExt},
     reactor::Event,
+    space,
 };
 
 pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
@@ -54,10 +55,10 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
                 unsafe { msg_send_id![super(this), init] }
             }
 
-            #[method(recvApplication:)]
-            fn recv_application(&self, notif: &NSNotification) {
+            #[method(recvWorkspace:)]
+            fn recv_workspace(&self, notif: &NSNotification) {
                 trace!("{notif:#?}");
-                self.handle_application_event(notif);
+                self.handle_workspace_event(notif);
             }
 
             #[method(recvScreenChanged:)]
@@ -75,7 +76,7 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
             unsafe { msg_send_id![Self::alloc(), initWith: instance] }
         }
 
-        fn handle_application_event(&self, notif: &NSNotification) {
+        fn handle_workspace_event(&self, notif: &NSNotification) {
             use AppKit::*;
             let Some(app) = self.running_application(notif) else {
                 return;
@@ -88,9 +89,15 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
                 self.send_event(Event::ApplicationActivated(pid));
             } else if unsafe { NSWorkspaceDidTerminateApplicationNotification } == name {
                 self.send_event(Event::ApplicationTerminated(pid));
+            } else if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
+                self.send_current_space();
             } else {
                 unreachable!("Unexpected application event: {notif:?}");
             }
+        }
+
+        fn send_current_space(&self) {
+            self.send_event(Event::SpaceChanged(space::cur_space()));
         }
 
         fn handle_screen_changed_event(&self, _notif: &NSNotification) {
@@ -144,20 +151,26 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
     unsafe {
         use AppKit::*;
         register_unsafe(
-            sel!(recvApplication:),
+            sel!(recvWorkspace:),
             NSWorkspaceDidLaunchApplicationNotification,
             workspace_center,
             workspace,
         );
         register_unsafe(
-            sel!(recvApplication:),
+            sel!(recvWorkspace:),
             NSWorkspaceDidActivateApplicationNotification,
             workspace_center,
             workspace,
         );
         register_unsafe(
-            sel!(recvApplication:),
+            sel!(recvWorkspace:),
             NSWorkspaceDidTerminateApplicationNotification,
+            workspace_center,
+            workspace,
+        );
+        register_unsafe(
+            sel!(recvWorkspace:),
+            NSWorkspaceActiveSpaceDidChangeNotification,
             workspace_center,
             workspace,
         );
@@ -170,5 +183,6 @@ pub(crate) fn watch_for_notifications(events_tx: Sender<Event>) {
     };
 
     handler.send_screen_parameters();
+    handler.send_current_space();
     CFRunLoop::run_current();
 }
