@@ -5,6 +5,15 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# We don't have a need for unwinding, and aborting means we don't have to worry
+# about propagating panics to the main CFRunLoop thread.
+#
+# However, since panic-abort-tests is not stable yet, we will always build test
+# deps with panic=unwind. Therefore dev builds continue to use panic=unwind
+# with a panic hook that aborts so we can reuse dependency builds.
+[profile]
+release.panic = "abort"
+
 [dependencies]
 accessibility = "0.1.6"
 accessibility-sys = "0.1.3"

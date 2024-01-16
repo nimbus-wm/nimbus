@@ -11,6 +11,7 @@ use reactor::{Command, Event, Sender};
 
 fn main() {
     env_logger::init();
+    install_panic_hook();
     let events = reactor::Reactor::spawn();
     app::spawn_initial_app_threads(events.clone());
     let _mgr = register_hotkeys(events.clone());
@@ -23,3 +24,23 @@ fn register_hotkeys(events: Sender<Event>) -> HotkeyManager {
     mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
     mgr
 }
+
+#[cfg(panic = "unwind")]
+fn install_panic_hook() {
+    // Abort on panic instead of propagating panics to the main thread.
+    // See Cargo.toml for why we don't use panic=abort everywhere.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        original_hook(info);
+        std::process::abort();
+    }));
+
+    // Since this version only runs in development, let's default
+    // RUST_BACKTRACE=1 too.
+    if std::env::var("RUST_BACKTRACE").is_err() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+}
+
+#[cfg(not(panic = "unwind"))]
+fn install_panic_hook() {}
