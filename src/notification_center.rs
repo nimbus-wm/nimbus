@@ -1,4 +1,4 @@
-use std::{mem, sync::mpsc::Sender};
+use std::{cell::RefCell, mem, sync::mpsc::Sender};
 
 use core_foundation::runloop::CFRunLoop;
 use icrate::{
@@ -7,9 +7,7 @@ use icrate::{
         rc::{Allocated, Id},
         sel, ClassType, DeclaredClass, Encode, Encoding,
     },
-    AppKit::{
-        self, NSApplication, NSRunningApplication, NSScreen, NSWorkspace, NSWorkspaceApplicationKey,
-    },
+    AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
 use log::{trace, warn};
@@ -17,13 +15,14 @@ use log::{trace, warn};
 use crate::{
     app::{self, AppInfo, NSRunningApplicationExt},
     reactor::Event,
-    screen,
+    screen::ScreenCache,
 };
 
 pub fn watch_for_notifications(events_tx: Sender<Event>) {
     #[repr(C)]
     struct Instance {
         events_tx: &'static mut Sender<Event>,
+        screen_cache: RefCell<ScreenCache>,
     }
 
     unsafe impl Encode for Instance {
@@ -72,7 +71,10 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
     impl NotificationHandler {
         fn new(events_tx: Sender<Event>) -> Id<Self> {
             let events_tx = Box::leak(Box::new(events_tx));
-            let instance = Instance { events_tx };
+            let instance = Instance {
+                events_tx,
+                screen_cache: RefCell::new(ScreenCache::new(MainThreadMarker::new().unwrap())),
+            };
             unsafe { msg_send_id![Self::alloc(), initWith: instance] }
         }
 
@@ -97,7 +99,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn send_current_space(&self) {
-            self.send_event(Event::SpaceChanged(screen::cur_space()));
+            let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
+            self.send_event(Event::SpaceChanged(spaces));
         }
 
         fn handle_screen_changed_event(&self, _notif: &NSNotification) {
@@ -105,9 +108,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn send_screen_parameters(&self) {
-            let frame = NSScreen::mainScreen(MainThreadMarker::new().unwrap())
-                .map(|screen| screen.visibleFrame());
-            self.send_event(Event::ScreenParametersChanged(frame));
+            let frames = self.ivars().screen_cache.borrow_mut().update_screen_config();
+            self.send_event(Event::ScreenParametersChanged(frames));
         }
 
         fn send_event(&self, event: Event) {

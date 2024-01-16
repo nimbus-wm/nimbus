@@ -19,34 +19,37 @@ use log::{debug, warn};
 #[repr(transparent)]
 pub struct SpaceId(u64);
 
+/// Calculates the screen and space configuration.
 pub struct ScreenCache<S: System = Actual> {
     system: S,
     uuids: Vec<CFString>,
 }
 
-#[allow(dead_code)]
 impl ScreenCache<Actual> {
     pub fn new(mtm: MainThreadMarker) -> Self {
         Self::new_with(Actual { mtm })
     }
 }
 
-#[allow(dead_code)]
 impl<S: System> ScreenCache<S> {
     fn new_with(system: S) -> ScreenCache<S> {
         ScreenCache { uuids: vec![], system }
     }
 
-    /// Returns a list of screen frames and updates the internal cache.
+    /// Returns a list containing the usable frame for each screen.
     ///
-    /// Note that there may be no screens. If there are, the main screen is
-    /// always first.
+    /// This method must be called when there is an update to the screen
+    /// configuration. It updates the internal cache so that calls to
+    /// screen_spaces are fast.
+    ///
+    /// The main screen (if any) is always first. Note that there may be no
+    /// screens.
     #[forbid(unsafe_code)] // called from test
-    pub fn screen_frames(&mut self) -> Result<Vec<CGRect>, CGError> {
-        let mut cg_screens = self.system.cg_screens()?;
+    pub fn update_screen_config(&mut self) -> Vec<CGRect> {
+        let mut cg_screens = self.system.cg_screens().unwrap();
         debug!("cg_screens={cg_screens:?}");
         if cg_screens.is_empty() {
-            return Ok(vec![]);
+            return vec![];
         };
 
         // Ensure that the main screen is always first.
@@ -89,12 +92,12 @@ impl<S: System> ScreenCache<S> {
                 Some(converted)
             })
             .collect();
-        Ok(visible_frames)
+        visible_frames
     }
 
-    /// Returns a list of the active spaces. The order corresponds to the
-    /// screens returned by `screen_frames`.
-    pub fn screen_spaces(&self) -> Vec<SpaceId> {
+    /// Returns a list of the active spaces on each screen. The order
+    /// corresponds to the screens returned by `screen_frames`.
+    pub fn get_screen_spaces(&self) -> Vec<SpaceId> {
         self.uuids
             .iter()
             .map(|screen| unsafe {
@@ -356,7 +359,7 @@ mod test {
                 CGRect::new(CGPoint::new(0.0, 25.0), CGSize::new(3840.0, 2059.0)),
                 CGRect::new(CGPoint::new(3840.0, 1112.0), CGSize::new(1512.0, 950.0)),
             ],
-            sc.screen_frames().unwrap()
+            sc.update_screen_config()
         );
     }
 }

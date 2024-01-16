@@ -51,8 +51,8 @@ async fn main() {
 
     println!();
     let mut sc = ScreenCache::new(MainThreadMarker::new().unwrap());
-    println!("Frames: {:?}", sc.screen_frames());
-    println!("Spaces: {:?}", sc.screen_spaces());
+    println!("Frames: {:?}", sc.update_screen_config());
+    println!("Spaces: {:?}", sc.get_screen_spaces());
 }
 
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {

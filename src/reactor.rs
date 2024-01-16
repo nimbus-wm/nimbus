@@ -6,7 +6,7 @@ use log::{debug, info};
 
 use crate::{
     app::{pid_t, AppInfo, AppThreadHandle, Request},
-    screen::{cur_space, SpaceId},
+    screen::SpaceId,
 };
 
 pub type WindowIdx = u32;
@@ -22,8 +22,8 @@ pub enum Event {
     WindowDestroyed(pid_t, WindowIdx),
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
-    ScreenParametersChanged(Option<NSRect>),
-    SpaceChanged(SpaceId),
+    ScreenParametersChanged(Vec<NSRect>),
+    SpaceChanged(Vec<SpaceId>),
     Command(Command),
 }
 
@@ -97,7 +97,7 @@ impl Reactor {
                 self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
             }
             Event::ScreenParametersChanged(frame) => {
-                self.main_screen = frame;
+                self.main_screen = frame.first().copied();
             }
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
@@ -125,7 +125,6 @@ impl Reactor {
         info!("Screen: {main_screen:?}");
         let layout = calculate_layout(main_screen.clone(), &list);
         info!("Layout: {layout:?}");
-        info!("Space: {:?}", cur_space());
         for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
             // TODO: Check if existing frame matches
             self.apps
