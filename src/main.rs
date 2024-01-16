@@ -10,7 +10,7 @@ use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use reactor::{Command, Event, Sender};
 
 fn main() {
-    env_logger::init();
+    env_logger::Builder::from_default_env().format_timestamp_millis().init();
     install_panic_hook();
     let events_tx = reactor::Reactor::spawn();
     app::spawn_initial_app_threads(events_tx.clone());
