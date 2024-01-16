@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync, thread};
 
-use core_graphics_types::geometry::{CGPoint, CGRect, CGSize};
-use icrate::Foundation::CGRect as NSRect;
+use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use log::{debug, info};
 
 use crate::{
@@ -22,7 +21,7 @@ pub enum Event {
     WindowDestroyed(pid_t, WindowIdx),
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
-    ScreenParametersChanged(Vec<NSRect>),
+    ScreenParametersChanged(Vec<CGRect>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
 }
@@ -36,7 +35,7 @@ pub enum Command {
 pub struct Reactor {
     pub windows: Vec<(pid_t, WindowIdx)>,
     pub apps: HashMap<pid_t, AppState>,
-    pub main_screen: Option<NSRect>,
+    pub main_screen: Option<CGRect>,
 }
 
 pub struct AppState {
@@ -137,7 +136,7 @@ impl Reactor {
     }
 }
 
-pub fn calculate_layout(screen: NSRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
+pub fn calculate_layout(screen: CGRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
     let num_windows: u32 = windows.len().try_into().unwrap();
     let width = screen.size.width / f64::from(num_windows);
     // TODO: Convert between coordinate systems.

@@ -4,6 +4,7 @@ mod notification_center;
 mod reactor;
 mod run_loop;
 mod screen;
+mod util;
 
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use reactor::{Command, Event, Sender};

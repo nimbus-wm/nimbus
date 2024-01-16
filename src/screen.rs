@@ -11,9 +11,11 @@ use core_graphics_types::base::{kCGErrorSuccess, CGError};
 use icrate::{
     objc2::{msg_send, ClassType},
     AppKit::NSScreen,
-    Foundation::{ns_string, CGPoint, CGRect, CGSize, MainThreadMarker, NSNumber},
+    Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber},
 };
 use log::{debug, warn};
+
+use crate::util::ToICrate;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(transparent)]
@@ -198,34 +200,6 @@ impl System for Actual {
                 })
             })
             .collect()
-    }
-}
-
-trait ToICrate<T> {
-    fn to_icrate(&self) -> T;
-}
-
-impl ToICrate<CGPoint> for core_graphics_types::geometry::CGPoint {
-    fn to_icrate(&self) -> CGPoint {
-        CGPoint { x: self.x, y: self.y }
-    }
-}
-
-impl ToICrate<CGSize> for core_graphics_types::geometry::CGSize {
-    fn to_icrate(&self) -> CGSize {
-        CGSize {
-            width: self.width,
-            height: self.height,
-        }
-    }
-}
-
-impl ToICrate<CGRect> for core_graphics_types::geometry::CGRect {
-    fn to_icrate(&self) -> CGRect {
-        CGRect {
-            origin: self.origin.to_icrate(),
-            size: self.size.to_icrate(),
-        }
     }
 }
 

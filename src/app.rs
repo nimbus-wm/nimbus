@@ -25,17 +25,17 @@ use core_foundation::{
     runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
-use core_graphics_types::geometry::CGRect;
 use icrate::{
     objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
-    Foundation::NSString,
+    Foundation::{CGRect, NSString},
 };
 use log::{debug, error, trace};
 
 use crate::{
     reactor::{self, Event, Window, WindowIdx},
     run_loop::WakeupHandle,
+    util::{ToCGType, ToICrate},
 };
 
 pub trait NSRunningApplicationExt {
@@ -63,7 +63,7 @@ impl TryFrom<&AXUIElement> for reactor::Window {
             is_standard: element.role()? == kAXWindowRole
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
-            frame: element.frame()?,
+            frame: element.frame()?.to_icrate(),
         })
     }
 }
@@ -301,7 +301,11 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 };
                 state
                     .events_tx
-                    .send(Event::WindowMoved(state.pid, idx.try_into().unwrap(), pos))
+                    .send(Event::WindowMoved(
+                        state.pid,
+                        idx.try_into().unwrap(),
+                        pos.to_icrate(),
+                    ))
                     .unwrap();
             }
             kAXWindowResizedNotification => {
@@ -316,7 +320,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                     .send(Event::WindowResized(
                         state.pid,
                         idx.try_into().unwrap(),
-                        size,
+                        size.to_icrate(),
                     ))
                     .unwrap();
             }
@@ -357,8 +361,12 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
             Request::SetWindowFrame(idx, frame) => {
                 let idx: usize = idx.try_into().unwrap();
                 let window = &state.window_elements[idx];
-                trace("set_position", window, || window.set_position(frame.origin))?;
-                trace("set_size", window, || window.set_size(frame.size))?;
+                trace("set_position", window, || {
+                    window.set_position(frame.origin.to_cgtype())
+                })?;
+                trace("set_size", window, || {
+                    window.set_size(frame.size.to_cgtype())
+                })?;
                 let new_frame = state.window_elements[idx].frame()?;
                 debug!("Frame after move: {new_frame:?}");
             }
