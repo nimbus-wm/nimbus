@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
     sync::mpsc::{channel, Receiver, Sender},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
@@ -21,13 +21,16 @@ use accessibility_sys::{
 };
 use core_foundation::{
     base::TCFType,
-    runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
+    date::{CFAbsoluteTime, CFAbsoluteTimeGetCurrent, CFTimeInterval},
+    runloop::{
+        kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopTimer,
+    },
     string::{CFString, CFStringRef},
 };
 use icrate::{
     objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
-    Foundation::{CGRect, NSString},
+    Foundation::{CGPoint, CGRect, CGSize, NSString},
 };
 use log::{debug, error, trace};
 
@@ -124,6 +127,7 @@ impl Debug for AppThreadHandle {
 #[derive(Debug, Clone)]
 pub enum Request {
     SetWindowFrame(WindowId, CGRect),
+    AnimateWindowFrames(Vec<(WindowId, CGRect, CGRect)>, Animation),
 }
 
 pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
@@ -390,6 +394,42 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 let new_frame = trace("frame", window, || window.frame())?;
                 debug!("Frame after move: {new_frame:?}");
             }
+            Request::AnimateWindowFrames(windows, anim) => {
+                let windows = windows
+                    .into_iter()
+                    .map(|(wid, from, to)| {
+                        assert_eq!(wid.pid, state.pid);
+                        let Some(window) = state.windows.iter().find(|w| w.wid == wid) else {
+                            return Err(accessibility::Error::NotFound);
+                        };
+                        Ok((&window.elem, from.to_cgtype(), to.to_cgtype()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut next_frames = Vec::with_capacity(windows.len());
+                //let timer = CFRunLoopTimer::new(anim.start, anim.interval, 0, 0, callout, context);
+                //CFRunLoop::get_current().add_timer(timer, mode)
+                for frame in 1..=anim.frames {
+                    let t: f64 = f64::from(frame) / f64::from(anim.frames);
+                    next_frames.clear();
+                    for (_, from, to) in &windows {
+                        next_frames.push(get_frame(*from, *to, t));
+                    }
+
+                    let deadline = anim.start + frame * anim.interval;
+                    let duration = deadline - Instant::now();
+                    if duration < Duration::ZERO {
+                        continue;
+                    }
+                    thread::sleep(duration);
+
+                    for ((window, from, to), rect) in windows.iter().zip(&next_frames) {
+                        trace("set_position", window, || window.set_position(rect.origin))?;
+                        if from.size.width != to.size.width || from.size.height != to.size.height {
+                            trace("set_size", window, || window.set_size(rect.size))?;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -402,12 +442,56 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         let start = Instant::now();
         let out = f();
         let end = Instant::now();
-        trace!("{desc} took {:?}", end - start);
-        trace!("for element {elem:#?}");
+        trace!("{desc:12} took {:10?} on {elem:?}", end - start);
+        // trace!("for element {elem:#?}");
         if let Err(err) = &out {
             let app = elem.parent();
             debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
         }
         out
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Animation {
+    //start: CFAbsoluteTime,
+    //interval: CFTimeInterval,
+    start: Instant,
+    interval: Duration,
+    frames: u32,
+}
+
+impl Animation {
+    pub fn new() -> Self {
+        const FPS: f64 = 60.0;
+        const DURATION: f64 = 0.5;
+        let interval = Duration::from_secs_f64(1.0 / FPS);
+        // let now = unsafe { CFAbsoluteTimeGetCurrent() };
+        let now = Instant::now();
+        Animation {
+            start: now + interval, // not necessary, provide one extra frame to get things going
+            interval,
+            frames: (DURATION * FPS).round() as u32,
+        }
+    }
+}
+
+use core_graphics_types::geometry as cg;
+
+fn get_frame(a: cg::CGRect, b: cg::CGRect, t: f64) -> cg::CGRect {
+    let s = t;
+    cg::CGRect {
+        origin: cg::CGPoint {
+            x: blend(a.origin.x, b.origin.x, s),
+            y: blend(a.origin.y, b.origin.y, s),
+        },
+        size: cg::CGSize {
+            width: blend(a.size.width, b.size.width, s),
+            height: blend(a.size.height, b.size.height, s),
+        },
+    }
+}
+
+fn blend(a: f64, b: f64, s: f64) -> f64 {
+    (1.0 - s) * a + s * b
 }

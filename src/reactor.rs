@@ -2,9 +2,10 @@ use std::{collections::HashMap, sync, thread};
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use log::{debug, info};
+use rand::seq::SliceRandom;
 
 use crate::{
-    app::{pid_t, AppThreadHandle, Request, WindowId},
+    app::{pid_t, Animation, AppThreadHandle, Request, WindowId},
     screen::SpaceId,
 };
 
@@ -94,7 +95,9 @@ impl Reactor {
                 self.window_order.retain(|wid| wid.pid != pid);
                 self.apps.remove(&pid).unwrap();
             }
-            Event::ApplicationActivated(_) => (),
+            Event::ApplicationActivated(_) => {
+                return;
+            }
             Event::WindowCreated(wid, window) => {
                 // Don't manage windows on other spaces.
                 // TODO: It's possible for a window to be on multiple spaces
@@ -110,9 +113,11 @@ impl Reactor {
             }
             Event::WindowMoved(wid, pos) => {
                 self.windows.get_mut(&wid).unwrap().frame.origin = pos;
+                return;
             }
             Event::WindowResized(wid, size) => {
                 self.windows.get_mut(&wid).unwrap().frame.size = size;
+                return;
             }
             Event::ScreenParametersChanged(frame, spaces) => {
                 if self.space.is_none() {
@@ -127,7 +132,9 @@ impl Reactor {
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
             }
-            Event::Command(Command::Shuffle) => (),
+            Event::Command(Command::Shuffle) => {
+                self.window_order.shuffle(&mut rand::thread_rng());
+            }
             Event::SpaceChanged(spaces) => {
                 if let Some(screen) = self.main_screen.as_mut() {
                     screen.space = *spaces
@@ -154,13 +161,22 @@ impl Reactor {
         info!("Screen: {main_screen:?}");
         let layout = calculate_layout(main_screen.frame.clone(), &list);
         info!("Layout: {layout:?}");
-        for (&wid, target) in self.window_order.iter().zip(layout.into_iter()) {
-            // TODO: Check if existing frame matches
+
+        let mut by_app: HashMap<pid_t, Vec<_>> = HashMap::new();
+        let anim = Animation::new();
+        for (&wid, target_frame) in self.window_order.iter().zip(layout.into_iter()) {
+            let current_frame = self.windows[&wid].frame;
+            if target_frame == current_frame {
+                continue;
+            }
+            by_app.entry(wid.pid).or_default().push((wid, current_frame, target_frame));
+        }
+        for (pid, windows) in by_app {
             self.apps
-                .get_mut(&wid.pid)
+                .get_mut(&pid)
                 .unwrap()
                 .handle
-                .send(Request::SetWindowFrame(wid, target))
+                .send(Request::AnimateWindowFrames(windows, anim.clone()))
                 .unwrap();
         }
     }
