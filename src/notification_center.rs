@@ -93,7 +93,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         fn send_screen_parameters(&self) {
             let mut screen_cache = self.ivars().screen_cache.borrow_mut();
             let frames = screen_cache.update_screen_config();
-            self.send_event(Event::ScreenParametersChanged(frames));
+            let spaces = screen_cache.get_screen_spaces();
+            self.send_event(Event::ScreenParametersChanged(frames, spaces));
         }
 
         fn send_current_space(&self) {

@@ -21,7 +21,7 @@ pub enum Event {
     WindowDestroyed(pid_t, WindowIdx),
     WindowMoved(pid_t, WindowIdx, CGPoint),
     WindowResized(pid_t, WindowIdx, CGSize),
-    ScreenParametersChanged(Vec<CGRect>),
+    ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
 }
@@ -33,9 +33,10 @@ pub enum Command {
 }
 
 pub struct Reactor {
-    pub windows: Vec<(pid_t, WindowIdx)>,
-    pub apps: HashMap<pid_t, AppState>,
-    pub main_screen: Option<CGRect>,
+    windows: Vec<(pid_t, WindowIdx)>,
+    apps: HashMap<pid_t, AppState>,
+    main_screen: Option<Screen>,
+    space: Option<SpaceId>,
 }
 
 pub struct AppState {
@@ -52,6 +53,12 @@ pub struct Window {
     pub frame: CGRect,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct Screen {
+    frame: CGRect,
+    space: SpaceId,
+}
+
 impl Reactor {
     pub fn spawn() -> Sender<Event> {
         let (events_tx, events) = sync::mpsc::channel::<Event>();
@@ -60,6 +67,7 @@ impl Reactor {
                 windows: Vec::new(),
                 apps: HashMap::new(),
                 main_screen: None,
+                space: None,
             };
             for event in events {
                 handler.handle_event(event);
@@ -82,7 +90,12 @@ impl Reactor {
             Event::ApplicationActivated(_) => (),
             Event::WindowCreated(pid, window) => {
                 let app = self.apps.get_mut(&pid).unwrap();
-                self.windows.push((pid, app.windows.len() as WindowIdx));
+                // Don't manage windows on other spaces.
+                // TODO: It's possible for a window to be on multiple spaces
+                // or move spaces.
+                if self.main_screen.map(|s| s.space) == self.space {
+                    self.windows.push((pid, app.windows.len() as WindowIdx));
+                }
                 app.windows.push(window);
             }
             Event::WindowDestroyed(pid, idx) => {
@@ -95,20 +108,36 @@ impl Reactor {
             Event::WindowResized(pid, idx, size) => {
                 self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
             }
-            Event::ScreenParametersChanged(frame) => {
-                self.main_screen = frame.first().copied();
+            Event::ScreenParametersChanged(frame, spaces) => {
+                if self.space.is_none() {
+                    self.space = spaces.first().copied();
+                }
+                self.main_screen = frame
+                    .into_iter()
+                    .zip(spaces)
+                    .map(|(frame, space)| Screen { frame, space })
+                    .next();
             }
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
             }
             Event::Command(Command::Shuffle) => (),
-            Event::SpaceChanged(_space) => (),
+            Event::SpaceChanged(spaces) => {
+                if let Some(screen) = self.main_screen.as_mut() {
+                    screen.space = *spaces
+                        .first()
+                        .expect("Spaces should be non-empty if there is a main screen");
+                }
+            }
         }
         self.update_layout();
     }
 
     pub fn update_layout(&mut self) {
         let Some(main_screen) = self.main_screen else { return };
+        if Some(main_screen.space) != self.space {
+            return;
+        };
         let list: Vec<_> = self
             .windows
             .iter()
@@ -122,7 +151,7 @@ impl Reactor {
             .collect();
         debug!("Window list: {list:#?}");
         info!("Screen: {main_screen:?}");
-        let layout = calculate_layout(main_screen.clone(), &list);
+        let layout = calculate_layout(main_screen.frame.clone(), &list);
         info!("Layout: {layout:?}");
         for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
             // TODO: Check if existing frame matches
