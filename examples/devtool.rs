@@ -39,12 +39,12 @@ async fn main() {
     })
     .await;
 
-    println!("Current space: {:?}", screen::cur_space());
-    println!("Visible spaces: {:?}", screen::visible_spaces());
-    println!("All spaces: {:?}", screen::all_spaces());
-    println!("{:?}", screen::managed_display_spaces());
+    println!("Current space: {:?}", screen::diagnostic::cur_space());
+    println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
+    println!("All spaces: {:?}", screen::diagnostic::all_spaces());
+    println!("{:?}", screen::diagnostic::managed_display_spaces());
 
-    dbg!(screen::managed_displays());
+    dbg!(screen::diagnostic::managed_displays());
     let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
     let frames: Vec<_> = screens.iter().map(|screen| screen.visibleFrame()).collect();
     println!("NSScreen sizes: {frames:?}");

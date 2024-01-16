@@ -132,6 +132,8 @@ struct NSScreenInfo {
     cg_id: CGDirectDisplayID,
 }
 
+type CGDirectDisplayID = u32;
+
 pub struct Actual {
     mtm: MainThreadMarker,
 }
@@ -227,34 +229,38 @@ impl ToICrate<CGRect> for core_graphics_types::geometry::CGRect {
     }
 }
 
-pub fn cur_space() -> SpaceId {
-    SpaceId(unsafe { CGSGetActiveSpace(CGSMainConnectionID()) })
-}
-
+/// Utilities for querying the current system configuration. For diagnostic purposes only.
 #[allow(dead_code)]
-pub fn visible_spaces() -> CFArray<SpaceId> {
-    unsafe {
-        let arr = CGSCopySpaces(CGSMainConnectionID(), CGSSpaceMask::ALL_VISIBLE_SPACES);
-        CFArray::wrap_under_create_rule(arr)
+pub mod diagnostic {
+    use super::*;
+
+    pub fn cur_space() -> SpaceId {
+        SpaceId(unsafe { CGSGetActiveSpace(CGSMainConnectionID()) })
     }
-}
 
-#[allow(dead_code)]
-pub fn all_spaces() -> CFArray<SpaceId> {
-    unsafe {
-        let arr = CGSCopySpaces(CGSMainConnectionID(), CGSSpaceMask::ALL_SPACES);
-        CFArray::wrap_under_create_rule(arr)
+    pub fn visible_spaces() -> CFArray<SpaceId> {
+        unsafe {
+            let arr = CGSCopySpaces(CGSMainConnectionID(), CGSSpaceMask::ALL_VISIBLE_SPACES);
+            CFArray::wrap_under_create_rule(arr)
+        }
     }
-}
 
-type CGDirectDisplayID = u32;
+    pub fn all_spaces() -> CFArray<SpaceId> {
+        unsafe {
+            let arr = CGSCopySpaces(CGSMainConnectionID(), CGSSpaceMask::ALL_SPACES);
+            CFArray::wrap_under_create_rule(arr)
+        }
+    }
 
-pub fn managed_displays() -> CFArray {
-    unsafe { CFArray::wrap_under_create_rule(CGSCopyManagedDisplays(CGSMainConnectionID())) }
-}
+    pub fn managed_displays() -> CFArray {
+        unsafe { CFArray::wrap_under_create_rule(CGSCopyManagedDisplays(CGSMainConnectionID())) }
+    }
 
-pub fn managed_display_spaces() -> CFArray<SpaceId> {
-    unsafe { CFArray::wrap_under_create_rule(CGSCopyManagedDisplaySpaces(CGSMainConnectionID())) }
+    pub fn managed_display_spaces() -> CFArray<SpaceId> {
+        unsafe {
+            CFArray::wrap_under_create_rule(CGSCopyManagedDisplaySpaces(CGSMainConnectionID()))
+        }
+    }
 }
 
 // Based on https://github.com/asmagill/hs._asm.undocumented.spaces/blob/master/CGSSpace.h.
