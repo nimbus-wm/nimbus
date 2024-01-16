@@ -54,16 +54,16 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
                 unsafe { msg_send_id![super(this), init] }
             }
 
-            #[method(recvWorkspace:)]
-            fn recv_workspace(&self, notif: &NSNotification) {
-                trace!("{notif:#?}");
-                self.handle_workspace_event(notif);
-            }
-
-            #[method(recvScreenChanged:)]
-            fn recv_screen_changed(&self, notif: &NSNotification) {
+            #[method(recvScreenChangedEvent:)]
+            fn recv_screen_changed_event(&self, notif: &NSNotification) {
                 trace!("{notif:#?}");
                 self.handle_screen_changed_event(notif);
+            }
+
+            #[method(recvAppEvent:)]
+            fn recv_app_event(&self, notif: &NSNotification) {
+                trace!("{notif:#?}");
+                self.handle_app_event(notif);
             }
         }
     }
@@ -78,7 +78,30 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
             unsafe { msg_send_id![Self::alloc(), initWith: instance] }
         }
 
-        fn handle_workspace_event(&self, notif: &NSNotification) {
+        fn handle_screen_changed_event(&self, notif: &NSNotification) {
+            use AppKit::*;
+            let name = unsafe { &*notif.name() };
+            if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
+                self.send_current_space();
+            } else if unsafe { NSApplicationDidChangeScreenParametersNotification } == name {
+                self.send_screen_parameters();
+            } else {
+                panic!("Unexpected screen changed event: {notif:?}");
+            }
+        }
+
+        fn send_screen_parameters(&self) {
+            let mut screen_cache = self.ivars().screen_cache.borrow_mut();
+            let frames = screen_cache.update_screen_config();
+            self.send_event(Event::ScreenParametersChanged(frames));
+        }
+
+        fn send_current_space(&self) {
+            let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
+            self.send_event(Event::SpaceChanged(spaces));
+        }
+
+        fn handle_app_event(&self, notif: &NSNotification) {
             use AppKit::*;
             let Some(app) = self.running_application(notif) else {
                 return;
@@ -94,22 +117,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
             } else if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
                 self.send_current_space();
             } else {
-                unreachable!("Unexpected application event: {notif:?}");
+                panic!("Unexpected application event: {notif:?}");
             }
-        }
-
-        fn send_current_space(&self) {
-            let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
-            self.send_event(Event::SpaceChanged(spaces));
-        }
-
-        fn handle_screen_changed_event(&self, _notif: &NSNotification) {
-            self.send_screen_parameters();
-        }
-
-        fn send_screen_parameters(&self) {
-            let frames = self.ivars().screen_cache.borrow_mut().update_screen_config();
-            self.send_event(Event::ScreenParametersChanged(frames));
         }
 
         fn send_event(&self, event: Event) {
@@ -153,34 +162,34 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
     unsafe {
         use AppKit::*;
         register_unsafe(
-            sel!(recvWorkspace:),
-            NSWorkspaceDidLaunchApplicationNotification,
-            workspace_center,
-            workspace,
+            sel!(recvScreenChangedEvent:),
+            NSApplicationDidChangeScreenParametersNotification,
+            default_center,
+            shared_app,
         );
         register_unsafe(
-            sel!(recvWorkspace:),
-            NSWorkspaceDidActivateApplicationNotification,
-            workspace_center,
-            workspace,
-        );
-        register_unsafe(
-            sel!(recvWorkspace:),
-            NSWorkspaceDidTerminateApplicationNotification,
-            workspace_center,
-            workspace,
-        );
-        register_unsafe(
-            sel!(recvWorkspace:),
+            sel!(recvScreenChangedEvent:),
             NSWorkspaceActiveSpaceDidChangeNotification,
             workspace_center,
             workspace,
         );
         register_unsafe(
-            sel!(recvScreenChanged:),
-            NSApplicationDidChangeScreenParametersNotification,
-            default_center,
-            shared_app,
+            sel!(recvAppEvent:),
+            NSWorkspaceDidLaunchApplicationNotification,
+            workspace_center,
+            workspace,
+        );
+        register_unsafe(
+            sel!(recvAppEvent:),
+            NSWorkspaceDidActivateApplicationNotification,
+            workspace_center,
+            workspace,
+        );
+        register_unsafe(
+            sel!(recvAppEvent:),
+            NSWorkspaceDidTerminateApplicationNotification,
+            workspace_center,
+            workspace,
         );
     };
 
