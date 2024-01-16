@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use nimbus::{
     app, reactor,
-    space::{self, ScreenCache},
+    screen::{self, ScreenCache},
 };
 
 #[derive(StructOpt)]
@@ -39,12 +39,12 @@ async fn main() {
     })
     .await;
 
-    println!("Current space: {:?}", space::cur_space());
-    println!("Visible spaces: {:?}", space::visible_spaces());
-    println!("All spaces: {:?}", space::all_spaces());
-    println!("{:?}", space::managed_display_spaces());
+    println!("Current space: {:?}", screen::cur_space());
+    println!("Visible spaces: {:?}", screen::visible_spaces());
+    println!("All spaces: {:?}", screen::all_spaces());
+    println!("{:?}", screen::managed_display_spaces());
 
-    dbg!(space::managed_displays());
+    dbg!(screen::managed_displays());
     let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
     let frames: Vec<_> = screens.iter().map(|screen| screen.visibleFrame()).collect();
     println!("NSScreen sizes: {frames:?}");

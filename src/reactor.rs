@@ -6,7 +6,7 @@ use log::{debug, info};
 
 use crate::{
     app::{pid_t, AppInfo, AppThreadHandle, Request},
-    space::{cur_space, SpaceId},
+    screen::{cur_space, SpaceId},
 };
 
 pub type WindowIdx = u32;

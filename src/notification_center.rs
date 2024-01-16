@@ -17,7 +17,7 @@ use log::{trace, warn};
 use crate::{
     app::{self, AppInfo, NSRunningApplicationExt},
     reactor::Event,
-    space,
+    screen,
 };
 
 pub fn watch_for_notifications(events_tx: Sender<Event>) {
@@ -97,7 +97,7 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn send_current_space(&self) {
-            self.send_event(Event::SpaceChanged(space::cur_space()));
+            self.send_event(Event::SpaceChanged(screen::cur_space()));
         }
 
         fn handle_screen_changed_event(&self, _notif: &NSNotification) {
