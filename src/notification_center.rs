@@ -13,8 +13,8 @@ use icrate::{
 use log::{trace, warn};
 
 use crate::{
-    app::{self, AppInfo, NSRunningApplicationExt},
-    reactor::Event,
+    app::{self, NSRunningApplicationExt},
+    reactor::{AppInfo, Event},
     screen::ScreenCache,
 };
 

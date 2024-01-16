@@ -11,7 +11,6 @@ use std::{
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
-pub use accessibility_sys::pid_t;
 use accessibility_sys::{
     kAXErrorSuccess, kAXMainWindowChangedNotification, kAXStandardWindowSubrole,
     kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
@@ -33,10 +32,22 @@ use icrate::{
 use log::{debug, error, trace};
 
 use crate::{
-    reactor::{self, Event, Window, WindowIdx},
+    reactor::{self, AppInfo, Event, WindowInfo},
     run_loop::WakeupHandle,
     util::{ToCGType, ToICrate},
 };
+
+pub use accessibility_sys::pid_t;
+
+/// An identifier representing a window.
+///
+/// This identifier is only valid for the lifetime of the process that owns it.
+/// It is not stable across restarts of the window manager.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct WindowId {
+    pub pid: pid_t,
+    idx: i32,
+}
 
 pub trait NSRunningApplicationExt {
     fn pid(&self) -> pid_t;
@@ -56,23 +67,16 @@ impl NSRunningApplicationExt for NSRunningApplication {
     }
 }
 
-impl TryFrom<&AXUIElement> for reactor::Window {
+impl TryFrom<&AXUIElement> for reactor::WindowInfo {
     type Error = accessibility::Error;
     fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(reactor::Window {
+        Ok(reactor::WindowInfo {
             is_standard: element.role()? == kAXWindowRole
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
             frame: element.frame()?.to_icrate(),
         })
     }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct AppInfo {
-    pub bundle_id: Option<String>,
-    pub localized_name: Option<String>,
 }
 
 impl From<&NSRunningApplication> for AppInfo {
@@ -119,7 +123,7 @@ impl Debug for AppThreadHandle {
 
 #[derive(Debug, Clone)]
 pub enum Request {
-    SetWindowFrame(WindowIdx, CGRect),
+    SetWindowFrame(WindowId, CGRect),
 }
 
 pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
@@ -132,24 +136,94 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     thread::spawn(move || app_thread_main(pid, info, events_tx));
 }
 
+type State = Rc<RefCell<StateInner>>;
+
+struct StateInner {
+    windows: Vec<WindowState>,
+    events_tx: Sender<Event>,
+    requests_rx: Receiver<Request>,
+    pid: pid_t,
+    bundle_id: Option<String>,
+    last_window_idx: i32,
+}
+
+struct WindowState {
+    wid: WindowId,
+    elem: AXUIElement,
+}
+
+impl StateInner {
+    #[must_use]
+    fn register_window(
+        &mut self,
+        this: &State,
+        elem: AXUIElement,
+        observer: AXObserverRef,
+    ) -> Option<WindowId> {
+        if !register_notifs(&elem, this, observer) {
+            return None;
+        }
+        self.last_window_idx += 1;
+        let wid = WindowId {
+            pid: self.pid,
+            idx: self.last_window_idx,
+        };
+        self.windows.push(WindowState { elem, wid });
+        return Some(wid);
+
+        fn register_notifs(win: &AXUIElement, state: &State, observer: AXObserverRef) -> bool {
+            // Filter out elements that aren't regular windows.
+            match win.role() {
+                Ok(role) if role == kAXWindowRole => (),
+                _ => return false,
+            }
+            for notif in WINDOW_NOTIFICATIONS {
+                let err = unsafe {
+                    AXObserverAddNotification(
+                        observer,
+                        win.as_concrete_TypeRef(),
+                        CFString::from_static_string(notif).as_concrete_TypeRef(),
+                        state as *const State as *mut c_void,
+                    )
+                };
+                if err != kAXErrorSuccess {
+                    trace!(
+                        "Watching failed with error {} on window {win:#?}",
+                        accessibility_sys::error_string(err)
+                    );
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}
+
+const APP_NOTIFICATIONS: &[&str] = &[
+    kAXWindowCreatedNotification,
+    kAXMainWindowChangedNotification,
+];
+
+const WINDOW_NOTIFICATIONS: &[&str] = &[
+    kAXUIElementDestroyedNotification,
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXTitleChangedNotification,
+];
+
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let app = AXUIElement::application(pid);
 
-    type State = Rc<RefCell<StateInner>>;
-    struct StateInner {
-        window_elements: Vec<AXUIElement>,
-        events_tx: Sender<Event>,
-        requests_rx: Receiver<Request>,
-        pid: pid_t,
-        bundle_id: Option<String>,
-    }
     let (requests_tx, requests_rx) = channel();
     let state = Rc::new(RefCell::new(StateInner {
-        window_elements: vec![],
+        windows: vec![],
         events_tx,
         requests_rx,
         pid,
         bundle_id: info.bundle_id.clone(),
+        last_window_idx: 0,
     }));
     let mut state_ref = state.borrow_mut();
 
@@ -164,11 +238,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     }
 
     // Register for notifications on the application element.
-    const GLOBAL_NOTIFICATIONS: &[&str] = &[
-        kAXWindowCreatedNotification,
-        kAXMainWindowChangedNotification,
-    ];
-    for notif in GLOBAL_NOTIFICATIONS {
+    for notif in APP_NOTIFICATIONS {
         unsafe {
             AXObserverAddNotification(
                 observer,
@@ -186,20 +256,18 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     };
 
     // Process the list and register notifications on all windows.
-    let mut window_elements = Vec::with_capacity(initial_window_elements.len() as usize);
+    state_ref.windows.reserve(initial_window_elements.len() as usize);
     let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
     for elem in initial_window_elements.iter() {
         let elem = elem.clone();
-        let Ok(window) = Window::try_from(&elem) else {
+        let Ok(info) = WindowInfo::try_from(&elem) else {
             continue;
         };
-        if !register_window_notifs(&elem, &state, observer) {
+        let Some(wid) = state_ref.register_window(&state, elem, observer) else {
             continue;
-        }
-        window_elements.push(elem);
-        windows.push(window);
+        };
+        windows.push((wid, info));
     }
-    state_ref.window_elements = window_elements;
 
     // Set up our request handler.
     let st = state.clone();
@@ -216,42 +284,6 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     // Finally, invoke the run loop to handle events.
     drop(state_ref);
     CFRunLoop::run_current();
-
-    const WINDOW_NOTIFICATIONS: &[&str] = &[
-        kAXUIElementDestroyedNotification,
-        kAXWindowMovedNotification,
-        kAXWindowResizedNotification,
-        kAXWindowMiniaturizedNotification,
-        kAXWindowDeminiaturizedNotification,
-        kAXTitleChangedNotification,
-    ];
-
-    #[must_use]
-    fn register_window_notifs(win: &AXUIElement, state: &State, observer: AXObserverRef) -> bool {
-        // Filter out elements that aren't regular windows.
-        match win.role() {
-            Ok(role) if role == kAXWindowRole => (),
-            _ => return false,
-        }
-        for notif in WINDOW_NOTIFICATIONS {
-            let err = unsafe {
-                AXObserverAddNotification(
-                    observer,
-                    win.as_concrete_TypeRef(),
-                    CFString::from_static_string(notif).as_concrete_TypeRef(),
-                    state as *const State as *mut c_void,
-                )
-            };
-            if err != kAXErrorSuccess {
-                trace!(
-                    "Watching failed with error {} on window {win:#?}",
-                    accessibility_sys::error_string(err)
-                );
-                return false;
-            }
-        }
-        true
-    }
 
     unsafe extern "C" fn callback(
         observer: AXObserverRef,
@@ -272,56 +304,41 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         // TODO: Handle all of these.
         match &*notif {
             kAXWindowCreatedNotification => {
-                let Ok(window) = Window::try_from(&elem) else {
+                let Ok(window) = WindowInfo::try_from(&elem) else {
                     return;
                 };
-                if !register_window_notifs(&elem, state_ref, observer) {
+                let Some(wid) = state.register_window(state_ref, elem, observer) else {
                     return;
-                }
-                state.window_elements.push(elem);
-                state.events_tx.send(Event::WindowCreated(state.pid, window)).unwrap();
+                };
+                state.events_tx.send(Event::WindowCreated(wid, window)).unwrap();
             }
             kAXUIElementDestroyedNotification => {
-                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                let Some(idx) = state.windows.iter().position(|w| w.elem == elem) else {
                     return;
                 };
-                state.window_elements.remove(idx);
-                state
-                    .events_tx
-                    .send(Event::WindowDestroyed(state.pid, idx.try_into().unwrap()))
-                    .unwrap();
+                let wid = state.windows.remove(idx).wid;
+                state.events_tx.send(Event::WindowDestroyed(wid)).unwrap();
             }
             kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {
-                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                let Some(window) = state.windows.iter().find(|w| w.elem == elem) else {
                     return;
                 };
-                let Ok(pos) = state.window_elements[idx].position() else {
+                let Ok(pos) = window.elem.position() else {
                     return;
                 };
-                state
-                    .events_tx
-                    .send(Event::WindowMoved(
-                        state.pid,
-                        idx.try_into().unwrap(),
-                        pos.to_icrate(),
-                    ))
-                    .unwrap();
+                state.events_tx.send(Event::WindowMoved(window.wid, pos.to_icrate())).unwrap();
             }
             kAXWindowResizedNotification => {
-                let Some(idx) = state.window_elements.iter().position(|w| w == &elem) else {
+                let Some(window) = state.windows.iter().find(|w| w.elem == elem) else {
                     return;
                 };
-                let Ok(size) = state.window_elements[idx].size() else {
+                let Ok(size) = window.elem.size() else {
                     return;
                 };
                 state
                     .events_tx
-                    .send(Event::WindowResized(
-                        state.pid,
-                        idx.try_into().unwrap(),
-                        size.to_icrate(),
-                    ))
+                    .send(Event::WindowResized(window.wid, size.to_icrate()))
                     .unwrap();
             }
             kAXWindowMiniaturizedNotification => {}
@@ -358,16 +375,19 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         request: Request,
     ) -> Result<(), accessibility::Error> {
         match request {
-            Request::SetWindowFrame(idx, frame) => {
-                let idx: usize = idx.try_into().unwrap();
-                let window = &state.window_elements[idx];
+            Request::SetWindowFrame(wid, frame) => {
+                assert_eq!(wid.pid, state.pid);
+                let Some(window) = state.windows.iter().find(|w| w.wid == wid) else {
+                    return Err(accessibility::Error::NotFound);
+                };
+                let window = &window.elem;
                 trace("set_position", window, || {
                     window.set_position(frame.origin.to_cgtype())
                 })?;
                 trace("set_size", window, || {
                     window.set_size(frame.size.to_cgtype())
                 })?;
-                let new_frame = state.window_elements[idx].frame()?;
+                let new_frame = trace("frame", window, || window.frame())?;
                 debug!("Frame after move: {new_frame:?}");
             }
         }

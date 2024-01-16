@@ -101,11 +101,11 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
 }
 
-fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::Window>, accessibility::Error> {
+fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::WindowInfo>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows.into_iter().map(|win| reactor::Window::try_from(&*win)).collect()
+    windows.into_iter().map(|win| reactor::WindowInfo::try_from(&*win)).collect()
 }
 
 async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O {

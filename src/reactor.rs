@@ -4,26 +4,39 @@ use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use log::{debug, info};
 
 use crate::{
-    app::{pid_t, AppInfo, AppThreadHandle, Request},
+    app::{pid_t, AppThreadHandle, Request, WindowId},
     screen::SpaceId,
 };
-
-pub type WindowIdx = u32;
 
 pub use std::sync::mpsc::Sender;
 
 #[derive(Debug)]
 pub enum Event {
-    ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<Window>),
+    ApplicationLaunched(pid_t, AppInfo, AppThreadHandle, Vec<(WindowId, WindowInfo)>),
     ApplicationTerminated(pid_t),
     ApplicationActivated(pid_t),
-    WindowCreated(pid_t, Window),
-    WindowDestroyed(pid_t, WindowIdx),
-    WindowMoved(pid_t, WindowIdx, CGPoint),
-    WindowResized(pid_t, WindowIdx, CGSize),
+    WindowCreated(WindowId, WindowInfo),
+    WindowDestroyed(WindowId),
+    WindowMoved(WindowId, CGPoint),
+    WindowResized(WindowId, CGSize),
     ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct AppInfo {
+    pub bundle_id: Option<String>,
+    pub localized_name: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct WindowInfo {
+    pub is_standard: bool,
+    pub title: String,
+    pub frame: CGRect,
 }
 
 #[derive(Debug, Clone)]
@@ -33,8 +46,9 @@ pub enum Command {
 }
 
 pub struct Reactor {
-    windows: Vec<(pid_t, WindowIdx)>,
     apps: HashMap<pid_t, AppState>,
+    window_order: Vec<WindowId>,
+    windows: HashMap<WindowId, WindowInfo>,
     main_screen: Option<Screen>,
     space: Option<SpaceId>,
 }
@@ -42,15 +56,6 @@ pub struct Reactor {
 pub struct AppState {
     pub info: AppInfo,
     pub handle: AppThreadHandle,
-    pub windows: Vec<Window>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct Window {
-    pub is_standard: bool,
-    pub title: String,
-    pub frame: CGRect,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -64,8 +69,9 @@ impl Reactor {
         let (events_tx, events) = sync::mpsc::channel::<Event>();
         thread::spawn(move || {
             let mut handler = Reactor {
-                windows: Vec::new(),
                 apps: HashMap::new(),
+                window_order: Vec::new(),
+                windows: HashMap::new(),
                 main_screen: None,
                 space: None,
             };
@@ -80,33 +86,33 @@ impl Reactor {
         info!("Event {event:?}");
         match event {
             Event::ApplicationLaunched(pid, info, handle, windows) => {
-                self.windows.extend((0..windows.len()).map(|w| (pid, w as WindowIdx)));
-                self.apps.insert(pid, AppState { info, handle, windows });
+                self.apps.insert(pid, AppState { info, handle });
+                self.window_order.extend(windows.iter().map(|(wid, _)| wid));
+                self.windows.extend(windows.into_iter());
             }
             Event::ApplicationTerminated(pid) => {
-                self.windows.retain(|(w_pid, _)| *w_pid != pid);
+                self.window_order.retain(|wid| wid.pid != pid);
                 self.apps.remove(&pid).unwrap();
             }
             Event::ApplicationActivated(_) => (),
-            Event::WindowCreated(pid, window) => {
-                let app = self.apps.get_mut(&pid).unwrap();
+            Event::WindowCreated(wid, window) => {
                 // Don't manage windows on other spaces.
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
                 if self.main_screen.map(|s| s.space) == self.space {
-                    self.windows.push((pid, app.windows.len() as WindowIdx));
+                    self.window_order.push(wid);
                 }
-                app.windows.push(window);
+                self.windows.insert(wid, window);
             }
-            Event::WindowDestroyed(pid, idx) => {
-                self.windows.retain(|wid| *wid != (pid, idx));
-                self.apps.get_mut(&pid).unwrap().windows.remove(idx as usize);
+            Event::WindowDestroyed(wid) => {
+                self.window_order.retain(|&id| wid != id);
+                self.windows.remove(&wid).unwrap();
             }
-            Event::WindowMoved(pid, idx, pos) => {
-                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.origin = pos;
+            Event::WindowMoved(wid, pos) => {
+                self.windows.get_mut(&wid).unwrap().frame.origin = pos;
             }
-            Event::WindowResized(pid, idx, size) => {
-                self.apps.get_mut(&pid).unwrap().windows[idx as usize].frame.size = size;
+            Event::WindowResized(wid, size) => {
+                self.windows.get_mut(&wid).unwrap().frame.size = size;
             }
             Event::ScreenParametersChanged(frame, spaces) => {
                 if self.space.is_none() {
@@ -139,33 +145,28 @@ impl Reactor {
             return;
         };
         let list: Vec<_> = self
-            .windows
+            .window_order
             .iter()
-            .map(|(pid, widx)| {
-                (
-                    &self.apps[pid].info,
-                    &self.apps[pid].windows[*widx as usize],
-                )
-            })
+            .map(|wid| (&self.apps[&wid.pid].info, &self.windows[&wid]))
             .filter(|(_app, win)| win.is_standard)
             .collect();
         debug!("Window list: {list:#?}");
         info!("Screen: {main_screen:?}");
         let layout = calculate_layout(main_screen.frame.clone(), &list);
         info!("Layout: {layout:?}");
-        for ((pid, widx), target) in self.windows.iter().zip(layout.into_iter()) {
+        for (&wid, target) in self.window_order.iter().zip(layout.into_iter()) {
             // TODO: Check if existing frame matches
             self.apps
-                .get_mut(pid)
+                .get_mut(&wid.pid)
                 .unwrap()
                 .handle
-                .send(Request::SetWindowFrame(*widx, target))
+                .send(Request::SetWindowFrame(wid, target))
                 .unwrap();
         }
     }
 }
 
-pub fn calculate_layout(screen: CGRect, windows: &Vec<(&AppInfo, &Window)>) -> Vec<CGRect> {
+pub fn calculate_layout(screen: CGRect, windows: &Vec<(&AppInfo, &WindowInfo)>) -> Vec<CGRect> {
     let num_windows: u32 = windows.len().try_into().unwrap();
     let width = screen.size.width / f64::from(num_windows);
     // TODO: Convert between coordinate systems.

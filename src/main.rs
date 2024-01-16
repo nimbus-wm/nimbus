@@ -12,14 +12,14 @@ use reactor::{Command, Event, Sender};
 fn main() {
     env_logger::init();
     install_panic_hook();
-    let events = reactor::Reactor::spawn();
-    app::spawn_initial_app_threads(events.clone());
-    let _mgr = register_hotkeys(events.clone());
-    notification_center::watch_for_notifications(events)
+    let events_tx = reactor::Reactor::spawn();
+    app::spawn_initial_app_threads(events_tx.clone());
+    let _mgr = register_hotkeys(events_tx.clone());
+    notification_center::watch_for_notifications(events_tx)
 }
 
-fn register_hotkeys(events: Sender<Event>) -> HotkeyManager {
-    let mgr = HotkeyManager::new(events);
+fn register_hotkeys(events_tx: Sender<Event>) -> HotkeyManager {
+    let mgr = HotkeyManager::new(events_tx);
     mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
     mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
     mgr
