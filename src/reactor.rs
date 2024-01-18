@@ -5,7 +5,8 @@ use log::{debug, info};
 use rand::seq::SliceRandom;
 
 use crate::{
-    app::{pid_t, Animation, AppThreadHandle, Request, WindowId},
+    animation::Animation,
+    app::{pid_t, AppThreadHandle, WindowId},
     screen::SpaceId,
 };
 
@@ -85,6 +86,7 @@ impl Reactor {
 
     pub fn handle_event(&mut self, event: Event) {
         info!("Event {event:?}");
+        let mut new_wid = None;
         match event {
             Event::ApplicationLaunched(pid, info, handle, windows) => {
                 self.apps.insert(pid, AppState { info, handle });
@@ -106,6 +108,7 @@ impl Reactor {
                     self.window_order.push(wid);
                 }
                 self.windows.insert(wid, window);
+                new_wid = Some(wid);
             }
             Event::WindowDestroyed(wid) => {
                 self.window_order.retain(|&id| wid != id);
@@ -143,10 +146,10 @@ impl Reactor {
                 }
             }
         }
-        self.update_layout();
+        self.update_layout(new_wid);
     }
 
-    pub fn update_layout(&mut self) {
+    pub fn update_layout(&mut self, new_wid: Option<WindowId>) {
         let Some(main_screen) = self.main_screen else { return };
         if Some(main_screen.space) != self.space {
             return;
@@ -162,23 +165,17 @@ impl Reactor {
         let layout = calculate_layout(main_screen.frame.clone(), &list);
         info!("Layout: {layout:?}");
 
-        let mut by_app: HashMap<pid_t, Vec<_>> = HashMap::new();
-        let anim = Animation::new();
+        let mut anim = Animation::new();
         for (&wid, target_frame) in self.window_order.iter().zip(layout.into_iter()) {
             let current_frame = self.windows[&wid].frame;
             if target_frame == current_frame {
                 continue;
             }
-            by_app.entry(wid.pid).or_default().push((wid, current_frame, target_frame));
+            let handle = &self.apps.get(&wid.pid).unwrap().handle;
+            let is_new = Some(wid) == new_wid;
+            anim.add_window(handle, wid, current_frame, target_frame, is_new);
         }
-        for (pid, windows) in by_app {
-            self.apps
-                .get_mut(&pid)
-                .unwrap()
-                .handle
-                .send(Request::AnimateWindowFrames(windows, anim.clone()))
-                .unwrap();
-        }
+        anim.run();
     }
 }
 

@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
     sync::mpsc::{channel, Receiver, Sender},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
@@ -17,20 +17,17 @@ use accessibility_sys::{
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
     AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
-    AXUIElementRef,
+    AXObserverRemoveNotification, AXUIElementRef,
 };
 use core_foundation::{
     base::TCFType,
-    date::{CFAbsoluteTime, CFAbsoluteTimeGetCurrent, CFTimeInterval},
-    runloop::{
-        kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopTimer,
-    },
+    runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
     string::{CFString, CFStringRef},
 };
 use icrate::{
     objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
-    Foundation::{CGPoint, CGRect, CGSize, NSString},
+    Foundation::{CGPoint, CGRect, NSString},
 };
 use log::{debug, error, trace};
 
@@ -127,7 +124,13 @@ impl Debug for AppThreadHandle {
 #[derive(Debug, Clone)]
 pub enum Request {
     SetWindowFrame(WindowId, CGRect),
-    AnimateWindowFrames(Vec<(WindowId, CGRect, CGRect)>, Animation),
+    SetWindowPos(WindowId, CGPoint),
+
+    /// Temporarily suspends position and size update events for this window.
+    BeginWindowAnimation(WindowId),
+    /// Resumes position and size events for the window. One position and size
+    /// event are sent immediately upon receiving the request.
+    EndWindowAnimation(WindowId),
 }
 
 pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
@@ -149,6 +152,8 @@ struct StateInner {
     pid: pid_t,
     bundle_id: Option<String>,
     last_window_idx: i32,
+    observer: AXObserverRef,
+    this: *const State,
 }
 
 struct WindowState {
@@ -158,13 +163,8 @@ struct WindowState {
 
 impl StateInner {
     #[must_use]
-    fn register_window(
-        &mut self,
-        this: &State,
-        elem: AXUIElement,
-        observer: AXObserverRef,
-    ) -> Option<WindowId> {
-        if !register_notifs(&elem, this, observer) {
+    fn register_window(&mut self, elem: AXUIElement, observer: AXObserverRef) -> Option<WindowId> {
+        if !register_notifs(&elem, self.this, observer) {
             return None;
         }
         self.last_window_idx += 1;
@@ -175,7 +175,11 @@ impl StateInner {
         self.windows.push(WindowState { elem, wid });
         return Some(wid);
 
-        fn register_notifs(win: &AXUIElement, state: &State, observer: AXObserverRef) -> bool {
+        fn register_notifs(
+            win: &AXUIElement,
+            state: *const State,
+            observer: AXObserverRef,
+        ) -> bool {
             // Filter out elements that aren't regular windows.
             match win.role() {
                 Ok(role) if role == kAXWindowRole => (),
@@ -187,7 +191,7 @@ impl StateInner {
                         observer,
                         win.as_concrete_TypeRef(),
                         CFString::from_static_string(notif).as_concrete_TypeRef(),
-                        state as *const State as *mut c_void,
+                        state as *mut c_void,
                     )
                 };
                 if err != kAXErrorSuccess {
@@ -199,6 +203,47 @@ impl StateInner {
                 }
             }
             true
+        }
+    }
+
+    fn window_element(&self, wid: WindowId) -> Result<&AXUIElement, accessibility::Error> {
+        assert_eq!(wid.pid, self.pid);
+        let Some(window) = self.windows.iter().find(|w| w.wid == wid) else {
+            return Err(accessibility::Error::NotFound);
+        };
+        Ok(&window.elem)
+    }
+
+    fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
+        for notif in WINDOW_ANIMATION_NOTIFICATIONS {
+            let err = unsafe {
+                AXObserverRemoveNotification(
+                    self.observer,
+                    elem.as_concrete_TypeRef(),
+                    CFString::from_static_string(notif).as_concrete_TypeRef(),
+                )
+            };
+            if err != kAXErrorSuccess {
+                // There isn't much we can do here except log and keep going.
+                debug!("Removing notification {notif:?} on {elem:?} failed with error {err}");
+            }
+        }
+    }
+
+    fn restart_notifications_after_animation(&self, elem: &AXUIElement) {
+        for notif in WINDOW_ANIMATION_NOTIFICATIONS {
+            let err = unsafe {
+                AXObserverAddNotification(
+                    self.observer,
+                    elem.as_concrete_TypeRef(),
+                    CFString::from_static_string(notif).as_concrete_TypeRef(),
+                    self.this as *mut c_void,
+                )
+            };
+            if err != kAXErrorSuccess {
+                // There isn't much we can do here except log and keep going.
+                debug!("Adding notification {notif:?} on {elem:?} failed with error {err}");
+            }
         }
     }
 }
@@ -217,10 +262,29 @@ const WINDOW_NOTIFICATIONS: &[&str] = &[
     kAXTitleChangedNotification,
 ];
 
+const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] = &[
+    kAXUIElementDestroyedNotification,
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXTitleChangedNotification,
+];
+
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let app = AXUIElement::application(pid);
-
     let (requests_tx, requests_rx) = channel();
+
+    // SAFETY: Notifications can only be delivered inside this function, during
+    // the call to CFRunLoopRun(). We are careful not to move `state`..
+    // TODO: Wrap in a type that releases on drop.
+    let mut observer: AXObserverRef = ptr::null_mut();
+    unsafe {
+        AXObserverCreate(pid, callback, &mut observer);
+        let source = AXObserverGetRunLoopSource(observer);
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+    }
+
     let state = Rc::new(RefCell::new(StateInner {
         windows: vec![],
         events_tx,
@@ -228,18 +292,14 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         pid,
         bundle_id: info.bundle_id.clone(),
         last_window_idx: 0,
+        observer,
+        this: ptr::null(),
     }));
-    let mut state_ref = state.borrow_mut();
 
-    // SAFETY: Notifications can only be delivered inside this function, during
-    // the call to CFRunLoopRun(). We are careful not to move `state`..
-    // TODO: Wrap in a type that releases on drop. Pin the state.
-    let mut observer: AXObserverRef = ptr::null_mut();
-    unsafe {
-        AXObserverCreate(pid, callback, &mut observer);
-        let source = AXObserverGetRunLoopSource(observer);
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
-    }
+    // Pin the state, which will be live as long as the run loop runs.
+    let state = &state;
+    let mut state_ref = state.borrow_mut();
+    state_ref.this = state as *const State;
 
     // Register for notifications on the application element.
     for notif in APP_NOTIFICATIONS {
@@ -248,7 +308,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 observer,
                 app.as_concrete_TypeRef(),
                 CFString::from_static_string(notif).as_concrete_TypeRef(),
-                &state as *const State as *mut c_void,
+                state as *const State as *mut c_void,
             );
         }
     }
@@ -267,7 +327,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         let Ok(info) = WindowInfo::try_from(&elem) else {
             continue;
         };
-        let Some(wid) = state_ref.register_window(&state, elem, observer) else {
+        let Some(wid) = state_ref.register_window(elem, observer) else {
             continue;
         };
         windows.push((wid, info));
@@ -311,7 +371,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 let Ok(window) = WindowInfo::try_from(&elem) else {
                     return;
                 };
-                let Some(wid) = state.register_window(state_ref, elem, observer) else {
+                let Some(wid) = state.register_window(elem, observer) else {
                     return;
                 };
                 state.events_tx.send(Event::WindowCreated(wid, window)).unwrap();
@@ -379,56 +439,32 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         request: Request,
     ) -> Result<(), accessibility::Error> {
         match request {
+            Request::SetWindowPos(wid, pos) => {
+                let window = state.window_element(wid)?;
+                trace("set_position", window, || {
+                    window.set_position(pos.to_cgtype())
+                })?;
+            }
             Request::SetWindowFrame(wid, frame) => {
-                assert_eq!(wid.pid, state.pid);
-                let Some(window) = state.windows.iter().find(|w| w.wid == wid) else {
-                    return Err(accessibility::Error::NotFound);
-                };
-                let window = &window.elem;
+                let window = state.window_element(wid)?;
                 trace("set_position", window, || {
                     window.set_position(frame.origin.to_cgtype())
                 })?;
                 trace("set_size", window, || {
                     window.set_size(frame.size.to_cgtype())
                 })?;
-                let new_frame = trace("frame", window, || window.frame())?;
-                debug!("Frame after move: {new_frame:?}");
             }
-            Request::AnimateWindowFrames(windows, anim) => {
-                let windows = windows
-                    .into_iter()
-                    .map(|(wid, from, to)| {
-                        assert_eq!(wid.pid, state.pid);
-                        let Some(window) = state.windows.iter().find(|w| w.wid == wid) else {
-                            return Err(accessibility::Error::NotFound);
-                        };
-                        Ok((&window.elem, from.to_cgtype(), to.to_cgtype()))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut next_frames = Vec::with_capacity(windows.len());
-                //let timer = CFRunLoopTimer::new(anim.start, anim.interval, 0, 0, callout, context);
-                //CFRunLoop::get_current().add_timer(timer, mode)
-                for frame in 1..=anim.frames {
-                    let t: f64 = f64::from(frame) / f64::from(anim.frames);
-                    next_frames.clear();
-                    for (_, from, to) in &windows {
-                        next_frames.push(get_frame(*from, *to, t));
-                    }
-
-                    let deadline = anim.start + frame * anim.interval;
-                    let duration = deadline - Instant::now();
-                    if duration < Duration::ZERO {
-                        continue;
-                    }
-                    thread::sleep(duration);
-
-                    for ((window, from, to), rect) in windows.iter().zip(&next_frames) {
-                        trace("set_position", window, || window.set_position(rect.origin))?;
-                        if from.size.width != to.size.width || from.size.height != to.size.height {
-                            trace("set_size", window, || window.set_size(rect.size))?;
-                        }
-                    }
-                }
+            Request::BeginWindowAnimation(wid) => {
+                let window = state.window_element(wid)?;
+                state.stop_notifications_for_animation(window);
+            }
+            Request::EndWindowAnimation(wid) => {
+                let window = state.window_element(wid)?;
+                state.restart_notifications_after_animation(window);
+                let pos = trace("position", window, || window.position())?;
+                let size = trace("size", window, || window.size())?;
+                state.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
+                state.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
             }
         }
         Ok(())
@@ -450,48 +486,4 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         }
         out
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct Animation {
-    //start: CFAbsoluteTime,
-    //interval: CFTimeInterval,
-    start: Instant,
-    interval: Duration,
-    frames: u32,
-}
-
-impl Animation {
-    pub fn new() -> Self {
-        const FPS: f64 = 60.0;
-        const DURATION: f64 = 0.5;
-        let interval = Duration::from_secs_f64(1.0 / FPS);
-        // let now = unsafe { CFAbsoluteTimeGetCurrent() };
-        let now = Instant::now();
-        Animation {
-            start: now + interval, // not necessary, provide one extra frame to get things going
-            interval,
-            frames: (DURATION * FPS).round() as u32,
-        }
-    }
-}
-
-use core_graphics_types::geometry as cg;
-
-fn get_frame(a: cg::CGRect, b: cg::CGRect, t: f64) -> cg::CGRect {
-    let s = t;
-    cg::CGRect {
-        origin: cg::CGPoint {
-            x: blend(a.origin.x, b.origin.x, s),
-            y: blend(a.origin.y, b.origin.y, s),
-        },
-        size: cg::CGSize {
-            width: blend(a.size.width, b.size.width, s),
-            height: blend(a.size.height, b.size.height, s),
-        },
-    }
-}
-
-fn blend(a: f64, b: f64, s: f64) -> f64 {
-    (1.0 - s) * a + s * b
 }

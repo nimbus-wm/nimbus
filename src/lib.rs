@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod app;
 pub mod hotkey;
 pub mod notification_center;
