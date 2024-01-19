@@ -44,7 +44,7 @@ impl<'a> Animation<'a> {
         self.windows.push((handle, wid, start, finish, is_new))
     }
 
-    pub fn run(&mut self) {
+    pub fn run(self) {
         if self.windows.is_empty() {
             return;
         }
@@ -77,11 +77,12 @@ impl<'a> Animation<'a> {
             }
             thread::sleep(duration);
 
-            for (&(handle, wid, _, to, is_new), rect) in self.windows.iter().zip(&next_frames) {
+            for (&(handle, wid, _, to, _), rect) in self.windows.iter().zip(&next_frames) {
                 let mut rect = *rect;
-                // Actually don't animate size, too slow. New windows are
-                // resized immediately; resize the rest halfway through.
-                if !is_new && frame * 2 == self.frames {
+                // Actually don't animate size, too slow. Resize halfway through
+                // and then set the size again at the end, in case it got
+                // clipped during the animation.
+                if frame * 2 == self.frames || frame == self.frames {
                     rect.size = to.size;
                     handle.send(Request::SetWindowFrame(wid, rect)).unwrap();
                 } else {
@@ -92,6 +93,13 @@ impl<'a> Animation<'a> {
 
         for &(handle, wid, _, _, _) in &self.windows {
             handle.send(Request::EndWindowAnimation(wid)).unwrap();
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn skip_to_end(self) {
+        for &(handle, wid, _from, to, _) in &self.windows {
+            handle.send(dbg!(Request::SetWindowFrame(wid, to))).unwrap();
         }
     }
 }
