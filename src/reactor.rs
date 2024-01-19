@@ -86,7 +86,7 @@ impl Reactor {
 
     pub fn handle_event(&mut self, event: Event) {
         info!("Event {event:?}");
-        let mut new_wid = None;
+        let mut animation_focus_wid = None;
         match event {
             Event::ApplicationLaunched(pid, info, handle, windows) => {
                 self.apps.insert(pid, AppState { info, handle });
@@ -110,11 +110,12 @@ impl Reactor {
                     self.window_order.push(wid);
                 }
                 self.windows.insert(wid, window);
-                new_wid = Some(wid);
+                animation_focus_wid = Some(wid);
             }
             Event::WindowDestroyed(wid) => {
                 self.window_order.retain(|&id| wid != id);
                 self.windows.remove(&wid).unwrap();
+                animation_focus_wid = self.window_order.last().cloned();
             }
             Event::WindowMoved(wid, pos) => {
                 self.windows.get_mut(&wid).unwrap().frame.origin = pos;
@@ -148,7 +149,7 @@ impl Reactor {
                 }
             }
         }
-        self.update_layout(new_wid);
+        self.update_layout(animation_focus_wid);
     }
 
     pub fn update_layout(&mut self, new_wid: Option<WindowId>) {

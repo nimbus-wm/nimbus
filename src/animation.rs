@@ -39,9 +39,9 @@ impl<'a> Animation<'a> {
         wid: WindowId,
         start: CGRect,
         finish: CGRect,
-        is_new: bool,
+        is_focus: bool,
     ) {
-        self.windows.push((handle, wid, start, finish, is_new))
+        self.windows.push((handle, wid, start, finish, is_focus))
     }
 
     pub fn run(self) {
@@ -49,10 +49,10 @@ impl<'a> Animation<'a> {
             return;
         }
 
-        for &(handle, wid, from, to, is_new) in &self.windows {
+        for &(handle, wid, from, to, is_focus) in &self.windows {
             handle.send(Request::BeginWindowAnimation(wid)).unwrap();
             // Resize new windows immediately.
-            if is_new {
+            if is_focus {
                 let frame = CGRect {
                     origin: from.origin,
                     size: to.size,
