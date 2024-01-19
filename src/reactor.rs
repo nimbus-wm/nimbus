@@ -90,7 +90,9 @@ impl Reactor {
         match event {
             Event::ApplicationLaunched(pid, info, handle, windows) => {
                 self.apps.insert(pid, AppState { info, handle });
-                self.window_order.extend(windows.iter().map(|(wid, _)| wid));
+                self.window_order.extend(
+                    windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| wid),
+                );
                 self.windows.extend(windows.into_iter());
             }
             Event::ApplicationTerminated(pid) => {
@@ -104,7 +106,7 @@ impl Reactor {
                 // Don't manage windows on other spaces.
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
-                if self.main_screen.map(|s| s.space) == self.space {
+                if self.main_screen.map(|s| s.space) == self.space && window.is_standard {
                     self.window_order.push(wid);
                 }
                 self.windows.insert(wid, window);
@@ -158,7 +160,6 @@ impl Reactor {
             .window_order
             .iter()
             .map(|wid| (&self.apps[&wid.pid].info, &self.windows[&wid]))
-            .filter(|(_app, win)| win.is_standard)
             .collect();
         debug!("Window list: {list:#?}");
         info!("Screen: {main_screen:?}");
