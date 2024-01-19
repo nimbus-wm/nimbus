@@ -1,6 +1,6 @@
 use crate::reactor::{Command, Event, Sender};
 
-use livesplit_hotkey::Hook;
+use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 
 pub struct HotkeyManager {
@@ -10,7 +10,7 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new(events_tx: Sender<Event>) -> Self {
-        let hook = Hook::new_consuming().unwrap();
+        let hook = Hook::with_consume_preference(ConsumePreference::MustConsume).unwrap();
         HotkeyManager { hook, events_tx }
     }
 
