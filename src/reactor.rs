@@ -60,6 +60,7 @@ pub struct Reactor {
     space: Option<SpaceId>,
     frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
+    last_layout: Option<Vec<(WindowId, CGRect)>>,
 }
 
 #[derive(Debug)]
@@ -98,6 +99,7 @@ impl Reactor {
             space: None,
             frontmost_app: None,
             global_frontmost_app_pid: None,
+            last_layout: None,
         }
     }
 
@@ -229,12 +231,12 @@ impl Reactor {
         if Some(main_screen.space) != self.space {
             return;
         };
+
         let list: Vec<_> = self
             .window_order
             .iter()
             .map(|wid| (&self.apps[&wid.pid].info, &self.windows[&wid]))
             .collect();
-        info!("Window list: {list:?}");
         info!("Screen: {main_screen:?}");
         let main_window = self.main_window();
         info!("Main window: {main_window:?}");
@@ -243,10 +245,22 @@ impl Reactor {
             &list,
             Layout::Bsp(Orientation::Horizontal),
         );
+        info!("Window list: {list:?}");
         info!("Layout: {layout:?}");
 
+        assert_eq!(layout.len(), self.window_order.len());
+        let layout: Vec<_> = self.window_order.iter().copied().zip(layout).collect();
+        if let Some(last) = &self.last_layout {
+            if last.len() == layout.len()
+                && last.iter().zip(&layout).all(|(a, b)| a.0 == b.0 && a.1.same_as(b.1))
+            {
+                info!("Layout unchanged");
+                return;
+            }
+        }
+
         let mut anim = Animation::new();
-        for (&wid, target_frame) in self.window_order.iter().zip(layout.into_iter()) {
+        for &(wid, target_frame) in &layout {
             let current_frame = self.windows[&wid].frame;
             let target_frame = target_frame.round();
             if target_frame.same_as(current_frame) {
@@ -259,6 +273,8 @@ impl Reactor {
         }
         anim.run();
         //anim.skip_to_end();
+
+        self.last_layout = Some(layout);
     }
 }
 
