@@ -8,6 +8,7 @@ use crate::{
     animation::Animation,
     app::{pid_t, AppThreadHandle, WindowId},
     screen::SpaceId,
+    util::{Round, SameAs},
 };
 
 pub use std::sync::mpsc::Sender;
@@ -174,9 +175,11 @@ impl Reactor {
         let mut anim = Animation::new();
         for (&wid, target_frame) in self.window_order.iter().zip(layout.into_iter()) {
             let current_frame = self.windows[&wid].frame;
-            if target_frame == current_frame {
+            let target_frame = target_frame.round();
+            if target_frame.same_as(current_frame) {
                 continue;
             }
+            debug!("Change: {current_frame:?} to {target_frame:?}");
             let handle = &self.apps.get(&wid.pid).unwrap().handle;
             let is_new = Some(wid) == new_wid;
             anim.add_window(handle, wid, current_frame, target_frame, is_new);
