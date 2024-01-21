@@ -112,7 +112,9 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
             if unsafe { NSWorkspaceDidLaunchApplicationNotification } == name {
                 app::spawn_app_thread(pid, AppInfo::from(&*app), self.events_tx().clone());
             } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
-                self.send_event(Event::ApplicationActivated(pid));
+                self.send_event(Event::ApplicationGloballyActivated(pid));
+            } else if unsafe { NSWorkspaceDidDeactivateApplicationNotification } == name {
+                self.send_event(Event::ApplicationGloballyDeactivated(pid));
             } else if unsafe { NSWorkspaceDidTerminateApplicationNotification } == name {
                 self.send_event(Event::ApplicationTerminated(pid));
             } else if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
@@ -183,6 +185,12 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         register_unsafe(
             sel!(recvAppEvent:),
             NSWorkspaceDidActivateApplicationNotification,
+            workspace_center,
+            workspace,
+        );
+        register_unsafe(
+            sel!(recvAppEvent:),
+            NSWorkspaceDidDeactivateApplicationNotification,
             workspace_center,
             workspace,
         );

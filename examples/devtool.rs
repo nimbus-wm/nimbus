@@ -38,6 +38,7 @@ async fn main() {
         get_windows_with_ax(&opt, false, false)
     })
     .await;
+    get_apps(&opt);
 
     println!("Current space: {:?}", screen::diagnostic::cur_space());
     println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
@@ -106,6 +107,13 @@ fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::WindowInfo>, acc
         return Err(accessibility::Error::NotFound);
     };
     windows.into_iter().map(|win| reactor::WindowInfo::try_from(&*win)).collect()
+}
+
+fn get_apps(opt: &Opt) {
+    for (pid, _bundle_id) in app::running_apps(opt.bundle.clone()) {
+        let app = AXUIElement::application(pid);
+        println!("{app:#?}");
+    }
 }
 
 async fn time<O, F: Future<Output = O>>(desc: &str, f: impl FnOnce() -> F) -> O {

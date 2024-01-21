@@ -12,8 +12,9 @@ use std::{
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::{
-    kAXErrorSuccess, kAXMainWindowChangedNotification, kAXStandardWindowSubrole,
-    kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
+    kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification, kAXErrorSuccess,
+    kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
+    kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
     AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
@@ -32,7 +33,7 @@ use icrate::{
 use log::{debug, error, trace};
 
 use crate::{
-    reactor::{self, AppInfo, Event, WindowInfo},
+    reactor::{self, AppInfo, AppState, Event, WindowInfo},
     run_loop::WakeupHandle,
     util::{ToCGType, ToICrate},
 };
@@ -47,6 +48,13 @@ pub use accessibility_sys::pid_t;
 pub struct WindowId {
     pub pid: pid_t,
     idx: i32,
+}
+
+impl WindowId {
+    #[cfg(test)]
+    pub(crate) fn new(pid: pid_t, idx: i32) -> WindowId {
+        WindowId { pid, idx }
+    }
 }
 
 pub trait NSRunningApplicationExt {
@@ -108,6 +116,16 @@ pub struct AppThreadHandle {
 }
 
 impl AppThreadHandle {
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> (Self, Receiver<Request>) {
+        let (requests_tx, requests_rx) = channel();
+        let this = AppThreadHandle {
+            requests_tx,
+            wakeup: WakeupHandle::for_current_thread(0, || {}),
+        };
+        (this, requests_rx)
+    }
+
     pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
         self.requests_tx.send(req)?;
         self.wakeup.wake();
@@ -214,6 +232,13 @@ impl StateInner {
         Ok(&window.elem)
     }
 
+    fn id(&self, elem: AXUIElement) -> Result<WindowId, accessibility::Error> {
+        let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+            return Err(accessibility::Error::NotFound);
+        };
+        Ok(window.wid)
+    }
+
     fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
         for notif in WINDOW_ANIMATION_NOTIFICATIONS {
             let err = unsafe {
@@ -249,8 +274,10 @@ impl StateInner {
 }
 
 const APP_NOTIFICATIONS: &[&str] = &[
-    kAXWindowCreatedNotification,
+    kAXApplicationActivatedNotification,
+    kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification,
+    kAXWindowCreatedNotification,
 ];
 
 const WINDOW_NOTIFICATIONS: &[&str] = &[
@@ -339,7 +366,13 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     let handle = AppThreadHandle { requests_tx, wakeup };
 
     // Send the ApplicationLaunched event.
-    let Ok(()) = state_ref.events_tx.send(Event::ApplicationLaunched(pid, info, handle, windows))
+    let app_state = AppState {
+        handle,
+        info,
+        main_window: app.main_window().ok().and_then(|w| state_ref.id(w).ok()),
+        is_frontmost: app.frontmost().map(|b| b.into()).unwrap_or(false),
+    };
+    let Ok(()) = state_ref.events_tx.send(Event::ApplicationLaunched(pid, app_state, windows))
     else {
         debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
         return;
@@ -367,6 +400,26 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         #[forbid(non_snake_case)]
         // TODO: Handle all of these.
         match &*notif {
+            kAXApplicationActivatedNotification => {
+                // Unfortunately, if the user clicks on a new main window to
+                // activate this app, we get this notification before getting
+                // the main window changed notification. To distinguish from the
+                // case where the app was activated and the main window has
+                // *not* changed, we read the main window and send it along with
+                // the notification.
+                let main = elem.main_window().ok().and_then(|w| state.id(w).ok());
+                state.events_tx.send(Event::ApplicationActivated(state.pid, main)).unwrap();
+            }
+            kAXApplicationDeactivatedNotification => {
+                state.events_tx.send(Event::ApplicationDeactivated(state.pid)).unwrap();
+            }
+            kAXMainWindowChangedNotification => {
+                let main = state.id(elem).ok();
+                state
+                    .events_tx
+                    .send(Event::ApplicationMainWindowChanged(state.pid, main))
+                    .unwrap();
+            }
             kAXWindowCreatedNotification => {
                 let Ok(window) = WindowInfo::try_from(&elem) else {
                     return;
@@ -383,7 +436,6 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 let wid = state.windows.remove(idx).wid;
                 state.events_tx.send(Event::WindowDestroyed(wid)).unwrap();
             }
-            kAXMainWindowChangedNotification => {}
             kAXWindowMovedNotification => {
                 let Some(window) = state.windows.iter().find(|w| w.elem == elem) else {
                     return;
