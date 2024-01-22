@@ -204,5 +204,11 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
 
     handler.send_screen_parameters();
     handler.send_current_space();
+    if let Some(app) = unsafe { workspace.frontmostApplication() } {
+        handler
+            .events_tx()
+            .send(Event::ApplicationGloballyActivated(app.pid()))
+            .unwrap();
+    }
     CFRunLoop::run_current();
 }
