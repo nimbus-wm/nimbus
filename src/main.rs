@@ -23,6 +23,8 @@ fn register_hotkeys(events_tx: Sender<Event>) -> HotkeyManager {
     let mgr = HotkeyManager::new(events_tx);
     mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
     mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
+    mgr.register(Modifiers::ALT, KeyCode::KeyJ, Command::NextWindow);
+    mgr.register(Modifiers::ALT, KeyCode::KeyK, Command::PrevWindow);
     mgr
 }
 

@@ -6,7 +6,7 @@ use rand::seq::SliceRandom;
 
 use crate::{
     animation::Animation,
-    app::{pid_t, AppThreadHandle, WindowId},
+    app::{pid_t, AppThreadHandle, Request, WindowId},
     screen::SpaceId,
     util::{Round, SameAs},
 };
@@ -50,6 +50,8 @@ pub struct WindowInfo {
 pub enum Command {
     Hello,
     Shuffle,
+    NextWindow,
+    PrevWindow,
 }
 
 pub struct Reactor {
@@ -209,18 +211,41 @@ impl Reactor {
                     .map(|(frame, space)| Screen { frame, space })
                     .next();
             }
-            Event::Command(Command::Hello) => {
-                println!("Hello, world!");
-            }
-            Event::Command(Command::Shuffle) => {
-                self.window_order.shuffle(&mut rand::thread_rng());
-            }
             Event::SpaceChanged(spaces) => {
                 if let Some(screen) = self.main_screen.as_mut() {
                     screen.space = *spaces
                         .first()
                         .expect("Spaces should be non-empty if there is a main screen");
                 }
+            }
+            Event::Command(Command::Hello) => {
+                println!("Hello, world!");
+            }
+            Event::Command(Command::Shuffle) => {
+                self.window_order.shuffle(&mut rand::thread_rng());
+            }
+            Event::Command(Command::NextWindow) => {
+                let Some(cur) = self.main_window() else { return };
+                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
+                    return;
+                };
+                let Some(&new) = self.window_order.get(idx + 1) else {
+                    return;
+                };
+                self.apps.get_mut(&new.pid).unwrap().handle.send(Request::Raise(new)).unwrap();
+            }
+            Event::Command(Command::PrevWindow) => {
+                let Some(cur) = self.main_window() else { return };
+                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
+                    return;
+                };
+                if idx == 0 {
+                    return;
+                }
+                let Some(&new) = self.window_order.get(idx - 1) else {
+                    return;
+                };
+                self.apps.get_mut(&new.pid).unwrap().handle.send(Request::Raise(new)).unwrap();
             }
         }
         self.update_layout(animation_focus_wid);

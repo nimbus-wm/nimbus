@@ -10,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use accessibility::{AXUIElement, AXUIElementAttributes};
+use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification, kAXErrorSuccess,
     kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
@@ -149,6 +149,8 @@ pub enum Request {
     /// Resumes position and size events for the window. One position and size
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
+
+    Raise(WindowId),
 }
 
 pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
@@ -164,6 +166,7 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
 type State = Rc<RefCell<StateInner>>;
 
 struct StateInner {
+    app: AXUIElement,
     windows: Vec<WindowState>,
     events_tx: Sender<Event>,
     requests_rx: Receiver<Request>,
@@ -313,6 +316,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
     }
 
     let state = Rc::new(RefCell::new(StateInner {
+        app: app.clone(),
         windows: vec![],
         events_tx,
         requests_rx,
@@ -517,6 +521,26 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 let size = trace("size", window, || window.size())?;
                 state.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
                 state.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
+            }
+            Request::Raise(wid) => {
+                let window = state.window_element(wid)?;
+                trace("raise", window, || window.raise())?;
+                // FIXME: This request could be handled out of order with
+                // respect to later requests sent to other apps by the reactor.
+                // This breaks eventual consistency!
+                //
+                // In keeping with the current architecture, we should probably
+                // fix this by responding to the reactor with an event at this
+                // point. The reactor acts as a serialization point and can
+                // check for stale requests and then send a request to the main
+                // thread to actually call the API to activate the app.
+                //
+                // This is of course not the most efficient method, but we
+                // should avoid breaking architectual boundaries when it's
+                // unclear that performance is important.
+                trace("set_frontmost", &state.app, || {
+                    state.app.set_frontmost(true)
+                })?;
             }
         }
         Ok(())
