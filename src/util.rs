@@ -1,5 +1,29 @@
 use core_graphics_types::geometry as cg;
-use icrate::Foundation as ic;
+use icrate::{
+    objc2::{msg_send, rc::Id},
+    AppKit::NSRunningApplication,
+    Foundation::{self as ic, NSString},
+};
+
+use crate::app::pid_t;
+
+pub trait NSRunningApplicationExt {
+    fn pid(&self) -> pid_t;
+    fn bundle_id(&self) -> Option<Id<NSString>>;
+    fn localized_name(&self) -> Option<Id<NSString>>;
+}
+
+impl NSRunningApplicationExt for NSRunningApplication {
+    fn pid(&self) -> pid_t {
+        unsafe { msg_send![self, processIdentifier] }
+    }
+    fn bundle_id(&self) -> Option<Id<NSString>> {
+        unsafe { self.bundleIdentifier() }
+    }
+    fn localized_name(&self) -> Option<Id<NSString>> {
+        unsafe { self.localizedName() }
+    }
+}
 
 pub trait ToICrate<T> {
     fn to_icrate(&self) -> T;

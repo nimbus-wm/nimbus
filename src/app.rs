@@ -30,16 +30,15 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use icrate::{
-    objc2::{msg_send, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
-    Foundation::{CGPoint, CGRect, NSString},
+    Foundation::{CGPoint, CGRect},
 };
 use log::{debug, error, trace};
 
 use crate::{
     reactor::{self, AppInfo, AppState, Event, WindowInfo},
     run_loop::WakeupHandle,
-    util::{ToCGType, ToICrate},
+    util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
 
 pub use accessibility_sys::pid_t;
@@ -58,45 +57,6 @@ impl WindowId {
     #[cfg(test)]
     pub(crate) fn new(pid: pid_t, idx: i32) -> WindowId {
         WindowId { pid, idx }
-    }
-}
-
-pub trait NSRunningApplicationExt {
-    fn pid(&self) -> pid_t;
-    fn bundle_id(&self) -> Option<Id<NSString>>;
-    fn localized_name(&self) -> Option<Id<NSString>>;
-}
-
-impl NSRunningApplicationExt for NSRunningApplication {
-    fn pid(&self) -> pid_t {
-        unsafe { msg_send![self, processIdentifier] }
-    }
-    fn bundle_id(&self) -> Option<Id<NSString>> {
-        unsafe { self.bundleIdentifier() }
-    }
-    fn localized_name(&self) -> Option<Id<NSString>> {
-        unsafe { self.localizedName() }
-    }
-}
-
-impl TryFrom<&AXUIElement> for reactor::WindowInfo {
-    type Error = accessibility::Error;
-    fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(reactor::WindowInfo {
-            is_standard: element.role()? == kAXWindowRole
-                && element.subrole()? == kAXStandardWindowSubrole,
-            title: element.title()?.to_string(),
-            frame: element.frame()?.to_icrate(),
-        })
-    }
-}
-
-impl From<&NSRunningApplication> for AppInfo {
-    fn from(app: &NSRunningApplication) -> Self {
-        AppInfo {
-            bundle_id: app.bundle_id().as_deref().map(ToString::to_string),
-            localized_name: app.localized_name().as_deref().map(ToString::to_string),
-        }
     }
 }
 
@@ -218,6 +178,144 @@ struct WindowState {
 }
 
 impl StateInner {
+    fn handle_request(&self, request: Request) -> Result<(), accessibility::Error> {
+        match request {
+            Request::SetWindowPos(wid, pos) => {
+                let window = self.window_element(wid)?;
+                trace("set_position", window, || {
+                    window.set_position(pos.to_cgtype())
+                })?;
+            }
+            Request::SetWindowFrame(wid, frame) => {
+                let window = self.window_element(wid)?;
+                trace("set_position", window, || {
+                    window.set_position(frame.origin.to_cgtype())
+                })?;
+                trace("set_size", window, || {
+                    window.set_size(frame.size.to_cgtype())
+                })?;
+            }
+            Request::BeginWindowAnimation(wid) => {
+                let window = self.window_element(wid)?;
+                self.stop_notifications_for_animation(window);
+            }
+            Request::EndWindowAnimation(wid) => {
+                let window = self.window_element(wid)?;
+                self.restart_notifications_after_animation(window);
+                let pos = trace("position", window, || window.position())?;
+                let size = trace("size", window, || window.size())?;
+                self.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
+                self.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
+            }
+            Request::Raise(wid, token) => {
+                let window = self.window_element(wid)?;
+                trace("raise", window, || window.raise())?;
+                // This request could be handled out of order with respect to
+                // later requests sent to other apps by the reactor. To avoid
+                // raising ourselves after a later request was processed to
+                // raise a different app, we check the last-raised pid while
+                // holding a lock that ensures no other apps are executing a
+                // raise request at the same time.
+                //
+                // The only way this can fail to provide eventual consistency is
+                // if we time out on the set_frontmost request but the app
+                // processes it later. For now we set a fairly long timeout to
+                // mitigate this (but not too long, to avoid blocking all raise
+                // requests on an unresponsive app). It's unlikely that an app
+                // will be unresponsive for so long after responding to the
+                // raise request.
+                //
+                // In the future, we could do better by asking the app if it was
+                // activated (with an unlimited timeout while not holding the
+                // lock). If it was and another app was activated in the
+                // meantime, we would "undo" our activation in favor of the app
+                // that is supposed to be activated. This requires taking into
+                // account user-initiated activations.
+                token
+                    .with(self.pid, || {
+                        trace("set_timeout", &self.app, || {
+                            self.app.set_messaging_timeout(0.5)
+                        })?;
+                        trace("set_frontmost", &self.app, || self.app.set_frontmost(true))?;
+                        trace("set_timeout", &self.app, || {
+                            self.app.set_messaging_timeout(0.0)
+                        })?;
+                        Ok(())
+                    })
+                    .unwrap_or(Ok(()))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_notification(&mut self, elem: AXUIElement, notif: Cow<str>, observer: AXObserverRef) {
+        trace!("Got {notif:?} on {elem:?}");
+        #[allow(non_upper_case_globals)]
+        #[forbid(non_snake_case)]
+        // TODO: Handle all of these.
+        match &*notif {
+            kAXApplicationActivatedNotification => {
+                // Unfortunately, if the user clicks on a new main window to
+                // activate this app, we get this notification before getting
+                // the main window changed notification. To distinguish from the
+                // case where the app was activated and the main window has
+                // *not* changed, we read the main window and send it along with
+                // the notification.
+                let main = elem.main_window().ok().and_then(|w| self.id(w).ok());
+                self.events_tx.send(Event::ApplicationActivated(self.pid, main)).unwrap();
+            }
+            kAXApplicationDeactivatedNotification => {
+                self.events_tx.send(Event::ApplicationDeactivated(self.pid)).unwrap();
+            }
+            kAXMainWindowChangedNotification => {
+                let main = self.id(elem).ok();
+                self.events_tx
+                    .send(Event::ApplicationMainWindowChanged(self.pid, main))
+                    .unwrap();
+            }
+            kAXWindowCreatedNotification => {
+                let Ok(window) = WindowInfo::try_from(&elem) else {
+                    return;
+                };
+                let Some(wid) = self.register_window(elem, observer) else {
+                    return;
+                };
+                self.events_tx.send(Event::WindowCreated(wid, window)).unwrap();
+            }
+            kAXUIElementDestroyedNotification => {
+                let Some(idx) = self.windows.iter().position(|w| w.elem == elem) else {
+                    return;
+                };
+                let wid = self.windows.remove(idx).wid;
+                self.events_tx.send(Event::WindowDestroyed(wid)).unwrap();
+            }
+            kAXWindowMovedNotification => {
+                let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+                    return;
+                };
+                let Ok(pos) = window.elem.position() else {
+                    return;
+                };
+                self.events_tx.send(Event::WindowMoved(window.wid, pos.to_icrate())).unwrap();
+            }
+            kAXWindowResizedNotification => {
+                let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+                    return;
+                };
+                let Ok(size) = window.elem.size() else {
+                    return;
+                };
+                self.events_tx.send(Event::WindowResized(window.wid, size.to_icrate())).unwrap();
+            }
+            kAXWindowMiniaturizedNotification => {}
+            kAXWindowDeminiaturizedNotification => {}
+            kAXTitleChangedNotification => {}
+            _ => {
+                error!("Unhandled notification {notif:?} on {elem:#?}");
+            }
+        }
+    }
+
     #[must_use]
     fn register_window(&mut self, elem: AXUIElement, observer: AXObserverRef) -> Option<WindowId> {
         if !register_notifs(&elem, self.this, observer) {
@@ -431,78 +529,8 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         let notif = unsafe { CFString::wrap_under_get_rule(notif) };
         let notif = Cow::<str>::from(&notif);
         let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
-        trace!("Got {notif:?} on {elem:?}");
-
         let mut state = state_ref.borrow_mut();
-
-        #[allow(non_upper_case_globals)]
-        #[forbid(non_snake_case)]
-        // TODO: Handle all of these.
-        match &*notif {
-            kAXApplicationActivatedNotification => {
-                // Unfortunately, if the user clicks on a new main window to
-                // activate this app, we get this notification before getting
-                // the main window changed notification. To distinguish from the
-                // case where the app was activated and the main window has
-                // *not* changed, we read the main window and send it along with
-                // the notification.
-                let main = elem.main_window().ok().and_then(|w| state.id(w).ok());
-                state.events_tx.send(Event::ApplicationActivated(state.pid, main)).unwrap();
-            }
-            kAXApplicationDeactivatedNotification => {
-                state.events_tx.send(Event::ApplicationDeactivated(state.pid)).unwrap();
-            }
-            kAXMainWindowChangedNotification => {
-                let main = state.id(elem).ok();
-                state
-                    .events_tx
-                    .send(Event::ApplicationMainWindowChanged(state.pid, main))
-                    .unwrap();
-            }
-            kAXWindowCreatedNotification => {
-                let Ok(window) = WindowInfo::try_from(&elem) else {
-                    return;
-                };
-                let Some(wid) = state.register_window(elem, observer) else {
-                    return;
-                };
-                state.events_tx.send(Event::WindowCreated(wid, window)).unwrap();
-            }
-            kAXUIElementDestroyedNotification => {
-                let Some(idx) = state.windows.iter().position(|w| w.elem == elem) else {
-                    return;
-                };
-                let wid = state.windows.remove(idx).wid;
-                state.events_tx.send(Event::WindowDestroyed(wid)).unwrap();
-            }
-            kAXWindowMovedNotification => {
-                let Some(window) = state.windows.iter().find(|w| w.elem == elem) else {
-                    return;
-                };
-                let Ok(pos) = window.elem.position() else {
-                    return;
-                };
-                state.events_tx.send(Event::WindowMoved(window.wid, pos.to_icrate())).unwrap();
-            }
-            kAXWindowResizedNotification => {
-                let Some(window) = state.windows.iter().find(|w| w.elem == elem) else {
-                    return;
-                };
-                let Ok(size) = window.elem.size() else {
-                    return;
-                };
-                state
-                    .events_tx
-                    .send(Event::WindowResized(window.wid, size.to_icrate()))
-                    .unwrap();
-            }
-            kAXWindowMiniaturizedNotification => {}
-            kAXWindowDeminiaturizedNotification => {}
-            kAXTitleChangedNotification => {}
-            _ => {
-                error!("Unhandled notification {notif:?} on {elem:#?}");
-            }
-        }
+        state.handle_notification(elem, notif, observer);
     }
 
     fn handle_requests(state: &State) {
@@ -514,7 +542,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
             let StateInner { bundle_id, pid, .. } = &*state;
             let bundle_id = bundle_id.as_deref().unwrap_or("None");
             debug!("Got request for {bundle_id}({pid}): {request:?}");
-            match handle_request(&state, request.clone()) {
+            match state.handle_request(request.clone()) {
                 Ok(()) => (),
                 Err(err) => {
                     let StateInner { bundle_id, pid, .. } = &*state;
@@ -524,96 +552,41 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
             }
         }
     }
+}
 
-    fn handle_request(
-        state: &std::cell::Ref<'_, StateInner>,
-        request: Request,
-    ) -> Result<(), accessibility::Error> {
-        match request {
-            Request::SetWindowPos(wid, pos) => {
-                let window = state.window_element(wid)?;
-                trace("set_position", window, || {
-                    window.set_position(pos.to_cgtype())
-                })?;
-            }
-            Request::SetWindowFrame(wid, frame) => {
-                let window = state.window_element(wid)?;
-                trace("set_position", window, || {
-                    window.set_position(frame.origin.to_cgtype())
-                })?;
-                trace("set_size", window, || {
-                    window.set_size(frame.size.to_cgtype())
-                })?;
-            }
-            Request::BeginWindowAnimation(wid) => {
-                let window = state.window_element(wid)?;
-                state.stop_notifications_for_animation(window);
-            }
-            Request::EndWindowAnimation(wid) => {
-                let window = state.window_element(wid)?;
-                state.restart_notifications_after_animation(window);
-                let pos = trace("position", window, || window.position())?;
-                let size = trace("size", window, || window.size())?;
-                state.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
-                state.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
-            }
-            Request::Raise(wid, token) => {
-                let window = state.window_element(wid)?;
-                trace("raise", window, || window.raise())?;
-                // This request could be handled out of order with respect to
-                // later requests sent to other apps by the reactor. To avoid
-                // raising ourselves after a later request was processed to
-                // raise a different app, we check the last-raised pid while
-                // holding a lock that ensures no other apps are executing a
-                // raise request at the same time.
-                //
-                // The only way this can fail to provide eventual consistency is
-                // if we time out on the set_frontmost request but the app
-                // processes it later. For now we set a fairly long timeout to
-                // mitigate this (but not too long, to avoid blocking all raise
-                // requests on an unresponsive app). It's unlikely that an app
-                // will be unresponsive for so long after responding to the
-                // raise request.
-                //
-                // In the future, we could do better by asking the app if it was
-                // activated (with an unlimited timeout while not holding the
-                // lock). If it was and another app was activated in the
-                // meantime, we would "undo" our activation in favor of the app
-                // that is supposed to be activated. This requires taking into
-                // account user-initiated activations.
-                token
-                    .with(state.pid, || {
-                        trace("set_timeout", &state.app, || {
-                            state.app.set_messaging_timeout(0.5)
-                        })?;
-                        trace("set_frontmost", &state.app, || {
-                            state.app.set_frontmost(true)
-                        })?;
-                        trace("set_timeout", &state.app, || {
-                            state.app.set_messaging_timeout(0.0)
-                        })?;
-                        Ok(())
-                    })
-                    .unwrap_or(Ok(()))?;
-            }
-        }
-        Ok(())
+impl TryFrom<&AXUIElement> for WindowInfo {
+    type Error = accessibility::Error;
+    fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
+        Ok(reactor::WindowInfo {
+            is_standard: element.role()? == kAXWindowRole
+                && element.subrole()? == kAXStandardWindowSubrole,
+            title: element.title()?.to_string(),
+            frame: element.frame()?.to_icrate(),
+        })
     }
+}
 
-    fn trace<T>(
-        desc: &str,
-        elem: &AXUIElement,
-        f: impl FnOnce() -> Result<T, accessibility::Error>,
-    ) -> Result<T, accessibility::Error> {
-        let start = Instant::now();
-        let out = f();
-        let end = Instant::now();
-        trace!("{desc:12} took {:10?} on {elem:?}", end - start);
-        // trace!("for element {elem:#?}");
-        if let Err(err) = &out {
-            let app = elem.parent();
-            debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
+impl From<&NSRunningApplication> for AppInfo {
+    fn from(app: &NSRunningApplication) -> Self {
+        AppInfo {
+            bundle_id: app.bundle_id().as_deref().map(ToString::to_string),
+            localized_name: app.localized_name().as_deref().map(ToString::to_string),
         }
-        out
     }
+}
+
+fn trace<T>(
+    desc: &str,
+    elem: &AXUIElement,
+    f: impl FnOnce() -> Result<T, accessibility::Error>,
+) -> Result<T, accessibility::Error> {
+    let start = Instant::now();
+    let out = f();
+    let end = Instant::now();
+    trace!("{desc:12} took {:10?} on {elem:?}", end - start);
+    if let Err(err) = &out {
+        let app = elem.parent();
+        debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
+    }
+    out
 }
