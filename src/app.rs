@@ -5,7 +5,11 @@ use std::{
     fmt::Debug,
     ptr,
     rc::Rc,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
     thread,
     time::Instant,
 };
@@ -150,7 +154,38 @@ pub enum Request {
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
 
-    Raise(WindowId),
+    Raise(WindowId, RaiseToken),
+}
+
+/// Prevents stale activation requests from happening after more recent ones.
+///
+/// This token holds the pid of the latest activation request from the reactor,
+/// and provides synchronization between the app threads to ensure that multiple
+/// requests aren't handled simultaneously.
+///
+/// It is also designed not to block the main reactor thread.
+#[derive(Clone, Debug, Default)]
+pub struct RaiseToken(Arc<(Mutex<()>, AtomicI32)>);
+
+impl RaiseToken {
+    /// Checks if the most recent activation request was for `pid`. Calls the
+    /// supplied closure if it was.
+    pub fn with<R>(&self, pid: pid_t, f: impl FnOnce() -> R) -> Option<R> {
+        let _lock = self.0 .0.lock().unwrap();
+        if pid == self.0 .1.load(Ordering::SeqCst) {
+            Some(f())
+        } else {
+            None
+        }
+    }
+
+    pub fn set_pid(&self, pid: pid_t) {
+        // Even though we don't hold the lock, we know that the app servicing
+        // the Raise request will have to hold it while it activates itself.
+        // This means any apps that are first in the queue have either completed
+        // their activation request or timed out.
+        self.0 .1.store(pid, Ordering::SeqCst)
+    }
 }
 
 pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
@@ -522,25 +557,44 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
                 state.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
                 state.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
             }
-            Request::Raise(wid) => {
+            Request::Raise(wid, token) => {
                 let window = state.window_element(wid)?;
                 trace("raise", window, || window.raise())?;
-                // FIXME: This request could be handled out of order with
-                // respect to later requests sent to other apps by the reactor.
-                // This breaks eventual consistency!
+                // This request could be handled out of order with respect to
+                // later requests sent to other apps by the reactor. To avoid
+                // raising ourselves after a later request was processed to
+                // raise a different app, we check the last-raised pid while
+                // holding a lock that ensures no other apps are executing a
+                // raise request at the same time.
                 //
-                // In keeping with the current architecture, we should probably
-                // fix this by responding to the reactor with an event at this
-                // point. The reactor acts as a serialization point and can
-                // check for stale requests and then send a request to the main
-                // thread to actually call the API to activate the app.
+                // The only way this can fail to provide eventual consistency is
+                // if we time out on the set_frontmost request but the app
+                // processes it later. For now we set a fairly long timeout to
+                // mitigate this (but not too long, to avoid blocking all raise
+                // requests on an unresponsive app). It's unlikely that an app
+                // will be unresponsive for so long after responding to the
+                // raise request.
                 //
-                // This is of course not the most efficient method, but we
-                // should avoid breaking architectual boundaries when it's
-                // unclear that performance is important.
-                trace("set_frontmost", &state.app, || {
-                    state.app.set_frontmost(true)
-                })?;
+                // In the future, we could do better by asking the app if it was
+                // activated (with an unlimited timeout while not holding the
+                // lock). If it was and another app was activated in the
+                // meantime, we would "undo" our activation in favor of the app
+                // that is supposed to be activated. This requires taking into
+                // account user-initiated activations.
+                token
+                    .with(state.pid, || {
+                        trace("set_timeout", &state.app, || {
+                            state.app.set_messaging_timeout(0.5)
+                        })?;
+                        trace("set_frontmost", &state.app, || {
+                            state.app.set_frontmost(true)
+                        })?;
+                        trace("set_timeout", &state.app, || {
+                            state.app.set_messaging_timeout(0.0)
+                        })?;
+                        Ok(())
+                    })
+                    .unwrap_or(Ok(()))?;
             }
         }
         Ok(())

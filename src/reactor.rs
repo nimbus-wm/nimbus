@@ -6,7 +6,7 @@ use rand::seq::SliceRandom;
 
 use crate::{
     animation::Animation,
-    app::{pid_t, AppThreadHandle, Request, WindowId},
+    app::{pid_t, AppThreadHandle, RaiseToken, Request, WindowId},
     screen::SpaceId,
     util::{Round, SameAs},
 };
@@ -38,8 +38,8 @@ pub struct AppInfo {
     pub localized_name: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
@@ -63,6 +63,7 @@ pub struct Reactor {
     frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
     last_layout: Option<Vec<(WindowId, CGRect)>>,
+    raise_token: RaiseToken,
 }
 
 #[derive(Debug)]
@@ -102,6 +103,7 @@ impl Reactor {
             frontmost_app: None,
             global_frontmost_app_pid: None,
             last_layout: None,
+            raise_token: RaiseToken::default(),
         }
     }
 
@@ -232,7 +234,7 @@ impl Reactor {
                 let Some(&new) = self.window_order.get(idx + 1) else {
                     return;
                 };
-                self.apps.get_mut(&new.pid).unwrap().handle.send(Request::Raise(new)).unwrap();
+                self.raise_window(new);
             }
             Event::Command(Command::PrevWindow) => {
                 let Some(cur) = self.main_window() else { return };
@@ -245,10 +247,20 @@ impl Reactor {
                 let Some(&new) = self.window_order.get(idx - 1) else {
                     return;
                 };
-                self.apps.get_mut(&new.pid).unwrap().handle.send(Request::Raise(new)).unwrap();
+                self.raise_window(new);
             }
         }
         self.update_layout(animation_focus_wid);
+    }
+
+    fn raise_window(&mut self, wid: WindowId) {
+        self.raise_token.set_pid(wid.pid);
+        self.apps
+            .get_mut(&wid.pid)
+            .unwrap()
+            .handle
+            .send(Request::Raise(wid, self.raise_token.clone()))
+            .unwrap();
     }
 
     pub fn update_layout(&mut self, new_wid: Option<WindowId>) {
