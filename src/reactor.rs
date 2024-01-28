@@ -1,8 +1,9 @@
 use std::{collections::HashMap, iter, sync, thread};
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
-use log::{debug, info};
 use rand::seq::SliceRandom;
+use tracing::Span;
+use tracing::{debug, info};
 
 use crate::{
     animation::Animation,
@@ -82,11 +83,12 @@ struct Screen {
 }
 
 impl Reactor {
-    pub fn spawn() -> Sender<Event> {
-        let (events_tx, events) = sync::mpsc::channel::<Event>();
+    pub fn spawn() -> Sender<(Span, Event)> {
+        let (events_tx, events) = sync::mpsc::channel::<(Span, Event)>();
         thread::spawn(move || {
             let mut this = Reactor::new();
-            for event in events {
+            for (span, event) in events {
+                let _guard = span.enter();
                 this.handle_event(event);
             }
         });

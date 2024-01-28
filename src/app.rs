@@ -33,7 +33,8 @@ use icrate::{
     AppKit::{NSRunningApplication, NSWorkspace},
     Foundation::{CGPoint, CGRect},
 };
-use log::{debug, error, trace};
+use tracing::{debug, error, instrument, trace};
+use tracing::{info_span, Span};
 
 use crate::{
     reactor::{self, AppInfo, AppState, Event, WindowInfo},
@@ -75,13 +76,13 @@ pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppI
 }
 
 pub struct AppThreadHandle {
-    requests_tx: Sender<Request>,
+    requests_tx: Sender<(Span, Request)>,
     wakeup: WakeupHandle,
 }
 
 impl AppThreadHandle {
     #[cfg(test)]
-    pub(crate) fn new_for_test() -> (Self, Receiver<Request>) {
+    pub(crate) fn new_for_test() -> (Self, Receiver<(Span, Request)>) {
         let (requests_tx, requests_rx) = channel();
         let this = AppThreadHandle {
             requests_tx,
@@ -90,8 +91,8 @@ impl AppThreadHandle {
         (this, requests_rx)
     }
 
-    pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<Request>> {
-        self.requests_tx.send(req)?;
+    pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<(Span, Request)>> {
+        self.requests_tx.send((Span::current(), req))?;
         self.wakeup.wake();
         Ok(())
     }
@@ -148,13 +149,13 @@ impl RaiseToken {
     }
 }
 
-pub fn spawn_initial_app_threads(events_tx: Sender<Event>) {
+pub fn spawn_initial_app_threads(events_tx: Sender<(Span, Event)>) {
     for (pid, info) in running_apps(None) {
         spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 
-pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
+pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
     thread::spawn(move || app_thread_main(pid, info, events_tx));
 }
 
@@ -163,8 +164,8 @@ type State = Rc<RefCell<StateInner>>;
 struct StateInner {
     app: AXUIElement,
     windows: Vec<WindowState>,
-    events_tx: Sender<Event>,
-    requests_rx: Receiver<Request>,
+    events_tx: Sender<(Span, Event)>,
+    requests_rx: Receiver<(Span, Request)>,
     pid: pid_t,
     bundle_id: Option<String>,
     last_window_idx: i32,
@@ -178,6 +179,7 @@ struct WindowState {
 }
 
 impl StateInner {
+    #[instrument(skip_all, fields(app = ?self.app, ?request))]
     fn handle_request(&self, request: Request) -> Result<(), accessibility::Error> {
         match request {
             Request::SetWindowPos(wid, pos) => {
@@ -204,8 +206,8 @@ impl StateInner {
                 self.restart_notifications_after_animation(window);
                 let pos = trace("position", window, || window.position())?;
                 let size = trace("size", window, || window.size())?;
-                self.events_tx.send(Event::WindowMoved(wid, pos.to_icrate())).unwrap();
-                self.events_tx.send(Event::WindowResized(wid, size.to_icrate())).unwrap();
+                self.send_event(Event::WindowMoved(wid, pos.to_icrate()));
+                self.send_event(Event::WindowResized(wid, size.to_icrate()));
             }
             Request::Raise(wid, token) => {
                 let window = self.window_element(wid)?;
@@ -248,6 +250,7 @@ impl StateInner {
         Ok(())
     }
 
+    #[instrument(skip_all, fields(app = ?self.app, ?notif))]
     fn handle_notification(&mut self, elem: AXUIElement, notif: Cow<str>, observer: AXObserverRef) {
         trace!("Got {notif:?} on {elem:?}");
         #[allow(non_upper_case_globals)]
@@ -262,16 +265,14 @@ impl StateInner {
                 // *not* changed, we read the main window and send it along with
                 // the notification.
                 let main = elem.main_window().ok().and_then(|w| self.id(w).ok());
-                self.events_tx.send(Event::ApplicationActivated(self.pid, main)).unwrap();
+                self.send_event(Event::ApplicationActivated(self.pid, main));
             }
             kAXApplicationDeactivatedNotification => {
-                self.events_tx.send(Event::ApplicationDeactivated(self.pid)).unwrap();
+                self.send_event(Event::ApplicationDeactivated(self.pid));
             }
             kAXMainWindowChangedNotification => {
                 let main = self.id(elem).ok();
-                self.events_tx
-                    .send(Event::ApplicationMainWindowChanged(self.pid, main))
-                    .unwrap();
+                self.send_event(Event::ApplicationMainWindowChanged(self.pid, main));
             }
             kAXWindowCreatedNotification => {
                 let Ok(window) = WindowInfo::try_from(&elem) else {
@@ -280,14 +281,14 @@ impl StateInner {
                 let Some(wid) = self.register_window(elem, observer) else {
                     return;
                 };
-                self.events_tx.send(Event::WindowCreated(wid, window)).unwrap();
+                self.send_event(Event::WindowCreated(wid, window));
             }
             kAXUIElementDestroyedNotification => {
                 let Some(idx) = self.windows.iter().position(|w| w.elem == elem) else {
                     return;
                 };
                 let wid = self.windows.remove(idx).wid;
-                self.events_tx.send(Event::WindowDestroyed(wid)).unwrap();
+                self.send_event(Event::WindowDestroyed(wid));
             }
             kAXWindowMovedNotification => {
                 let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
@@ -296,7 +297,7 @@ impl StateInner {
                 let Ok(pos) = window.elem.position() else {
                     return;
                 };
-                self.events_tx.send(Event::WindowMoved(window.wid, pos.to_icrate())).unwrap();
+                self.send_event(Event::WindowMoved(window.wid, pos.to_icrate()));
             }
             kAXWindowResizedNotification => {
                 let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
@@ -305,7 +306,7 @@ impl StateInner {
                 let Ok(size) = window.elem.size() else {
                     return;
                 };
-                self.events_tx.send(Event::WindowResized(window.wid, size.to_icrate())).unwrap();
+                self.send_event(Event::WindowResized(window.wid, size.to_icrate()));
             }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}
@@ -358,6 +359,10 @@ impl StateInner {
             }
             true
         }
+    }
+
+    fn send_event(&self, event: Event) {
+        self.events_tx.send((Span::current(), event)).unwrap();
     }
 
     fn window_element(&self, wid: WindowId) -> Result<&AXUIElement, accessibility::Error> {
@@ -434,7 +439,10 @@ const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] = &[
     kAXTitleChangedNotification,
 ];
 
-fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
+fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
+    let init_span = info_span!("init", app = ?info);
+    let init_span_guard = init_span.enter();
+
     let app = AXUIElement::application(pid);
     let (requests_tx, requests_rx) = channel();
 
@@ -509,14 +517,18 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         main_window: app.main_window().ok().and_then(|w| state_ref.id(w).ok()),
         is_frontmost: app.frontmost().map(|b| b.into()).unwrap_or(false),
     };
-    let Ok(()) = state_ref.events_tx.send(Event::ApplicationLaunched(pid, app_state, windows))
-    else {
+    let Ok(()) = state_ref.events_tx.send((
+        init_span.clone(),
+        Event::ApplicationLaunched(pid, app_state, windows),
+    )) else {
         debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
         return;
     };
 
     // Finally, invoke the run loop to handle events.
     drop(state_ref);
+    drop(init_span_guard);
+    drop(init_span);
     CFRunLoop::run_current();
 
     unsafe extern "C" fn callback(
@@ -538,9 +550,10 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<Event>) {
         // sure all pending events are handled eventually. For now just handle
         // them all.
         let state = state.borrow();
-        while let Ok(request) = state.requests_rx.try_recv() {
-            let StateInner { bundle_id, pid, .. } = &*state;
-            let bundle_id = bundle_id.as_deref().unwrap_or("None");
+        let StateInner { bundle_id, pid, .. } = &*state;
+        let bundle_id = bundle_id.as_deref().unwrap_or("None");
+        while let Ok((span, request)) = state.requests_rx.try_recv() {
+            let _guard = span.enter();
             debug!("Got request for {bundle_id}({pid}): {request:?}");
             match state.handle_request(request.clone()) {
                 Ok(()) => (),

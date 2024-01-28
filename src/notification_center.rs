@@ -10,7 +10,8 @@ use icrate::{
     AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
-use log::{trace, warn};
+use tracing::{info_span, Span};
+use tracing::{trace, warn};
 
 use crate::{
     app::{self},
@@ -19,10 +20,10 @@ use crate::{
     util::NSRunningApplicationExt,
 };
 
-pub fn watch_for_notifications(events_tx: Sender<Event>) {
+pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
     #[repr(C)]
     struct Instance {
-        events_tx: &'static mut Sender<Event>,
+        events_tx: &'static mut Sender<(Span, Event)>,
         screen_cache: RefCell<ScreenCache>,
     }
 
@@ -70,7 +71,7 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
     }
 
     impl NotificationHandler {
-        fn new(events_tx: Sender<Event>) -> Id<Self> {
+        fn new(events_tx: Sender<(Span, Event)>) -> Id<Self> {
             let events_tx = Box::leak(Box::new(events_tx));
             let instance = Instance {
                 events_tx,
@@ -82,6 +83,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         fn handle_screen_changed_event(&self, notif: &NSNotification) {
             use AppKit::*;
             let name = unsafe { &*notif.name() };
+            let span = info_span!("notification_center::handle_screen_changed_event", ?name);
+            let _s = span.enter();
             if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
                 self.send_current_space();
             } else if unsafe { NSApplicationDidChangeScreenParametersNotification } == name {
@@ -110,6 +113,8 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
             };
             let pid = app.pid();
             let name = unsafe { &*notif.name() };
+            let span = info_span!("notification_center::handle_app_event", ?name);
+            let _guard = span.enter();
             if unsafe { NSWorkspaceDidLaunchApplicationNotification } == name {
                 app::spawn_app_thread(pid, AppInfo::from(&*app), self.events_tx().clone());
             } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
@@ -126,12 +131,12 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
         }
 
         fn send_event(&self, event: Event) {
-            if let Err(err) = self.events_tx().send(event) {
+            if let Err(err) = self.events_tx().send((Span::current().clone(), event)) {
                 warn!("Failed to send event: {err:?}");
             }
         }
 
-        fn events_tx(&self) -> &Sender<Event> {
+        fn events_tx(&self) -> &Sender<(Span, Event)> {
             self.ivars().events_tx
         }
 
@@ -206,10 +211,7 @@ pub fn watch_for_notifications(events_tx: Sender<Event>) {
     handler.send_screen_parameters();
     handler.send_current_space();
     if let Some(app) = unsafe { workspace.frontmostApplication() } {
-        handler
-            .events_tx()
-            .send(Event::ApplicationGloballyActivated(app.pid()))
-            .unwrap();
+        handler.send_event(Event::ApplicationGloballyActivated(app.pid()));
     }
     CFRunLoop::run_current();
 }

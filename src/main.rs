@@ -9,9 +9,23 @@ mod util;
 
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use reactor::{Command, Event, Sender};
+use tracing::Span;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_tree::time::UtcDateTime;
 
 fn main() {
-    env_logger::Builder::from_default_env().format_timestamp_millis().init();
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(
+            tracing_tree::HierarchicalLayer::default()
+                .with_indent_amount(2)
+                .with_indent_lines(true)
+                .with_deferred_spans(true)
+                .with_span_retrace(true)
+                .with_targets(true)
+                .with_timer(UtcDateTime::default()),
+        )
+        .init();
     install_panic_hook();
     let events_tx = reactor::Reactor::spawn();
     app::spawn_initial_app_threads(events_tx.clone());
@@ -19,7 +33,7 @@ fn main() {
     notification_center::watch_for_notifications(events_tx)
 }
 
-fn register_hotkeys(events_tx: Sender<Event>) -> HotkeyManager {
+fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     let mgr = HotkeyManager::new(events_tx);
     mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
     mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);

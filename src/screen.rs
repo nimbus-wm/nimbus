@@ -13,7 +13,7 @@ use icrate::{
     AppKit::NSScreen,
     Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber},
 };
-use log::{debug, warn};
+use tracing::{debug, warn};
 
 use crate::util::ToICrate;
 

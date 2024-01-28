@@ -21,11 +21,12 @@ bitflags = "2.4.1"
 core-foundation = "0.9.4"
 core-graphics = "0.23.1"
 core-graphics-types = "0.1.3"
-env_logger = "0.10.1"
 icrate = { version = "0.1.0", features = ["Foundation_NSString", "AppKit_NSRunningApplication", "Foundation_NSArray", "AppKit_NSWorkspace", "AppKit", "Foundation_NSNotificationCenter", "Foundation_NSNotification", "Foundation_NSThread", "AppKit_NSScreen", "Foundation_NSNumber"] }
 livesplit-hotkey = "0.7.0"
-log = "0.4.20"
 rand = "0.8.5"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-tree = { version = "0.3.0", features = ["time"] }
 
 [dev-dependencies]
 structopt = "0.3.26"
