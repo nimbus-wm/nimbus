@@ -3,6 +3,8 @@ use std::{
     cell::RefCell,
     ffi::c_void,
     fmt::Debug,
+    marker::PhantomPinned,
+    pin::Pin,
     ptr,
     rc::Rc,
     sync::{
@@ -159,9 +161,7 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Even
     thread::spawn(move || app_thread_main(pid, info, events_tx));
 }
 
-type State = Rc<RefCell<StateInner>>;
-
-struct StateInner {
+struct State {
     app: AXUIElement,
     windows: Vec<WindowState>,
     events_tx: Sender<(Span, Event)>,
@@ -170,15 +170,17 @@ struct StateInner {
     bundle_id: Option<String>,
     last_window_idx: i32,
     observer: AXObserverRef,
-    this: *const State,
+    this: StatePtr,
+    _pinned: PhantomPinned,
 }
+type StatePtr = *const RefCell<State>;
 
 struct WindowState {
     wid: WindowId,
     elem: AXUIElement,
 }
 
-impl StateInner {
+impl State {
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
     fn handle_request(&self, request: Request) -> Result<(), accessibility::Error> {
         match request {
@@ -330,11 +332,7 @@ impl StateInner {
         self.windows.push(WindowState { elem, wid });
         return Some(wid);
 
-        fn register_notifs(
-            win: &AXUIElement,
-            state: *const State,
-            observer: AXObserverRef,
-        ) -> bool {
+        fn register_notifs(win: &AXUIElement, state: StatePtr, observer: AXObserverRef) -> bool {
             // Filter out elements that aren't regular windows.
             match win.role() {
                 Ok(role) if role == kAXWindowRole => (),
@@ -456,7 +454,8 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
     }
 
-    let state = Rc::new(RefCell::new(StateInner {
+    // Pin the state, which will be live as long as the run loop runs.
+    let state = Rc::pin(RefCell::new(State {
         app: app.clone(),
         windows: vec![],
         events_tx,
@@ -466,12 +465,10 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         last_window_idx: 0,
         observer,
         this: ptr::null(),
+        _pinned: PhantomPinned,
     }));
-
-    // Pin the state, which will be live as long as the run loop runs.
-    let state = &state;
     let mut state_ref = state.borrow_mut();
-    state_ref.this = state as *const State;
+    state_ref.this = state.as_ref().get_ref() as StatePtr;
 
     // Register for notifications on the application element.
     for notif in APP_NOTIFICATIONS {
@@ -480,7 +477,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
                 observer,
                 app.as_concrete_TypeRef(),
                 CFString::from_static_string(notif).as_concrete_TypeRef(),
-                state as *const State as *mut c_void,
+                state.as_ref().get_ref() as StatePtr as *mut c_void,
             );
         }
     }
@@ -537,7 +534,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         notif: CFStringRef,
         data: *mut c_void,
     ) {
-        let state_ref = unsafe { &*(data as *const State) };
+        let state_ref = unsafe { &*(data as StatePtr) };
         let notif = unsafe { CFString::wrap_under_get_rule(notif) };
         let notif = Cow::<str>::from(&notif);
         let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
@@ -545,12 +542,12 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         state.handle_notification(elem, notif, observer);
     }
 
-    fn handle_requests(state: &State) {
+    fn handle_requests(state: &Pin<Rc<RefCell<State>>>) {
         // Multiple source wakeups can be collapsed into one, so we have to make
         // sure all pending events are handled eventually. For now just handle
         // them all.
         let state = state.borrow();
-        let StateInner { bundle_id, pid, .. } = &*state;
+        let State { bundle_id, pid, .. } = &*state;
         let bundle_id = bundle_id.as_deref().unwrap_or("None");
         while let Ok((span, request)) = state.requests_rx.try_recv() {
             let _guard = span.enter();
@@ -558,8 +555,6 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
             match state.handle_request(request.clone()) {
                 Ok(()) => (),
                 Err(err) => {
-                    let StateInner { bundle_id, pid, .. } = &*state;
-                    let bundle_id = bundle_id.as_deref().unwrap_or("None");
                     error!("Error handling request for {bundle_id}({pid}): {request:?}: {err}");
                 }
             }
