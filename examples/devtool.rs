@@ -16,6 +16,7 @@ use nimbus::{
     app, reactor,
     screen::{self, ScreenCache},
 };
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(StructOpt)]
 pub struct Opt {
@@ -25,7 +26,10 @@ pub struct Opt {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(tracing_tree::HierarchicalLayer::default())
+        .init();
     let opt = Opt::from_args();
     //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
     time("core-graphics", || get_windows_with_cg(&opt, true)).await;

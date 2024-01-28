@@ -419,7 +419,7 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct Apps(HashMap<pid_t, Receiver<Request>>);
+    struct Apps(HashMap<pid_t, Receiver<(Span, Request)>>);
     impl Apps {
         fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Event {
             let (handle, rx) = AppThreadHandle::new_for_test();
