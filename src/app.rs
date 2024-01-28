@@ -35,8 +35,7 @@ use icrate::{
     AppKit::{NSRunningApplication, NSWorkspace},
     Foundation::{CGPoint, CGRect},
 };
-use tracing::{debug, error, instrument, trace};
-use tracing::{info_span, Span};
+use tracing::{debug, error, instrument, trace, Span};
 
 use crate::{
     reactor::{self, AppInfo, AppState, Event, WindowInfo},
@@ -180,7 +179,85 @@ struct WindowState {
     elem: AXUIElement,
 }
 
+const APP_NOTIFICATIONS: &[&str] = &[
+    kAXApplicationActivatedNotification,
+    kAXApplicationDeactivatedNotification,
+    kAXMainWindowChangedNotification,
+    kAXWindowCreatedNotification,
+];
+
+const WINDOW_NOTIFICATIONS: &[&str] = &[
+    kAXUIElementDestroyedNotification,
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXTitleChangedNotification,
+];
+
+const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] = &[
+    kAXUIElementDestroyedNotification,
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXTitleChangedNotification,
+];
+
 impl State {
+    #[instrument(skip_all, fields(?info))]
+    fn init(&mut self, handle: AppThreadHandle, info: AppInfo) {
+        // Register for notifications on the application element.
+        for notif in APP_NOTIFICATIONS {
+            unsafe {
+                AXObserverAddNotification(
+                    self.observer,
+                    self.app.as_concrete_TypeRef(),
+                    CFString::from_static_string(notif).as_concrete_TypeRef(),
+                    self.this as *mut c_void,
+                );
+            }
+        }
+
+        // Now that we will observe new window events, read the list of windows.
+        let Ok(initial_window_elements) = self.app.windows() else {
+            // This is probably not a normal application, or it has exited.
+            return;
+        };
+
+        // Process the list and register notifications on all windows.
+        self.windows.reserve(initial_window_elements.len() as usize);
+        let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
+        for elem in initial_window_elements.iter() {
+            let elem = elem.clone();
+            let Ok(info) = WindowInfo::try_from(&elem) else {
+                continue;
+            };
+            let Some(wid) = self.register_window(elem, self.observer) else {
+                continue;
+            };
+            windows.push((wid, info));
+        }
+
+        // Send the ApplicationLaunched event.
+        let app_state = AppState {
+            handle,
+            info,
+            main_window: self.app.main_window().ok().and_then(|w| self.id(w).ok()),
+            is_frontmost: self.app.frontmost().map(|b| b.into()).unwrap_or(false),
+        };
+        let Ok(()) = self.events_tx.send((
+            Span::current(),
+            Event::ApplicationLaunched(self.pid, app_state, windows),
+        )) else {
+            debug!(
+                "Failed to send ApplicationLaunched event for {pid}, exiting thread",
+                pid = self.pid,
+            );
+            return;
+        };
+    }
+
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
     fn handle_request(&self, request: Request) -> Result<(), accessibility::Error> {
         match request {
@@ -412,35 +489,7 @@ impl State {
     }
 }
 
-const APP_NOTIFICATIONS: &[&str] = &[
-    kAXApplicationActivatedNotification,
-    kAXApplicationDeactivatedNotification,
-    kAXMainWindowChangedNotification,
-    kAXWindowCreatedNotification,
-];
-
-const WINDOW_NOTIFICATIONS: &[&str] = &[
-    kAXUIElementDestroyedNotification,
-    kAXWindowMovedNotification,
-    kAXWindowResizedNotification,
-    kAXWindowMiniaturizedNotification,
-    kAXWindowDeminiaturizedNotification,
-    kAXTitleChangedNotification,
-];
-
-const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] = &[
-    kAXUIElementDestroyedNotification,
-    kAXWindowMovedNotification,
-    kAXWindowResizedNotification,
-    kAXWindowMiniaturizedNotification,
-    kAXWindowDeminiaturizedNotification,
-    kAXTitleChangedNotification,
-];
-
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
-    let init_span = info_span!("init", app = ?info);
-    let init_span_guard = init_span.enter();
-
     let app = AXUIElement::application(pid);
     let (requests_tx, requests_rx) = channel();
 
@@ -467,65 +516,17 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         this: ptr::null(),
         _pinned: PhantomPinned,
     }));
-    let mut state_ref = state.borrow_mut();
-    state_ref.this = state.as_ref().get_ref() as StatePtr;
-
-    // Register for notifications on the application element.
-    for notif in APP_NOTIFICATIONS {
-        unsafe {
-            AXObserverAddNotification(
-                observer,
-                app.as_concrete_TypeRef(),
-                CFString::from_static_string(notif).as_concrete_TypeRef(),
-                state.as_ref().get_ref() as StatePtr as *mut c_void,
-            );
-        }
-    }
-
-    // Now that we will observe new window events, read the list of windows.
-    let Ok(initial_window_elements) = app.windows() else {
-        // This is probably not a normal application, or it has exited.
-        return;
-    };
-
-    // Process the list and register notifications on all windows.
-    state_ref.windows.reserve(initial_window_elements.len() as usize);
-    let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
-    for elem in initial_window_elements.iter() {
-        let elem = elem.clone();
-        let Ok(info) = WindowInfo::try_from(&elem) else {
-            continue;
-        };
-        let Some(wid) = state_ref.register_window(elem, observer) else {
-            continue;
-        };
-        windows.push((wid, info));
-    }
+    state.borrow_mut().this = state.as_ref().get_ref() as StatePtr;
 
     // Set up our request handler.
     let st = state.clone();
     let wakeup = WakeupHandle::for_current_thread(0, move || handle_requests(&st));
     let handle = AppThreadHandle { requests_tx, wakeup };
 
-    // Send the ApplicationLaunched event.
-    let app_state = AppState {
-        handle,
-        info,
-        main_window: app.main_window().ok().and_then(|w| state_ref.id(w).ok()),
-        is_frontmost: app.frontmost().map(|b| b.into()).unwrap_or(false),
-    };
-    let Ok(()) = state_ref.events_tx.send((
-        init_span.clone(),
-        Event::ApplicationLaunched(pid, app_state, windows),
-    )) else {
-        debug!("Failed to send ApplicationLaunched event for {pid}, exiting thread");
-        return;
-    };
+    // Initialize the app.
+    state.borrow_mut().init(handle, info);
 
     // Finally, invoke the run loop to handle events.
-    drop(state_ref);
-    drop(init_span_guard);
-    drop(init_span);
     CFRunLoop::run_current();
 
     unsafe extern "C" fn callback(
