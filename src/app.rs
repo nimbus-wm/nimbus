@@ -195,14 +195,8 @@ const WINDOW_NOTIFICATIONS: &[&str] = &[
     kAXTitleChangedNotification,
 ];
 
-const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] = &[
-    kAXUIElementDestroyedNotification,
-    kAXWindowMovedNotification,
-    kAXWindowResizedNotification,
-    kAXWindowMiniaturizedNotification,
-    kAXWindowDeminiaturizedNotification,
-    kAXTitleChangedNotification,
-];
+const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] =
+    &[kAXWindowMovedNotification, kAXWindowResizedNotification];
 
 impl State {
     #[instrument(skip_all, fields(?info))]
