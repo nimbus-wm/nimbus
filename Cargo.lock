@@ -405,7 +405,7 @@ checksum = "302d7ab3130588088d277783b1e2d2e10c9e9e4a16dd9050e6ec93fb3e7048f4"
 [[package]]
 name = "livesplit-hotkey"
 version = "0.7.0"
-source = "git+https://github.com/tmandry/livesplit-core?branch=new-consuming#365573b3bdc2b766a19b7bea4ece62a1172f26b6"
+source = "git+https://github.com/LiveSplit/livesplit-core?branch=master#aaf102dfe4d749b80aa5a012e019a4e204670887"
 dependencies = [
  "bitflags 2.4.1",
  "cfg-if",

@@ -37,4 +37,4 @@ core-foundation = { git = "https://github.com/tmandry/core-foundation-rs", branc
 core-foundation-sys = { git = "https://github.com/tmandry/core-foundation-rs", branch = "master" }
 accessibility = { git = "https://github.com/tmandry/accessibility", branch = "master" }
 accessibility-sys = { git = "https://github.com/tmandry/accessibility", branch = "master" }
-livesplit-hotkey = { git = "https://github.com/tmandry/livesplit-core", branch = "new-consuming" }
+livesplit-hotkey = { git = "https://github.com/LiveSplit/livesplit-core", branch = "master" }
