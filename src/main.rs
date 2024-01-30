@@ -1,6 +1,7 @@
 mod animation;
 mod app;
 mod hotkey;
+mod layout;
 mod notification_center;
 mod reactor;
 mod run_loop;
