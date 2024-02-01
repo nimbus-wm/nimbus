@@ -1,12 +1,9 @@
+mod observer;
+
 use std::{
-    borrow::Cow,
     cell::RefCell,
-    ffi::c_void,
     fmt::Debug,
-    marker::PhantomPinned,
-    pin::Pin,
-    ptr,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{
         atomic::{AtomicI32, Ordering},
         mpsc::{channel, Receiver, Sender},
@@ -18,19 +15,13 @@ use std::{
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
-    kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification, kAXErrorSuccess,
+    kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
     kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
-    AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef,
-    AXObserverRemoveNotification, AXUIElementRef,
 };
-use core_foundation::{
-    base::TCFType,
-    runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopAddSource, CFRunLoopGetCurrent},
-    string::{CFString, CFStringRef},
-};
+use core_foundation::runloop::CFRunLoop;
 use icrate::{
     AppKit::{NSRunningApplication, NSWorkspace},
     Foundation::{CGPoint, CGRect},
@@ -38,6 +29,7 @@ use icrate::{
 use tracing::{debug, error, instrument, trace, Span};
 
 use crate::{
+    app::observer::Observer,
     reactor::{self, AppInfo, AppState, Event, WindowInfo},
     run_loop::WakeupHandle,
     util::{NSRunningApplicationExt, ToCGType, ToICrate},
@@ -168,11 +160,8 @@ struct State {
     pid: pid_t,
     bundle_id: Option<String>,
     last_window_idx: i32,
-    observer: AXObserverRef,
-    this: StatePtr,
-    _pinned: PhantomPinned,
+    observer: Observer,
 }
-type StatePtr = *const RefCell<State>;
 
 struct WindowState {
     wid: WindowId,
@@ -200,23 +189,21 @@ const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] =
 
 impl State {
     #[instrument(skip_all, fields(?info))]
-    fn init(&mut self, handle: AppThreadHandle, info: AppInfo) {
+    #[must_use]
+    fn init(&mut self, handle: AppThreadHandle, info: AppInfo) -> bool {
         // Register for notifications on the application element.
         for notif in APP_NOTIFICATIONS {
-            unsafe {
-                AXObserverAddNotification(
-                    self.observer,
-                    self.app.as_concrete_TypeRef(),
-                    CFString::from_static_string(notif).as_concrete_TypeRef(),
-                    self.this as *mut c_void,
-                );
+            let res = self.observer.add_notification(&self.app, notif);
+            if let Err(err) = res {
+                debug!("Watching app {} failed with {err:?}", self.pid);
+                return false;
             }
         }
 
         // Now that we will observe new window events, read the list of windows.
         let Ok(initial_window_elements) = self.app.windows() else {
             // This is probably not a normal application, or it has exited.
-            return;
+            return false;
         };
 
         // Process the list and register notifications on all windows.
@@ -227,7 +214,7 @@ impl State {
             let Ok(info) = WindowInfo::try_from(&elem) else {
                 continue;
             };
-            let Some(wid) = self.register_window(elem, self.observer) else {
+            let Some(wid) = self.register_window(elem) else {
                 continue;
             };
             windows.push((wid, info));
@@ -248,8 +235,10 @@ impl State {
                 "Failed to send ApplicationLaunched event for {pid}, exiting thread",
                 pid = self.pid,
             );
-            return;
+            return false;
         };
+
+        true
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
@@ -324,12 +313,12 @@ impl State {
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
-    fn handle_notification(&mut self, elem: AXUIElement, notif: Cow<str>, observer: AXObserverRef) {
+    fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
         trace!("Got {notif:?} on {elem:?}");
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
         // TODO: Handle all of these.
-        match &*notif {
+        match notif {
             kAXApplicationActivatedNotification => {
                 // Unfortunately, if the user clicks on a new main window to
                 // activate this app, we get this notification before getting
@@ -351,7 +340,7 @@ impl State {
                 let Ok(window) = WindowInfo::try_from(&elem) else {
                     return;
                 };
-                let Some(wid) = self.register_window(elem, observer) else {
+                let Some(wid) = self.register_window(elem) else {
                     return;
                 };
                 self.send_event(Event::WindowCreated(wid, window));
@@ -391,8 +380,8 @@ impl State {
     }
 
     #[must_use]
-    fn register_window(&mut self, elem: AXUIElement, observer: AXObserverRef) -> Option<WindowId> {
-        if !register_notifs(&elem, self.this, observer) {
+    fn register_window(&mut self, elem: AXUIElement) -> Option<WindowId> {
+        if !register_notifs(&elem, self) {
             return None;
         }
         self.last_window_idx += 1;
@@ -403,26 +392,16 @@ impl State {
         self.windows.push(WindowState { elem, wid });
         return Some(wid);
 
-        fn register_notifs(win: &AXUIElement, state: StatePtr, observer: AXObserverRef) -> bool {
+        fn register_notifs(win: &AXUIElement, state: &State) -> bool {
             // Filter out elements that aren't regular windows.
             match win.role() {
                 Ok(role) if role == kAXWindowRole => (),
                 _ => return false,
             }
             for notif in WINDOW_NOTIFICATIONS {
-                let err = unsafe {
-                    AXObserverAddNotification(
-                        observer,
-                        win.as_concrete_TypeRef(),
-                        CFString::from_static_string(notif).as_concrete_TypeRef(),
-                        state as *mut c_void,
-                    )
-                };
-                if err != kAXErrorSuccess {
-                    trace!(
-                        "Watching failed with error {} on window {win:#?}",
-                        accessibility_sys::error_string(err)
-                    );
+                let res = state.observer.add_notification(win, notif);
+                if let Err(err) = res {
+                    trace!("Watching failed with error {err:?} on window {win:#?}");
                     return false;
                 }
             }
@@ -451,14 +430,8 @@ impl State {
 
     fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
         for notif in WINDOW_ANIMATION_NOTIFICATIONS {
-            let err = unsafe {
-                AXObserverRemoveNotification(
-                    self.observer,
-                    elem.as_concrete_TypeRef(),
-                    CFString::from_static_string(notif).as_concrete_TypeRef(),
-                )
-            };
-            if err != kAXErrorSuccess {
+            let res = self.observer.remove_notification(elem, notif);
+            if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
                 debug!("Removing notification {notif:?} on {elem:?} failed with error {err}");
             }
@@ -467,15 +440,8 @@ impl State {
 
     fn restart_notifications_after_animation(&self, elem: &AXUIElement) {
         for notif in WINDOW_ANIMATION_NOTIFICATIONS {
-            let err = unsafe {
-                AXObserverAddNotification(
-                    self.observer,
-                    elem.as_concrete_TypeRef(),
-                    CFString::from_static_string(notif).as_concrete_TypeRef(),
-                    self.this as *mut c_void,
-                )
-            };
-            if err != kAXErrorSuccess {
+            let res = self.observer.add_notification(elem, notif);
+            if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
                 debug!("Adding notification {notif:?} on {elem:?} failed with error {err}");
             }
@@ -486,31 +452,31 @@ impl State {
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
     let app = AXUIElement::application(pid);
     let (requests_tx, requests_rx) = channel();
+    let Ok(observer) = Observer::new(pid) else {
+        debug!("Making observer for pid {pid} failed; exiting app thread");
+        return;
+    };
 
-    // SAFETY: Notifications can only be delivered inside this function, during
-    // the call to CFRunLoopRun(). We are careful not to move `state`..
-    // TODO: Wrap in a type that releases on drop.
-    let mut observer: AXObserverRef = ptr::null_mut();
-    unsafe {
-        AXObserverCreate(pid, callback, &mut observer);
-        let source = AXObserverGetRunLoopSource(observer);
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
-    }
+    // Create our app state and set up the observer callback.
+    let state = Rc::new_cyclic(|weak: &Weak<RefCell<State>>| {
+        let weak = weak.clone();
+        let observer = observer.install(move |elem, notif| {
+            if let Some(state) = weak.upgrade() {
+                state.borrow_mut().handle_notification(elem, notif)
+            }
+        });
 
-    // Pin the state, which will be live as long as the run loop runs.
-    let state = Rc::pin(RefCell::new(State {
-        app: app.clone(),
-        windows: vec![],
-        events_tx,
-        requests_rx,
-        pid,
-        bundle_id: info.bundle_id.clone(),
-        last_window_idx: 0,
-        observer,
-        this: ptr::null(),
-        _pinned: PhantomPinned,
-    }));
-    state.borrow_mut().this = state.as_ref().get_ref() as StatePtr;
+        RefCell::new(State {
+            app: app.clone(),
+            windows: vec![],
+            events_tx,
+            requests_rx,
+            pid,
+            bundle_id: info.bundle_id.clone(),
+            last_window_idx: 0,
+            observer,
+        })
+    });
 
     // Set up our request handler.
     let st = state.clone();
@@ -518,26 +484,14 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
     let handle = AppThreadHandle { requests_tx, wakeup };
 
     // Initialize the app.
-    state.borrow_mut().init(handle, info);
+    if !state.borrow_mut().init(handle, info) {
+        return;
+    }
 
     // Finally, invoke the run loop to handle events.
     CFRunLoop::run_current();
 
-    unsafe extern "C" fn callback(
-        observer: AXObserverRef,
-        elem: AXUIElementRef,
-        notif: CFStringRef,
-        data: *mut c_void,
-    ) {
-        let state_ref = unsafe { &*(data as StatePtr) };
-        let notif = unsafe { CFString::wrap_under_get_rule(notif) };
-        let notif = Cow::<str>::from(&notif);
-        let elem = unsafe { AXUIElement::wrap_under_get_rule(elem) };
-        let mut state = state_ref.borrow_mut();
-        state.handle_notification(elem, notif, observer);
-    }
-
-    fn handle_requests(state: &Pin<Rc<RefCell<State>>>) {
+    fn handle_requests(state: &Rc<RefCell<State>>) {
         // Multiple source wakeups can be collapsed into one, so we have to make
         // sure all pending events are handled eventually. For now just handle
         // them all.
