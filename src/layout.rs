@@ -1,8 +1,15 @@
 use std::iter;
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use rand::seq::SliceRandom;
 
-use crate::reactor::{AppInfo, WindowInfo};
+use crate::app::WindowId;
+
+pub struct LayoutManager {
+    current_layout: Layout,
+    window_order: Vec<WindowId>,
+    main_window: Option<WindowId>,
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
@@ -17,14 +24,100 @@ pub enum Orientation {
     Vertical,
 }
 
-pub fn calculate_layout(
-    screen: CGRect,
-    windows: &[(&AppInfo, &WindowInfo)],
-    layout: Layout,
-) -> Vec<CGRect> {
+#[derive(Debug, Clone)]
+pub enum LayoutCommand {
+    Shuffle,
+    NextWindow,
+    PrevWindow,
+}
+
+#[derive(Debug, Clone)]
+pub enum LayoutEvent {
+    WindowRaised(Option<WindowId>),
+}
+
+#[must_use]
+#[derive(Debug, Clone, Default)]
+pub struct EventResponse {
+    pub raise_window: Option<WindowId>,
+}
+
+impl LayoutManager {
+    pub fn new() -> Self {
+        LayoutManager {
+            current_layout: Layout::Bsp(Orientation::Horizontal),
+            window_order: Vec::new(),
+            main_window: None,
+        }
+    }
+
+    pub fn add_window(&mut self, wid: WindowId) {
+        self.window_order.push(wid);
+    }
+
+    pub fn add_windows(&mut self, wids: impl Iterator<Item = WindowId>) {
+        self.window_order.extend(wids);
+    }
+
+    pub fn retain_windows(&mut self, f: impl Fn(&WindowId) -> bool) {
+        self.window_order.retain(f);
+    }
+
+    pub fn windows(&self) -> &[WindowId] {
+        &self.window_order
+    }
+
+    pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
+        match event {
+            LayoutEvent::WindowRaised(wid) => self.main_window = wid,
+        }
+        EventResponse::default()
+    }
+
+    pub fn handle_command(&mut self, command: LayoutCommand) -> EventResponse {
+        match command {
+            LayoutCommand::Shuffle => {
+                self.window_order.shuffle(&mut rand::thread_rng());
+                EventResponse::default()
+            }
+            LayoutCommand::NextWindow => {
+                let Some(cur) = self.main_window else {
+                    return EventResponse::default();
+                };
+                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
+                    return EventResponse::default();
+                };
+                let Some(&new) = self.window_order.get(idx + 1) else {
+                    return EventResponse::default();
+                };
+                EventResponse { raise_window: Some(new) }
+            }
+            LayoutCommand::PrevWindow => {
+                let Some(cur) = self.main_window else {
+                    return EventResponse::default();
+                };
+                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
+                    return EventResponse::default();
+                };
+                if idx == 0 {
+                    return EventResponse::default();
+                }
+                let Some(&new) = self.window_order.get(idx - 1) else {
+                    return EventResponse::default();
+                };
+                EventResponse { raise_window: Some(new) }
+            }
+        }
+    }
+
+    pub fn calculate(&self, screen: CGRect) -> Vec<CGRect> {
+        calculate_layout(screen, self.window_order.len() as u32, self.current_layout)
+    }
+}
+
+fn calculate_layout(screen: CGRect, num_windows: u32, layout: Layout) -> Vec<CGRect> {
     use Layout::*;
     use Orientation::*;
-    let num_windows: u32 = windows.len().try_into().unwrap();
     if num_windows == 0 {
         return vec![];
     }
@@ -66,7 +159,7 @@ pub fn calculate_layout(
             iter::once(window_frame)
                 .chain(calculate_layout(
                     remainder,
-                    &windows[1..],
+                    num_windows - 1,
                     Layout::Bsp(Orientation::Vertical),
                 ))
                 .collect()
@@ -89,7 +182,7 @@ pub fn calculate_layout(
             iter::once(window_frame)
                 .chain(calculate_layout(
                     remainder,
-                    &windows[1..],
+                    num_windows - 1,
                     Layout::Bsp(Orientation::Horizontal),
                 ))
                 .collect()

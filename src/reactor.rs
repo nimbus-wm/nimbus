@@ -1,11 +1,10 @@
 use std::{collections::HashMap, sync, thread};
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
-use rand::seq::SliceRandom;
 use tracing::Span;
 use tracing::{debug, info};
 
-use crate::layout::{calculate_layout, Layout, Orientation};
+use crate::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 use crate::metrics::{self, MetricsCommand};
 use crate::{
     animation::Animation,
@@ -52,15 +51,13 @@ pub struct WindowInfo {
 #[derive(Debug, Clone)]
 pub enum Command {
     Hello,
-    Shuffle,
-    NextWindow,
-    PrevWindow,
+    Layout(LayoutCommand),
     Metrics(MetricsCommand),
 }
 
 pub struct Reactor {
     apps: HashMap<pid_t, AppState>,
-    window_order: Vec<WindowId>,
+    layout: LayoutManager,
     windows: HashMap<WindowId, WindowInfo>,
     main_screen: Option<Screen>,
     space: Option<SpaceId>,
@@ -101,7 +98,7 @@ impl Reactor {
     fn new() -> Reactor {
         Reactor {
             apps: HashMap::new(),
-            window_order: Vec::new(),
+            layout: LayoutManager::new(),
             windows: HashMap::new(),
             main_screen: None,
             space: None,
@@ -120,12 +117,13 @@ impl Reactor {
 
     fn handle_event(&mut self, event: Event) {
         info!(?event, "Event");
+        let main_window_orig = self.main_window();
         let mut animation_focus_wid = None;
         match event {
             Event::ApplicationLaunched(pid, state, windows) => {
                 self.apps.insert(pid, state);
-                self.window_order.extend(
-                    windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| wid),
+                self.layout.add_windows(
+                    windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
                 );
                 self.windows.extend(windows.into_iter());
             }
@@ -134,7 +132,7 @@ impl Reactor {
                 // reroute the event through the app thread so it's the last
                 // event for this app.
                 self.apps.remove(&pid).unwrap();
-                self.window_order.retain(|wid| wid.pid != pid);
+                self.layout.retain_windows(|wid| wid.pid != pid);
                 if Some(pid) == self.frontmost_app {
                     self.frontmost_app = None;
                 }
@@ -190,15 +188,15 @@ impl Reactor {
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
                 if self.main_screen.map(|s| s.space) == self.space && window.is_standard {
-                    self.window_order.push(wid);
+                    self.layout.add_window(wid);
                 }
                 self.windows.insert(wid, window);
                 animation_focus_wid = Some(wid);
             }
             Event::WindowDestroyed(wid) => {
-                self.window_order.retain(|&id| wid != id);
+                self.layout.retain_windows(|&id| wid != id);
                 self.windows.remove(&wid).unwrap();
-                animation_focus_wid = self.window_order.last().cloned();
+                //animation_focus_wid = self.window_order.last().cloned();
             }
             Event::WindowMoved(wid, pos) => {
                 self.windows.get_mut(&wid).unwrap().frame.origin = pos;
@@ -228,35 +226,23 @@ impl Reactor {
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
             }
-            Event::Command(Command::Shuffle) => {
-                self.window_order.shuffle(&mut rand::thread_rng());
-            }
-            Event::Command(Command::NextWindow) => {
-                let Some(cur) = self.main_window() else { return };
-                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
-                    return;
-                };
-                let Some(&new) = self.window_order.get(idx + 1) else {
-                    return;
-                };
-                self.raise_window(new);
-            }
-            Event::Command(Command::PrevWindow) => {
-                let Some(cur) = self.main_window() else { return };
-                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
-                    return;
-                };
-                if idx == 0 {
-                    return;
-                }
-                let Some(&new) = self.window_order.get(idx - 1) else {
-                    return;
-                };
-                self.raise_window(new);
+            Event::Command(Command::Layout(cmd)) => {
+                let response = self.layout.handle_command(cmd);
+                self.handle_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
+        if self.main_window() != main_window_orig {
+            let response = self.layout.handle_event(LayoutEvent::WindowRaised(self.main_window()));
+            self.handle_response(response);
+        }
         self.update_layout(animation_focus_wid);
+    }
+
+    fn handle_response(&mut self, response: layout::EventResponse) {
+        if let Some(wid) = response.raise_window {
+            self.raise_window(wid);
+        }
     }
 
     fn raise_window(&mut self, wid: WindowId) {
@@ -275,24 +261,14 @@ impl Reactor {
             return;
         };
 
-        let list: Vec<_> = self
-            .window_order
-            .iter()
-            .map(|wid| (&self.apps[&wid.pid].info, &self.windows[&wid]))
-            .collect();
         info!(?main_screen);
         let main_window = self.main_window();
         info!(?main_window);
-        let layout = calculate_layout(
-            main_screen.frame.clone(),
-            &list,
-            Layout::Bsp(Orientation::Horizontal),
-        );
-        info!(window_list = ?list);
+        let layout = self.layout.calculate(main_screen.frame.clone());
         info!(?layout, "Layout");
 
-        assert_eq!(layout.len(), self.window_order.len());
-        let layout: Vec<_> = self.window_order.iter().copied().zip(layout).collect();
+        assert_eq!(layout.len(), self.layout.windows().len());
+        let layout: Vec<_> = self.layout.windows().iter().copied().zip(layout).collect();
         if let Some(last) = &self.last_layout {
             if last.len() == layout.len()
                 && last.iter().zip(&layout).all(|(a, b)| a.0 == b.0 && a.1.same_as(b.1))

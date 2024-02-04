@@ -10,6 +10,7 @@ mod screen;
 mod util;
 
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
+use layout::LayoutCommand;
 use metrics::MetricsCommand;
 use reactor::{Command, Event, Sender};
 use tracing::Span;
@@ -38,16 +39,15 @@ fn main() {
 }
 
 fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
+    use LayoutCommand::*;
+    use MetricsCommand::*;
+
     let mgr = HotkeyManager::new(events_tx);
     mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
-    mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
-    mgr.register(Modifiers::ALT, KeyCode::KeyJ, Command::NextWindow);
-    mgr.register(Modifiers::ALT, KeyCode::KeyK, Command::PrevWindow);
-    mgr.register(
-        Modifiers::ALT,
-        KeyCode::KeyM,
-        Command::Metrics(MetricsCommand::ShowTiming),
-    );
+    mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Layout(Shuffle));
+    mgr.register(Modifiers::ALT, KeyCode::KeyJ, Command::Layout(NextWindow));
+    mgr.register(Modifiers::ALT, KeyCode::KeyK, Command::Layout(PrevWindow));
+    mgr.register(Modifiers::ALT, KeyCode::KeyM, Command::Metrics(ShowTiming));
     mgr
 }
 
