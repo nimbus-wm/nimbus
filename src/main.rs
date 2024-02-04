@@ -2,6 +2,7 @@ mod animation;
 mod app;
 mod hotkey;
 mod layout;
+mod metrics;
 mod notification_center;
 mod reactor;
 mod run_loop;
@@ -9,6 +10,7 @@ mod screen;
 mod util;
 
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
+use metrics::MetricsCommand;
 use reactor::{Command, Event, Sender};
 use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -17,6 +19,7 @@ use tracing_tree::time::UtcDateTime;
 fn main() {
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
+        .with(metrics::timing_layer())
         .with(
             tracing_tree::HierarchicalLayer::default()
                 .with_indent_amount(2)
@@ -40,6 +43,11 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Shuffle);
     mgr.register(Modifiers::ALT, KeyCode::KeyJ, Command::NextWindow);
     mgr.register(Modifiers::ALT, KeyCode::KeyK, Command::PrevWindow);
+    mgr.register(
+        Modifiers::ALT,
+        KeyCode::KeyM,
+        Command::Metrics(MetricsCommand::ShowTiming),
+    );
     mgr
 }
 

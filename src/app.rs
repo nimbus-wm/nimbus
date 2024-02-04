@@ -195,7 +195,7 @@ impl State {
         for notif in APP_NOTIFICATIONS {
             let res = self.observer.add_notification(&self.app, notif);
             if let Err(err) = res {
-                debug!("Watching app {} failed with {err:?}", self.pid);
+                debug!(pid = ?self.pid, ?err, "Watching app failed");
                 return false;
             }
         }
@@ -231,10 +231,7 @@ impl State {
             Span::current(),
             Event::ApplicationLaunched(self.pid, app_state, windows),
         )) else {
-            debug!(
-                "Failed to send ApplicationLaunched event for {pid}, exiting thread",
-                pid = self.pid,
-            );
+            debug!(pid = ?self.pid, "Failed to send ApplicationLaunched event, exiting thread");
             return false;
         };
 
@@ -314,7 +311,7 @@ impl State {
 
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
     fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
-        trace!("Got {notif:?} on {elem:?}");
+        trace!(?notif, ?elem, "Got notification");
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
         // TODO: Handle all of these.
@@ -433,7 +430,11 @@ impl State {
             let res = self.observer.remove_notification(elem, notif);
             if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
-                debug!("Removing notification {notif:?} on {elem:?} failed with error {err}");
+                debug!(
+                    ?notif,
+                    ?elem,
+                    "Removing notification failed with error {err}"
+                );
             }
         }
     }
@@ -443,7 +444,7 @@ impl State {
             let res = self.observer.add_notification(elem, notif);
             if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
-                debug!("Adding notification {notif:?} on {elem:?} failed with error {err}");
+                debug!(?notif, ?elem, "Adding notification failed with error {err}");
             }
         }
     }
@@ -453,7 +454,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
     let app = AXUIElement::application(pid);
     let (requests_tx, requests_rx) = channel();
     let Ok(observer) = Observer::new(pid) else {
-        debug!("Making observer for pid {pid} failed; exiting app thread");
+        debug!(?pid, "Making observer failed; exiting app thread");
         return;
     };
 
@@ -500,11 +501,11 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         let bundle_id = bundle_id.as_deref().unwrap_or("None");
         while let Ok((span, request)) = state.requests_rx.try_recv() {
             let _guard = span.enter();
-            debug!("Got request for {bundle_id}({pid}): {request:?}");
+            debug!(?bundle_id, ?pid, ?request, "Got request");
             match state.handle_request(request.clone()) {
                 Ok(()) => (),
                 Err(err) => {
-                    error!("Error handling request for {bundle_id}({pid}): {request:?}: {err}");
+                    error!(?bundle_id, ?pid, ?request, "Error handling request: {err}");
                 }
             }
         }
@@ -540,7 +541,7 @@ fn trace<T>(
     let start = Instant::now();
     let out = f();
     let end = Instant::now();
-    trace!("{desc:12} took {:10?} on {elem:?}", end - start);
+    trace!(time = ?(end - start), ?elem, "{desc:12}");
     if let Err(err) = &out {
         let app = elem.parent();
         debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");

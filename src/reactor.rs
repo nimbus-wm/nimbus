@@ -6,6 +6,7 @@ use tracing::Span;
 use tracing::{debug, info};
 
 use crate::layout::{calculate_layout, Layout, Orientation};
+use crate::metrics::{self, MetricsCommand};
 use crate::{
     animation::Animation,
     app::{pid_t, AppThreadHandle, RaiseToken, Request, WindowId},
@@ -54,6 +55,7 @@ pub enum Command {
     Shuffle,
     NextWindow,
     PrevWindow,
+    Metrics(MetricsCommand),
 }
 
 pub struct Reactor {
@@ -117,7 +119,7 @@ impl Reactor {
     }
 
     fn handle_event(&mut self, event: Event) {
-        info!("Event {event:?}");
+        info!(?event, "Event");
         let mut animation_focus_wid = None;
         match event {
             Event::ApplicationLaunched(pid, state, windows) => {
@@ -252,6 +254,7 @@ impl Reactor {
                 };
                 self.raise_window(new);
             }
+            Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         self.update_layout(animation_focus_wid);
     }
@@ -277,16 +280,16 @@ impl Reactor {
             .iter()
             .map(|wid| (&self.apps[&wid.pid].info, &self.windows[&wid]))
             .collect();
-        info!("Screen: {main_screen:?}");
+        info!(?main_screen);
         let main_window = self.main_window();
-        info!("Main window: {main_window:?}");
+        info!(?main_window);
         let layout = calculate_layout(
             main_screen.frame.clone(),
             &list,
             Layout::Bsp(Orientation::Horizontal),
         );
-        info!("Window list: {list:?}");
-        info!("Layout: {layout:?}");
+        info!(window_list = ?list);
+        info!(?layout, "Layout");
 
         assert_eq!(layout.len(), self.window_order.len());
         let layout: Vec<_> = self.window_order.iter().copied().zip(layout).collect();
@@ -306,7 +309,7 @@ impl Reactor {
             if target_frame.same_as(current_frame) {
                 continue;
             }
-            debug!("Change: {current_frame:?} to {target_frame:?}");
+            debug!(?current_frame, ?target_frame, "Change");
             let handle = &self.apps.get(&wid.pid).unwrap().handle;
             let is_new = Some(wid) == new_wid;
             anim.add_window(handle, wid, current_frame, target_frame, is_new);
