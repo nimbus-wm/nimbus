@@ -3,6 +3,7 @@ mod observer;
 use std::{
     cell::RefCell,
     fmt::Debug,
+    num::NonZeroI32,
     rc::{Rc, Weak},
     sync::{
         atomic::{AtomicI32, Ordering},
@@ -44,13 +45,16 @@ pub use accessibility_sys::pid_t;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct WindowId {
     pub pid: pid_t,
-    idx: i32,
+    idx: NonZeroI32,
 }
 
 impl WindowId {
     #[cfg(test)]
     pub(crate) fn new(pid: pid_t, idx: i32) -> WindowId {
-        WindowId { pid, idx }
+        WindowId {
+            pid,
+            idx: NonZeroI32::new(idx).unwrap(),
+        }
     }
 }
 
@@ -384,7 +388,7 @@ impl State {
         self.last_window_idx += 1;
         let wid = WindowId {
             pid: self.pid,
-            idx: self.last_window_idx,
+            idx: NonZeroI32::new(self.last_window_idx).unwrap(),
         };
         self.windows.push(WindowState { elem, wid });
         return Some(wid);
