@@ -5,8 +5,6 @@ slotmap::new_key_type! {
     pub struct NodeId;
 }
 
-//type Arena<K: Key, Branch, Leaf> = SlotMap<K, Node<Branch, Leaf>>;
-
 /// Core data structure that holds tree structures.
 ///
 /// Multiple trees can be contained within a forest. This also makes it easier
@@ -100,28 +98,6 @@ impl NodeId {
         }
         self.hlink_before(next, map);
     }
-
-    //fn hlink_after(self, prev: NodeId, map: &mut Forest) {
-    //    debug_assert_eq!(map[self].prev_sibling, None);
-    //    debug_assert_eq!(map[prev].next_sibling, None);
-    //    map[self].prev_sibling.replace(prev);
-    //    map[prev].next_sibling.replace(self);
-    //}
-
-    //fn hlink_after(self, prev: NodeId, map: &mut Forest) {
-    //    // Fully general case, when either self or prev is being "inserted".
-    //    // Probably we just want to break this into two, hlink_before and hlink_after.
-    //    let before = map[self].prev_sibling.replace(prev);
-    //    if let Some(before) = before {
-    //        map[before].next_sibling.replace(prev);
-    //        map[prev].prev_sibling.replace(before);
-    //    }
-    //    let next = map[prev].next_sibling.replace(self);
-    //    if let Some(next) = next {
-    //        map[next].prev_sibling.replace(self);
-    //        map[self].next_sibling.replace(next);
-    //    }
-    //}
 
     fn hlink_after(self, prev: NodeId, map: &mut Forest) {
         debug_assert_ne!(self, prev);
@@ -389,85 +365,3 @@ mod tests {
         assert!(!t.map.contains_key(t.other_tree.root()));
     }
 }
-
-//impl<'a> DoubleEndedIterator for NodeIterator<'a> {
-//    fn next_back(&mut self) -> Option<Self::Item> {
-//        let Some(id) = self.end else { return None };
-//        self.end = if self.cur == self.end {
-//            None
-//        } else {
-//            self.map[id].prev_sibling
-//        };
-//        Some(id)
-//    }
-//}
-
-/*
-enum NodeKindInner {
-    Branch {
-        first_child: Option<NodeId>,
-        last_child: Option<NodeId>,
-        node: BranchNode,
-    },
-    Leaf(LeafNode),
-}
-
-struct NodeBase {
-    parent: Option<NodeId>,
-    next_sibling: Option<NodeId>,
-    prev_sibling: Option<NodeId>,
-    //size: f32,
-}
-
-struct LeafNode {
-    wid: WindowId,
-}
-
-struct BranchNode {}
-
-impl Node {}
-
-impl Node {
-    fn base(&self) -> &NodeBase {
-        match self {
-            Node::Window(n) => &n.base,
-            Node::Container(n) => &n.base,
-        }
-    }
-
-    fn base_mut(&mut self) -> &mut NodeBase {
-        match self {
-            Node::Window(n) => &mut n.base,
-            Node::Container(n) => &mut n.base,
-        }
-    }
-
-    fn window(&self) -> Option<&WindowNode> {
-        match self {
-            Node::Window(w) => Some(w),
-            _ => None,
-        }
-    }
-
-    fn window_mut(&mut self) -> Option<&mut WindowNode> {
-        match self {
-            Node::Window(w) => Some(w),
-            _ => None,
-        }
-    }
-
-    fn container(&self) -> Option<&ContainerNode> {
-        match self {
-            Node::Container(c) => Some(c),
-            _ => None,
-        }
-    }
-
-    fn container_mut(&mut self) -> Option<&mut ContainerNode> {
-        match self {
-            Node::Container(c) => Some(c),
-            _ => None,
-        }
-    }
-}
-*/
