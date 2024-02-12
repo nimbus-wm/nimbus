@@ -27,6 +27,61 @@ impl Tree {
     }
 }
 
+impl NodeId {
+    #[track_caller]
+    pub fn parent(self, map: &Forest) -> Option<NodeId> {
+        map[self].parent
+    }
+
+    #[track_caller]
+    pub fn children(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
+        NodeIterator {
+            cur: map[self].first_child,
+            map,
+        }
+    }
+
+    #[track_caller]
+    pub fn children_rev(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
+        NodeRevIterator { cur: map[self].last_child, map }
+    }
+}
+
+impl NodeId {
+    #[track_caller]
+    pub(super) fn push_back(self, map: &mut Forest) -> NodeId {
+        let new = map.insert(Node::default());
+        new.link_under_back(self, map);
+        new
+    }
+
+    #[track_caller]
+    pub(super) fn push_front(self, map: &mut Forest) -> NodeId {
+        let new = map.insert(Node::default());
+        new.link_under_front(self, map);
+        new
+    }
+
+    #[track_caller]
+    pub(super) fn insert_before(self, map: &mut Forest) -> NodeId {
+        let new = map.insert(Node::default());
+        new.link_before(self, map);
+        new
+    }
+
+    #[track_caller]
+    pub(super) fn insert_after(self, map: &mut Forest) -> NodeId {
+        let new = map.insert(Node::default());
+        new.link_after(self, map);
+        new
+    }
+
+    #[track_caller]
+    pub(super) fn remove(self, map: &mut Forest) {
+        map.remove(self).unwrap().unlink(self, map).delete_recursive(map);
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Node {
     parent: Option<NodeId>,
@@ -35,38 +90,6 @@ pub struct Node {
     //kind: NodeKindInner,
     first_child: Option<NodeId>,
     last_child: Option<NodeId>,
-}
-
-impl Node {
-    #[must_use]
-    #[track_caller]
-    fn unlink(self, id: NodeId, map: &mut Forest) -> Self {
-        if let Some(prev) = self.prev_sibling {
-            map[prev].next_sibling = self.next_sibling;
-        }
-        if let Some(next) = self.next_sibling {
-            map[next].prev_sibling = self.prev_sibling;
-        }
-        if let Some(parent) = self.parent {
-            if Some(id) == map[parent].first_child {
-                map[parent].first_child = self.next_sibling;
-            }
-            if Some(id) == map[parent].last_child {
-                map[parent].last_child = self.prev_sibling;
-            }
-        }
-        self
-    }
-
-    #[track_caller]
-    fn delete_recursive(&self, map: &mut Forest) {
-        let mut iter = self.first_child;
-        while let Some(child) = iter {
-            let node = map.remove(child).unwrap();
-            node.delete_recursive(map);
-            iter = node.next_sibling;
-        }
-    }
 }
 
 impl NodeId {
@@ -134,58 +157,35 @@ impl NodeId {
     }
 }
 
-impl NodeId {
+impl Node {
+    #[must_use]
     #[track_caller]
-    pub(super) fn push_back(self, map: &mut Forest) -> NodeId {
-        let new = map.insert(Node::default());
-        new.link_under_back(self, map);
-        new
-    }
-
-    #[track_caller]
-    pub(super) fn push_front(self, map: &mut Forest) -> NodeId {
-        let new = map.insert(Node::default());
-        new.link_under_front(self, map);
-        new
-    }
-
-    #[track_caller]
-    pub(super) fn insert_before(self, map: &mut Forest) -> NodeId {
-        let new = map.insert(Node::default());
-        new.link_before(self, map);
-        new
-    }
-
-    #[track_caller]
-    pub(super) fn insert_after(self, map: &mut Forest) -> NodeId {
-        let new = map.insert(Node::default());
-        new.link_after(self, map);
-        new
-    }
-
-    #[track_caller]
-    pub(super) fn remove(self, map: &mut Forest) {
-        map.remove(self).unwrap().unlink(self, map).delete_recursive(map);
-    }
-}
-
-impl NodeId {
-    #[track_caller]
-    pub fn parent(self, map: &Forest) -> Option<NodeId> {
-        map[self].parent
-    }
-
-    #[track_caller]
-    pub fn children(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
-        NodeIterator {
-            cur: map[self].first_child,
-            map,
+    fn unlink(self, id: NodeId, map: &mut Forest) -> Self {
+        if let Some(prev) = self.prev_sibling {
+            map[prev].next_sibling = self.next_sibling;
         }
+        if let Some(next) = self.next_sibling {
+            map[next].prev_sibling = self.prev_sibling;
+        }
+        if let Some(parent) = self.parent {
+            if Some(id) == map[parent].first_child {
+                map[parent].first_child = self.next_sibling;
+            }
+            if Some(id) == map[parent].last_child {
+                map[parent].last_child = self.prev_sibling;
+            }
+        }
+        self
     }
 
     #[track_caller]
-    pub fn children_rev(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
-        NodeRevIterator { cur: map[self].last_child, map }
+    fn delete_recursive(&self, map: &mut Forest) {
+        let mut iter = self.first_child;
+        while let Some(child) = iter {
+            let node = map.remove(child).unwrap();
+            node.delete_recursive(map);
+            iter = node.next_sibling;
+        }
     }
 }
 
