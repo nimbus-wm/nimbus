@@ -1,30 +1,80 @@
 #![allow(dead_code)]
-use slotmap::SlotMap;
+use std::ops::{Deref, DerefMut};
 
-slotmap::new_key_type! {
-    pub struct NodeId;
-}
+use slotmap::SlotMap;
 
 /// Core data structure that holds tree structures.
 ///
 /// Multiple trees can be contained within a forest. This also makes it easier
 /// to move branches between trees.
+///
+/// This type should not be used directly; instead, use the methods on
+/// [`OwnedNode`] and [`NodeId`].
 pub type Forest = SlotMap<NodeId, Node>;
 
-pub struct Tree {
-    root: NodeId,
+/// Represents ownership of a particular node in a tree.
+///
+/// Nodes must be removed manually, because removal requires a reference to the
+/// [`Forest`].  If a value of this type is dropped without
+/// [`OwnedNode::remove`] being called, it will panic.
+///
+/// Every `OwnedNode` has a name which will be used in the panic message.
+#[must_use]
+pub struct OwnedNode(Option<NodeId>, &'static str);
+
+impl OwnedNode {
+    /// Creates a new root node.
+    pub fn new_root_in(map: &mut Forest, name: &'static str) -> Self {
+        Self::own(map.insert(Node::default()), name)
+    }
+
+    /// Marks a non-root node as owned.
+    pub fn own(node: NodeId, name: &'static str) -> Self {
+        OwnedNode(Some(node), name)
+    }
+
+    pub fn id(&self) -> NodeId {
+        self.0.unwrap()
+    }
+
+    pub fn is_removed(&self) -> bool {
+        self.0.is_none()
+    }
+
+    #[track_caller]
+    pub fn remove(&mut self, map: &mut Forest) {
+        self.0.take().unwrap().remove(map)
+    }
 }
 
-impl Tree {
-    pub(super) fn new(map: &mut Forest) -> Tree {
-        Tree {
-            root: map.insert(Node::default()),
+impl Deref for OwnedNode {
+    type Target = NodeId;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl DerefMut for OwnedNode {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for OwnedNode {
+    fn drop(&mut self) {
+        if let Some(node) = self.0 {
+            panic!(
+                "OwnedNode {name:?} dropped without being removed: {node:?}",
+                name = self.1,
+            );
         }
     }
+}
 
-    pub fn root(&self) -> NodeId {
-        self.root
-    }
+slotmap::new_key_type! {
+    /// Represents a node somewhere in the tree.
+    pub struct NodeId;
 }
 
 impl NodeId {
@@ -87,7 +137,6 @@ pub struct Node {
     parent: Option<NodeId>,
     prev_sibling: Option<NodeId>,
     next_sibling: Option<NodeId>,
-    //kind: NodeKindInner,
     first_child: Option<NodeId>,
     last_child: Option<NodeId>,
 }
@@ -223,13 +272,24 @@ mod tests {
 
     struct TestTree {
         map: Forest,
-        tree: Tree,
+        tree: OwnedNode,
         root: NodeId,
         child1: NodeId,
         child2: NodeId,
         child3: NodeId,
         gc1: NodeId,
-        other_tree: Tree,
+        other_tree: OwnedNode,
+    }
+
+    impl Drop for TestTree {
+        fn drop(&mut self) {
+            if !self.tree.is_removed() {
+                self.tree.remove(&mut self.map);
+            }
+            if !self.other_tree.is_removed() {
+                self.other_tree.remove(&mut self.map);
+            }
+        }
     }
 
     impl TestTree {
@@ -238,14 +298,14 @@ mod tests {
             let mut map = Forest::default();
             let m = &mut map;
 
-            let tree = Tree::new(m);
-            let root = tree.root();
+            let tree = OwnedNode::new_root_in(m, "tree");
+            let root = *tree;
             let child1 = root.push_back(m);
             let child2 = root.push_back(m);
             let child3 = root.push_back(m);
 
             let gc1 = child2.push_back(m);
-            let other_tree = Tree::new(m);
+            let other_tree = OwnedNode::new_root_in(m, "other_tree");
 
             TestTree {
                 map, tree, root,
@@ -297,7 +357,7 @@ mod tests {
         assert_eq!([t.gc1], *t.get_children(t.child2));
         assert!(t.get_children(t.gc1).is_empty());
         assert!(t.get_children(t.child3).is_empty());
-        assert!(t.get_children(t.other_tree.root()).is_empty());
+        assert!(t.get_children(t.other_tree.id()).is_empty());
     }
 
     #[test]
@@ -308,7 +368,7 @@ mod tests {
         assert_eq!([t.gc1], *t.get_children_rev(t.child2));
         assert!(t.get_children_rev(t.gc1).is_empty());
         assert!(t.get_children_rev(t.child3).is_empty());
-        assert!(t.get_children_rev(t.other_tree.root()).is_empty());
+        assert!(t.get_children_rev(t.other_tree.id()).is_empty());
     }
 
     #[test]
@@ -322,7 +382,7 @@ mod tests {
         t.assert_children_are([gc0, t.gc1], t.child2);
         t.assert_children_are([], gc2);
         t.assert_children_are([gc2], t.child3);
-        t.assert_children_are([], t.other_tree.root());
+        t.assert_children_are([], t.other_tree.id());
     }
 
     #[test]
@@ -336,7 +396,7 @@ mod tests {
         t.assert_children_are([t.gc1, gc2], t.child2);
         t.assert_children_are([], gc2);
         t.assert_children_are([], t.child3);
-        t.assert_children_are([], t.other_tree.root());
+        t.assert_children_are([], t.other_tree.id());
     }
 
     #[test]
@@ -356,7 +416,7 @@ mod tests {
         t.assert_children_are([gc0, t.gc1], t.child2);
         t.assert_children_are([], child2_5);
         t.assert_children_are([], t.child3);
-        t.assert_children_are([], t.other_tree.root());
+        t.assert_children_are([], t.other_tree.id());
     }
 
     #[test]
@@ -376,7 +436,7 @@ mod tests {
         t.assert_children_are([], child2_5);
         t.assert_children_are([], t.child3);
         t.assert_children_are([], child4);
-        t.assert_children_are([], t.other_tree.root());
+        t.assert_children_are([], t.other_tree.id());
     }
 
     #[test]
@@ -397,10 +457,11 @@ mod tests {
         assert!(!t.map.contains_key(t.child1));
 
         assert!(t.map.contains_key(t.root));
-        assert!(t.map.contains_key(t.other_tree.root()));
-        t.root.remove(&mut t.map);
+        assert!(t.map.contains_key(t.other_tree.id()));
+        t.tree.remove(&mut t.map);
         assert!(!t.map.contains_key(t.root));
-        t.other_tree.root().remove(&mut t.map);
-        assert!(!t.map.contains_key(t.other_tree.root()));
+        let other_root = t.other_tree.id();
+        t.other_tree.remove(&mut t.map);
+        assert!(!t.map.contains_key(other_root));
     }
 }
