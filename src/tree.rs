@@ -91,12 +91,24 @@ impl NodeId {
     #[track_caller]
     fn link_before(self, next: NodeId, map: &mut Forest) {
         let parent = map[next].parent.expect("cannot make a sibling of the root node");
-        map[self].parent = Some(parent);
+        map[self].parent.replace(parent);
         debug_assert!(map[parent].first_child.is_some());
         if map[parent].first_child == Some(next) {
-            map[parent].first_child = Some(self);
+            map[parent].first_child.replace(self);
         }
         self.hlink_before(next, map);
+    }
+
+    #[track_caller]
+    fn link_after(self, prev: NodeId, map: &mut Forest) {
+        debug_assert_eq!(map[self].parent, None);
+        let parent = map[prev].parent.expect("cannot make a sibling of the root node");
+        map[self].parent.replace(parent);
+        debug_assert!(map[parent].last_child.is_some());
+        if map[parent].last_child == Some(prev) {
+            map[parent].last_child.replace(self);
+        }
+        self.hlink_after(prev, map);
     }
 
     fn hlink_after(self, prev: NodeId, map: &mut Forest) {
@@ -141,6 +153,13 @@ impl NodeId {
     pub(super) fn insert_before(self, map: &mut Forest) -> NodeId {
         let new = map.insert(Node::default());
         new.link_before(self, map);
+        new
+    }
+
+    #[track_caller]
+    pub(super) fn insert_after(self, map: &mut Forest) -> NodeId {
+        let new = map.insert(Node::default());
+        new.link_after(self, map);
         new
     }
 
@@ -337,6 +356,26 @@ mod tests {
         t.assert_children_are([gc0, t.gc1], t.child2);
         t.assert_children_are([], child2_5);
         t.assert_children_are([], t.child3);
+        t.assert_children_are([], t.other_tree.root());
+    }
+
+    #[test]
+    fn insert_after() {
+        let mut t = TestTree::new();
+        let child1_5 = t.child1.insert_after(&mut t.map);
+        let child2_5 = t.child2.insert_after(&mut t.map);
+        let child4 = t.child3.insert_after(&mut t.map);
+        let gc2 = t.gc1.insert_after(&mut t.map);
+        t.assert_children_are(
+            [t.child1, child1_5, t.child2, child2_5, t.child3, child4],
+            t.root,
+        );
+        t.assert_children_are([], t.child1);
+        t.assert_children_are([], child1_5);
+        t.assert_children_are([t.gc1, gc2], t.child2);
+        t.assert_children_are([], child2_5);
+        t.assert_children_are([], t.child3);
+        t.assert_children_are([], child4);
         t.assert_children_are([], t.other_tree.root());
     }
 
