@@ -7,6 +7,7 @@ mod notification_center;
 mod reactor;
 mod run_loop;
 mod screen;
+mod tree;
 mod util;
 
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
