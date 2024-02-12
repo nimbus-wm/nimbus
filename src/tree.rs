@@ -270,6 +270,15 @@ impl<'a> Iterator for NodeRevIterator<'a> {
 mod tests {
     use super::*;
 
+    /// A tree with the following structure:
+    /// ```text
+    ///         [tree]              [other_tree]
+    ///        __root__              other_root
+    ///       /    |   \
+    /// child1  child2  child3
+    ///            |
+    ///           gc1
+    /// ```
     struct TestTree {
         map: Forest,
         tree: OwnedNode,
@@ -279,6 +288,7 @@ mod tests {
         child3: NodeId,
         gc1: NodeId,
         other_tree: OwnedNode,
+        other_root: NodeId,
     }
 
     impl Drop for TestTree {
@@ -299,18 +309,19 @@ mod tests {
             let m = &mut map;
 
             let tree = OwnedNode::new_root_in(m, "tree");
-            let root = *tree;
+            let root = tree.id();
             let child1 = root.push_back(m);
             let child2 = root.push_back(m);
             let child3 = root.push_back(m);
 
             let gc1 = child2.push_back(m);
             let other_tree = OwnedNode::new_root_in(m, "other_tree");
+            let other_root = other_tree.id();
 
             TestTree {
                 map, tree, root,
                 child1, child2, child3, gc1,
-                other_tree,
+                other_tree, other_root,
             }
         }
 
@@ -357,7 +368,7 @@ mod tests {
         assert_eq!([t.gc1], *t.get_children(t.child2));
         assert!(t.get_children(t.gc1).is_empty());
         assert!(t.get_children(t.child3).is_empty());
-        assert!(t.get_children(t.other_tree.id()).is_empty());
+        assert!(t.get_children(t.other_root).is_empty());
     }
 
     #[test]
@@ -368,7 +379,7 @@ mod tests {
         assert_eq!([t.gc1], *t.get_children_rev(t.child2));
         assert!(t.get_children_rev(t.gc1).is_empty());
         assert!(t.get_children_rev(t.child3).is_empty());
-        assert!(t.get_children_rev(t.other_tree.id()).is_empty());
+        assert!(t.get_children_rev(t.other_root).is_empty());
     }
 
     #[test]
@@ -382,7 +393,7 @@ mod tests {
         t.assert_children_are([gc0, t.gc1], t.child2);
         t.assert_children_are([], gc2);
         t.assert_children_are([gc2], t.child3);
-        t.assert_children_are([], t.other_tree.id());
+        t.assert_children_are([], t.other_root);
     }
 
     #[test]
@@ -396,7 +407,7 @@ mod tests {
         t.assert_children_are([t.gc1, gc2], t.child2);
         t.assert_children_are([], gc2);
         t.assert_children_are([], t.child3);
-        t.assert_children_are([], t.other_tree.id());
+        t.assert_children_are([], t.other_root);
     }
 
     #[test]
@@ -416,7 +427,7 @@ mod tests {
         t.assert_children_are([gc0, t.gc1], t.child2);
         t.assert_children_are([], child2_5);
         t.assert_children_are([], t.child3);
-        t.assert_children_are([], t.other_tree.id());
+        t.assert_children_are([], t.other_root);
     }
 
     #[test]
@@ -436,7 +447,7 @@ mod tests {
         t.assert_children_are([], child2_5);
         t.assert_children_are([], t.child3);
         t.assert_children_are([], child4);
-        t.assert_children_are([], t.other_tree.id());
+        t.assert_children_are([], t.other_root);
     }
 
     #[test]
@@ -457,11 +468,10 @@ mod tests {
         assert!(!t.map.contains_key(t.child1));
 
         assert!(t.map.contains_key(t.root));
-        assert!(t.map.contains_key(t.other_tree.id()));
+        assert!(t.map.contains_key(t.other_root));
         t.tree.remove(&mut t.map);
         assert!(!t.map.contains_key(t.root));
-        let other_root = t.other_tree.id();
         t.other_tree.remove(&mut t.map);
-        assert!(!t.map.contains_key(other_root));
+        assert!(!t.map.contains_key(t.other_root));
     }
 }
