@@ -1,3 +1,5 @@
+#![cfg(not(test))]
+
 pub mod animation;
 pub mod app;
 pub mod hotkey;
