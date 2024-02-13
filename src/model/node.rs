@@ -95,6 +95,16 @@ impl NodeId {
     pub fn children_rev(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
         NodeRevIterator { cur: map[self].last_child, map }
     }
+
+    #[track_caller]
+    pub fn next_sibling(self, map: &Forest) -> Option<NodeId> {
+        map[self].next_sibling
+    }
+
+    #[track_caller]
+    pub fn prev_sibling(self, map: &Forest) -> Option<NodeId> {
+        map[self].prev_sibling
+    }
 }
 
 impl NodeId {

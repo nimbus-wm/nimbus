@@ -17,9 +17,16 @@ use tracing::{debug, warn};
 
 use crate::util::ToICrate;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct SpaceId(u64);
+
+#[cfg(test)]
+impl SpaceId {
+    pub fn new(id: u64) -> SpaceId {
+        SpaceId(id)
+    }
+}
 
 /// Calculates the screen and space configuration.
 pub struct ScreenCache<S: System = Actual> {
