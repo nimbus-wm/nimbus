@@ -46,17 +46,17 @@ impl Tree {
         }
     }
 
-    pub fn add_window(&mut self, space: SpaceId, wid: WindowId) -> NodeId {
-        let node = self.space(space).push_back(&mut self.forest, &mut self.c);
+    pub fn add_window(&mut self, parent: NodeId, wid: WindowId) -> NodeId {
+        let node = parent.push_back(&mut self.forest, &mut self.c);
         self.windows.insert(node, wid);
         node
     }
 
-    pub fn add_windows(&mut self, space: SpaceId, wids: impl ExactSizeIterator<Item = WindowId>) {
+    pub fn add_windows(&mut self, parent: NodeId, wids: impl ExactSizeIterator<Item = WindowId>) {
         self.forest.reserve(wids.len());
         self.windows.set_capacity(self.forest.capacity());
         for wid in wids {
-            self.add_window(space, wid);
+            self.add_window(parent, wid);
         }
     }
 
@@ -68,6 +68,11 @@ impl Tree {
             }
             true
         })
+    }
+
+    pub fn add_container(&mut self, parent: NodeId) -> NodeId {
+        let node = parent.push_back(&mut self.forest, &mut self.c);
+        node
     }
 
     pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
@@ -82,7 +87,7 @@ impl Tree {
         self.c.selection.current_selection()
     }
 
-    fn space(&mut self, space: SpaceId) -> NodeId {
+    pub fn space(&mut self, space: SpaceId) -> NodeId {
         self.spaces
             .entry(space)
             .or_insert_with(|| OwnedNode::new_root_in(&mut self.forest, "space_root"))
