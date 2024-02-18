@@ -28,10 +28,10 @@ impl Selection {
     pub(super) fn handle_event(&mut self, forest: &Forest, event: TreeEvent) {
         use TreeEvent::*;
         match event {
-            AddedWindow(node, _wid) => {
+            AddedToParent(node) => {
                 self.select(forest, Some(node));
             }
-            RemovingNode(node) => {
+            RemovingFromParent(node) => {
                 let parent = node.parent(forest).unwrap();
                 let alternative = node.next_sibling(forest).or(node.prev_sibling(forest));
                 if self.selected_child[parent] == Some(node) {
@@ -42,7 +42,7 @@ impl Selection {
                     self.current_selection = alternative;
                 }
             }
-            RemovedNode(node) => {
+            RemovedFromTree(node) => {
                 self.selected_child.remove(node);
             }
         }

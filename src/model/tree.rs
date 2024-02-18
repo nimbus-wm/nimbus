@@ -27,9 +27,13 @@ struct Components {
 }
 
 pub(super) enum TreeEvent {
-    AddedWindow(NodeId, WindowId),
-    RemovingNode(NodeId),
-    RemovedNode(NodeId),
+    /// A node was added to its parent. Note that the node may have existed in
+    /// the tree previously under a different parent.
+    AddedToParent(NodeId),
+    /// A node will be removed from its parent.
+    RemovingFromParent(NodeId),
+    /// A node was removed from the tree.
+    RemovedFromTree(NodeId),
 }
 
 impl Tree {
@@ -45,7 +49,7 @@ impl Tree {
     pub fn add_window(&mut self, space: SpaceId, wid: WindowId) -> NodeId {
         let node = self.space(space).push_back(&mut self.forest);
         self.windows.insert(node, wid);
-        self.dispatch_event(TreeEvent::AddedWindow(node, wid));
+        self.dispatch_event(TreeEvent::AddedToParent(node));
         node
     }
 
@@ -60,9 +64,9 @@ impl Tree {
     pub fn retain_windows(&mut self, mut predicate: impl FnMut(&WindowId) -> bool) {
         self.windows.retain(|node, wid| {
             if !predicate(wid) {
-                self.c.dispatch_event(&self.forest, TreeEvent::RemovingNode(node));
+                self.c.dispatch_event(&self.forest, TreeEvent::RemovingFromParent(node));
                 node.remove(&mut self.forest);
-                self.c.dispatch_event(&self.forest, TreeEvent::RemovedNode(node));
+                self.c.dispatch_event(&self.forest, TreeEvent::RemovedFromTree(node));
                 return false;
             }
             true
