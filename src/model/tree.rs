@@ -2,13 +2,19 @@
 
 use std::{collections::HashMap, mem};
 
+use icrate::Foundation::CGRect;
+
 use crate::{
     app::WindowId,
     model::node::{Forest, NodeId, OwnedNode},
     screen::SpaceId,
 };
 
-use super::{node, selection::Selection};
+use super::{
+    layout::{Layout, LayoutKind},
+    node,
+    selection::Selection,
+};
 
 /// The layout tree.
 ///
@@ -16,16 +22,20 @@ use super::{node, selection::Selection};
 /// type.
 pub struct Tree {
     forest: Forest,
-    windows: slotmap::SecondaryMap<NodeId, WindowId>,
+    windows: Windows,
     spaces: HashMap<SpaceId, OwnedNode>,
     c: Components,
 }
 
+pub type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
+
 #[derive(Default)]
 struct Components {
     selection: Selection,
+    layout: Layout,
 }
 
+#[derive(Copy, Clone)]
 pub(super) enum TreeEvent {
     /// A node was added to its parent. Note that the node may have existed in
     /// the tree previously under a different parent.
@@ -70,8 +80,9 @@ impl Tree {
         })
     }
 
-    pub fn add_container(&mut self, parent: NodeId) -> NodeId {
+    pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
         let node = parent.push_back(&mut self.forest, &mut self.c);
+        self.c.layout.set_layout(&self.forest, node, kind);
         node
     }
 
@@ -94,6 +105,12 @@ impl Tree {
             .id()
     }
 
+    pub fn calculate_layout(&self, space: SpaceId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
+        self.c
+            .layout
+            .get_sizes(&self.forest, &self.windows, self.spaces[&space].id(), frame)
+    }
+
     fn dispatch_event(&mut self, event: TreeEvent) {
         self.c.dispatch_event(&self.forest, event);
     }
@@ -109,6 +126,7 @@ impl Drop for Tree {
 impl Components {
     fn dispatch_event(&mut self, forest: &Forest, event: TreeEvent) {
         self.selection.handle_event(forest, event);
+        self.layout.handle_event(forest, event);
     }
 }
 
