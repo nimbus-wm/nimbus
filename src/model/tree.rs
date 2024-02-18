@@ -8,7 +8,7 @@ use crate::{
     screen::SpaceId,
 };
 
-use super::selection::Selection;
+use super::{node, selection::Selection};
 
 /// The layout tree.
 ///
@@ -47,9 +47,8 @@ impl Tree {
     }
 
     pub fn add_window(&mut self, space: SpaceId, wid: WindowId) -> NodeId {
-        let node = self.space(space).push_back(&mut self.forest);
+        let node = self.space(space).push_back(&mut self.forest, &mut self.c);
         self.windows.insert(node, wid);
-        self.dispatch_event(TreeEvent::AddedToParent(node));
         node
     }
 
@@ -64,9 +63,7 @@ impl Tree {
     pub fn retain_windows(&mut self, mut predicate: impl FnMut(&WindowId) -> bool) {
         self.windows.retain(|node, wid| {
             if !predicate(wid) {
-                self.c.dispatch_event(&self.forest, TreeEvent::RemovingFromParent(node));
-                node.remove(&mut self.forest);
-                self.c.dispatch_event(&self.forest, TreeEvent::RemovedFromTree(node));
+                node.remove(&mut self.forest, &mut self.c);
                 return false;
             }
             true
@@ -107,5 +104,19 @@ impl Drop for Tree {
 impl Components {
     fn dispatch_event(&mut self, forest: &Forest, event: TreeEvent) {
         self.selection.handle_event(forest, event);
+    }
+}
+
+impl node::Observer for Components {
+    fn added_to_parent(&mut self, forest: &Forest, node: NodeId) {
+        self.dispatch_event(forest, TreeEvent::AddedToParent(node))
+    }
+
+    fn removing_from_parent(&mut self, forest: &Forest, node: NodeId) {
+        self.dispatch_event(forest, TreeEvent::RemovingFromParent(node))
+    }
+
+    fn removed_from_tree(&mut self, forest: &Forest, node: NodeId) {
+        self.dispatch_event(forest, TreeEvent::RemovedFromTree(node))
     }
 }

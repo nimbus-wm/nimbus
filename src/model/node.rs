@@ -42,8 +42,8 @@ impl OwnedNode {
     }
 
     #[track_caller]
-    pub fn remove(&mut self, map: &mut Forest) {
-        self.0.take().unwrap().remove(map)
+    pub fn remove(&mut self, map: &mut Forest, obs: &mut impl Observer) {
+        self.0.take().unwrap().remove(map, obs)
     }
 }
 
@@ -107,38 +107,58 @@ impl NodeId {
     }
 }
 
+pub trait Observer {
+    fn added_to_parent(&mut self, forest: &Forest, node: NodeId);
+    fn removing_from_parent(&mut self, forest: &Forest, node: NodeId);
+    fn removed_from_tree(&mut self, forest: &Forest, node: NodeId);
+}
+
+#[derive(Clone, Copy)]
+pub struct NoopObserver;
+impl Observer for NoopObserver {
+    fn added_to_parent(&mut self, _forest: &Forest, _node: NodeId) {}
+    fn removing_from_parent(&mut self, _forest: &Forest, _node: NodeId) {}
+    fn removed_from_tree(&mut self, _forest: &Forest, _node: NodeId) {}
+}
+pub const NOOP: NoopObserver = NoopObserver;
+
 impl NodeId {
     #[track_caller]
-    pub(super) fn push_back(self, map: &mut Forest) -> NodeId {
+    pub(super) fn push_back(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
         new.link_under_back(self, map);
+        obs.added_to_parent(&map, new);
         new
     }
 
     #[track_caller]
-    pub(super) fn push_front(self, map: &mut Forest) -> NodeId {
+    pub(super) fn push_front(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
         new.link_under_front(self, map);
+        obs.added_to_parent(&map, new);
         new
     }
 
     #[track_caller]
-    pub(super) fn insert_before(self, map: &mut Forest) -> NodeId {
+    pub(super) fn insert_before(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
         new.link_before(self, map);
+        obs.added_to_parent(&map, new);
         new
     }
 
     #[track_caller]
-    pub(super) fn insert_after(self, map: &mut Forest) -> NodeId {
+    pub(super) fn insert_after(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
         new.link_after(self, map);
+        obs.added_to_parent(&map, new);
         new
     }
 
     #[track_caller]
-    pub(super) fn remove(self, map: &mut Forest) {
-        map.remove(self).unwrap().unlink(self, map).delete_recursive(map);
+    pub(super) fn remove(self, map: &mut Forest, obs: &mut impl Observer) {
+        obs.removing_from_parent(&map, self);
+        map.remove(self).unwrap().unlink(self, map).delete_recursive(map, obs);
     }
 }
 
@@ -238,11 +258,12 @@ impl Node {
     }
 
     #[track_caller]
-    fn delete_recursive(&self, map: &mut Forest) {
+    fn delete_recursive(&self, map: &mut Forest, obs: &mut impl Observer) {
         let mut iter = self.first_child;
         while let Some(child) = iter {
             let node = map.remove(child).unwrap();
-            node.delete_recursive(map);
+            obs.removed_from_tree(&map, child);
+            node.delete_recursive(map, obs);
             iter = node.next_sibling;
         }
     }
@@ -276,6 +297,7 @@ impl<'a> Iterator for NodeRevIterator<'a> {
     }
 }
 
+#[allow(const_item_mutation)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,10 +326,10 @@ mod tests {
     impl Drop for TestTree {
         fn drop(&mut self) {
             if !self.tree.is_removed() {
-                self.tree.remove(&mut self.map);
+                self.tree.remove(&mut self.map, &mut NOOP);
             }
             if !self.other_tree.is_removed() {
-                self.other_tree.remove(&mut self.map);
+                self.other_tree.remove(&mut self.map, &mut NOOP);
             }
         }
     }
@@ -320,11 +342,11 @@ mod tests {
 
             let tree = OwnedNode::new_root_in(m, "tree");
             let root = tree.id();
-            let child1 = root.push_back(m);
-            let child2 = root.push_back(m);
-            let child3 = root.push_back(m);
+            let child1 = root.push_back(m, &mut NOOP);
+            let child2 = root.push_back(m, &mut NOOP);
+            let child3 = root.push_back(m, &mut NOOP);
 
-            let gc1 = child2.push_back(m);
+            let gc1 = child2.push_back(m, &mut NOOP);
             let other_tree = OwnedNode::new_root_in(m, "other_tree");
             let other_root = other_tree.id();
 
@@ -395,9 +417,9 @@ mod tests {
     #[test]
     fn push_front() {
         let mut t = TestTree::new();
-        let child0 = t.root.push_front(&mut t.map);
-        let gc0 = t.child2.push_front(&mut t.map);
-        let gc2 = t.child3.push_front(&mut t.map);
+        let child0 = t.root.push_front(&mut t.map, &mut NOOP);
+        let gc0 = t.child2.push_front(&mut t.map, &mut NOOP);
+        let gc2 = t.child3.push_front(&mut t.map, &mut NOOP);
         t.assert_children_are([child0, t.child1, t.child2, t.child3], t.root);
         t.assert_children_are([], t.child1);
         t.assert_children_are([gc0, t.gc1], t.child2);
@@ -409,9 +431,9 @@ mod tests {
     #[test]
     fn push_back() {
         let mut t = TestTree::new();
-        let child4 = t.root.push_back(&mut t.map);
-        let gc0 = t.child1.push_back(&mut t.map);
-        let gc2 = t.child2.push_back(&mut t.map);
+        let child4 = t.root.push_back(&mut t.map, &mut NOOP);
+        let gc0 = t.child1.push_back(&mut t.map, &mut NOOP);
+        let gc2 = t.child2.push_back(&mut t.map, &mut NOOP);
         t.assert_children_are([t.child1, t.child2, t.child3, child4], t.root);
         t.assert_children_are([gc0], t.child1);
         t.assert_children_are([t.gc1, gc2], t.child2);
@@ -423,10 +445,10 @@ mod tests {
     #[test]
     fn insert_before() {
         let mut t = TestTree::new();
-        let child0 = t.child1.insert_before(&mut t.map);
-        let child1_5 = t.child2.insert_before(&mut t.map);
-        let child2_5 = t.child3.insert_before(&mut t.map);
-        let gc0 = t.gc1.insert_before(&mut t.map);
+        let child0 = t.child1.insert_before(&mut t.map, &mut NOOP);
+        let child1_5 = t.child2.insert_before(&mut t.map, &mut NOOP);
+        let child2_5 = t.child3.insert_before(&mut t.map, &mut NOOP);
+        let gc0 = t.gc1.insert_before(&mut t.map, &mut NOOP);
         t.assert_children_are(
             [child0, t.child1, child1_5, t.child2, child2_5, t.child3],
             t.root,
@@ -443,10 +465,10 @@ mod tests {
     #[test]
     fn insert_after() {
         let mut t = TestTree::new();
-        let child1_5 = t.child1.insert_after(&mut t.map);
-        let child2_5 = t.child2.insert_after(&mut t.map);
-        let child4 = t.child3.insert_after(&mut t.map);
-        let gc2 = t.gc1.insert_after(&mut t.map);
+        let child1_5 = t.child1.insert_after(&mut t.map, &mut NOOP);
+        let child2_5 = t.child2.insert_after(&mut t.map, &mut NOOP);
+        let child4 = t.child3.insert_after(&mut t.map, &mut NOOP);
+        let gc2 = t.gc1.insert_after(&mut t.map, &mut NOOP);
         t.assert_children_are(
             [t.child1, child1_5, t.child2, child2_5, t.child3, child4],
             t.root,
@@ -464,24 +486,24 @@ mod tests {
     fn remove() {
         let mut t = TestTree::new();
 
-        t.child2.remove(&mut t.map);
+        t.child2.remove(&mut t.map, &mut NOOP);
         t.assert_children_are([t.child1, t.child3], t.root);
         assert!(!t.map.contains_key(t.child2));
         assert!(!t.map.contains_key(t.gc1));
 
-        t.child3.remove(&mut t.map);
+        t.child3.remove(&mut t.map, &mut NOOP);
         t.assert_children_are([t.child1], t.root);
         assert!(!t.map.contains_key(t.child3));
 
-        t.child1.remove(&mut t.map);
+        t.child1.remove(&mut t.map, &mut NOOP);
         t.assert_children_are([], t.root);
         assert!(!t.map.contains_key(t.child1));
 
         assert!(t.map.contains_key(t.root));
         assert!(t.map.contains_key(t.other_root));
-        t.tree.remove(&mut t.map);
+        t.tree.remove(&mut t.map, &mut NOOP);
         assert!(!t.map.contains_key(t.root));
-        t.other_tree.remove(&mut t.map);
+        t.other_tree.remove(&mut t.map, &mut NOOP);
         assert!(!t.map.contains_key(t.other_root));
     }
 }
