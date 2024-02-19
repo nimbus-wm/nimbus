@@ -22,6 +22,41 @@ pub enum LayoutKind {
     Stacked,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Orientation {
+    Horizontal,
+    Vertical,
+}
+
+impl LayoutKind {
+    pub(super) fn orientation(self) -> Orientation {
+        use LayoutKind::*;
+        match self {
+            Horizontal | Tabbed => Orientation::Horizontal,
+            Vertical | Stacked => Orientation::Vertical,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Direction {
+    pub(super) fn orientation(self) -> Orientation {
+        use Direction::*;
+        match self {
+            Left | Right => Orientation::Horizontal,
+            Up | Down => Orientation::Vertical,
+        }
+    }
+}
+
 #[derive(Default)]
 struct LayoutInfo {
     /// The share of the parent's size taken up by this node; 1.0 by default.
@@ -49,8 +84,12 @@ impl Layout {
         }
     }
 
-    pub(super) fn set_layout(&mut self, _forest: &Forest, node: NodeId, kind: LayoutKind) {
+    pub(super) fn set_kind(&mut self, node: NodeId, kind: LayoutKind) {
         self.info[node].kind = kind;
+    }
+
+    pub(super) fn kind(&self, node: NodeId) -> LayoutKind {
+        self.info[node].kind
     }
 
     pub(super) fn get_sizes(

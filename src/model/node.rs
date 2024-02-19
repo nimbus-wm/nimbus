@@ -105,6 +105,16 @@ impl NodeId {
     pub fn prev_sibling(self, map: &Forest) -> Option<NodeId> {
         map[self].prev_sibling
     }
+
+    #[track_caller]
+    pub fn first_child(self, map: &Forest) -> Option<NodeId> {
+        map[self].first_child
+    }
+
+    #[track_caller]
+    pub fn last_child(self, map: &Forest) -> Option<NodeId> {
+        map[self].last_child
+    }
 }
 
 pub trait Observer {

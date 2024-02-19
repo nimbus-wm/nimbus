@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    layout::{Layout, LayoutKind},
+    layout::{Direction, Layout, LayoutKind},
     node,
     selection::Selection,
 };
@@ -82,7 +82,7 @@ impl Tree {
 
     pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
         let node = parent.push_back(&mut self.forest, &mut self.c);
-        self.c.layout.set_layout(&self.forest, node, kind);
+        self.c.layout.set_kind(node, kind);
         node
     }
 
@@ -109,6 +109,39 @@ impl Tree {
         self.c
             .layout
             .get_sizes(&self.forest, &self.windows, self.spaces[&space].id(), frame)
+    }
+
+    pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
+        // Traversal goes up the tree, over, then down.
+        let forest = &self.forest;
+        let selection = &self.c.selection;
+        let mut node = from;
+        node = loop {
+            let Some(parent) = node.parent(forest) else { return None };
+            if self.c.layout.kind(parent).orientation() == direction.orientation() {
+                let sibling = match direction {
+                    Direction::Up | Direction::Left => node.prev_sibling(forest),
+                    Direction::Down | Direction::Right => node.next_sibling(forest),
+                };
+                if let Some(over) = sibling {
+                    break over;
+                }
+            }
+            node = parent;
+        };
+        loop {
+            let child = if self.c.layout.kind(node).orientation() == direction.orientation() {
+                match direction {
+                    Direction::Up | Direction::Left => node.first_child(forest),
+                    Direction::Down | Direction::Right => node.last_child(forest),
+                }
+            } else {
+                selection.local_selection(forest, node).or_else(|| node.first_child(forest))
+            };
+            let Some(child) = child else { break };
+            node = child;
+        }
+        Some(node)
     }
 
     fn dispatch_event(&mut self, event: TreeEvent) {
@@ -141,5 +174,56 @@ impl node::Observer for Components {
 
     fn removed_from_tree(&mut self, forest: &Forest, node: NodeId) {
         self.dispatch_event(forest, TreeEvent::RemovedFromTree(node))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{model::Tree, screen::SpaceId};
+
+    struct TestTree {
+        tree: Tree,
+        root: NodeId,
+    }
+
+    #[test]
+    fn traverse() {
+        let mut tree = Tree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(a2, WindowId::new(2, 2));
+        let b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        tree.select(b2);
+
+        use Direction::*;
+        assert_eq!(tree.traverse(a1, Left), None);
+        assert_eq!(tree.traverse(a1, Up), None);
+        assert_eq!(tree.traverse(a1, Down), None);
+        assert_eq!(tree.traverse(a1, Right), Some(b2));
+        assert_eq!(tree.traverse(a2, Left), Some(a1));
+        assert_eq!(tree.traverse(a2, Up), None);
+        assert_eq!(tree.traverse(a2, Down), None);
+        assert_eq!(tree.traverse(a2, Right), Some(a3));
+        assert_eq!(tree.traverse(b1, Left), Some(a1));
+        assert_eq!(tree.traverse(b1, Up), None);
+        assert_eq!(tree.traverse(b1, Down), Some(b2));
+        assert_eq!(tree.traverse(b1, Right), Some(a3));
+        assert_eq!(tree.traverse(b2, Left), Some(a1));
+        assert_eq!(tree.traverse(b2, Up), Some(b1));
+        assert_eq!(tree.traverse(b2, Down), Some(b3));
+        assert_eq!(tree.traverse(b2, Right), Some(a3));
+        assert_eq!(tree.traverse(b3, Left), Some(a1));
+        assert_eq!(tree.traverse(b3, Up), Some(b2));
+        assert_eq!(tree.traverse(b3, Down), None);
+        assert_eq!(tree.traverse(b3, Right), Some(a3));
+        assert_eq!(tree.traverse(a3, Left), Some(b2));
+        assert_eq!(tree.traverse(a3, Up), None);
+        assert_eq!(tree.traverse(a3, Down), None);
+        assert_eq!(tree.traverse(a3, Right), None);
     }
 }

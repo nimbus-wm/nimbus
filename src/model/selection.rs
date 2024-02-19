@@ -14,6 +14,12 @@ impl Selection {
         self.current_selection
     }
 
+    pub(super) fn local_selection(&self, forest: &Forest, node: NodeId) -> Option<NodeId> {
+        let result = self.selected_child.get(node).copied().flatten();
+        debug_assert!(result.is_none() || result.unwrap().parent(forest) == Some(node));
+        result
+    }
+
     pub(super) fn select(&mut self, forest: &Forest, mut selection: Option<NodeId>) {
         self.current_selection = selection;
         while let Some(node) = selection {
