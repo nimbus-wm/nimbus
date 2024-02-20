@@ -57,6 +57,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ascii_tree"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca6c635b3aa665c649ad1415f1573c85957dfa47690ec27aebe7ec17efe3c643"
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1055,6 +1061,7 @@ version = "0.1.0"
 dependencies = [
  "accessibility",
  "accessibility-sys",
+ "ascii_tree",
  "bitflags 2.4.1",
  "core-foundation",
  "core-graphics 0.23.1",

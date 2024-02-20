@@ -112,23 +112,18 @@ impl Tree {
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        // Traversal goes up the tree, over, then down.
         let forest = &self.forest;
         let selection = &self.c.selection;
-        let mut node = from;
-        node = loop {
-            let Some(parent) = node.parent(forest) else { return None };
-            if self.c.layout.kind(parent).orientation() == direction.orientation() {
-                let sibling = match direction {
-                    Direction::Up | Direction::Left => node.prev_sibling(forest),
-                    Direction::Down | Direction::Right => node.next_sibling(forest),
-                };
-                if let Some(over) = sibling {
-                    break over;
-                }
-            }
-            node = parent;
+        let Some(mut node) =
+            // Keep going up...
+            from.ancestors(forest)
+            // ...until we can move in the desired direction, then move.
+            .flat_map(|n| self.move_over(n, direction)).next()
+        else {
+            return None;
         };
+        // Descend as far down as we can go, keeping close to the direction we're
+        // moving from.
         loop {
             let child = if self.c.layout.kind(node).orientation() == direction.orientation() {
                 match direction {
@@ -136,7 +131,7 @@ impl Tree {
                     Direction::Down | Direction::Right => node.last_child(forest),
                 }
             } else {
-                selection.local_selection(forest, node).or_else(|| node.first_child(forest))
+                selection.local_selection(forest, node).or(node.first_child(forest))
             };
             let Some(child) = child else { break };
             node = child;
@@ -144,8 +139,76 @@ impl Tree {
         Some(node)
     }
 
-    fn dispatch_event(&mut self, event: TreeEvent) {
-        self.c.dispatch_event(&self.forest, event);
+    fn move_over(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
+        let Some(parent) = from.parent(&self.forest) else {
+            return None;
+        };
+        if self.c.layout.kind(parent).orientation() == direction.orientation() {
+            match direction {
+                Direction::Up | Direction::Left => from.prev_sibling(&self.forest),
+                Direction::Down | Direction::Right => from.next_sibling(&self.forest),
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
+        // Pick an ancestor to resize that has a sibling in the given direction.
+        let can_resize = |&node: &NodeId| -> bool {
+            let Some(parent) = node.parent(&self.forest) else {
+                return false;
+            };
+            !self.c.layout.kind(parent).is_group() && self.move_over(node, direction).is_some()
+        };
+        let Some(resizing_node) = node.ancestors(&self.forest).filter(can_resize).next() else {
+            return false;
+        };
+        let sibling = self.move_over(resizing_node, direction).unwrap();
+
+        // Compute the share of resizing_node's parent that needs to be taken
+        // from the sibling.
+        let exchange_rate = resizing_node.ancestors(&self.forest).skip(1).fold(1.0, |r, node| {
+            match node.parent(&self.forest) {
+                Some(parent)
+                    if self.c.layout.kind(parent).orientation() == direction.orientation()
+                        && !self.c.layout.kind(parent).is_group() =>
+                {
+                    r * self.c.layout.proportion(&self.forest, node).unwrap()
+                }
+                _ => r,
+            }
+        });
+        let local_ratio = f64::from(screen_ratio)
+            * self.c.layout.total(resizing_node.parent(&self.forest).unwrap())
+            / exchange_rate;
+        self.c
+            .layout
+            .take_share(&self.forest, resizing_node, sibling, local_ratio as f32);
+
+        true
+    }
+
+    pub fn draw_tree(&self, root: NodeId) -> String {
+        let tree = self.get_ascii_tree(root);
+        let mut out = String::new();
+        ascii_tree::write_tree(&mut out, &tree).unwrap();
+        out
+    }
+
+    fn get_ascii_tree(&self, node: NodeId) -> ascii_tree::Tree {
+        let desc = format!("{node:?} {layout:?}", layout = self.c.layout.debug(node));
+        let children: Vec<_> =
+            node.children(&self.forest).map(|c| self.get_ascii_tree(c)).collect();
+        if children.is_empty() {
+            let lines = [
+                Some(desc),
+                self.windows.get(node).map(|wid| format!("{wid:?}")),
+            ];
+            ascii_tree::Tree::Leaf(lines.into_iter().flatten().collect())
+        } else {
+            ascii_tree::Tree::Node(desc, children)
+        }
     }
 }
 
@@ -179,6 +242,11 @@ impl node::Observer for Components {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use icrate::Foundation::{CGPoint, CGSize};
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::{model::Tree, screen::SpaceId};
 
@@ -225,5 +293,126 @@ mod tests {
         assert_eq!(tree.traverse(a3, Up), None);
         assert_eq!(tree.traverse(a3, Down), None);
         assert_eq!(tree.traverse(a3, Right), None);
+    }
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
+        CGRect::new(
+            CGPoint::new(f64::from(x), f64::from(y)),
+            CGSize::new(f64::from(w), f64::from(h)),
+        )
+    }
+
+    #[track_caller]
+    fn assert_frames_are(
+        left: impl IntoIterator<Item = (WindowId, CGRect)>,
+        right: impl IntoIterator<Item = (WindowId, CGRect)>,
+    ) {
+        // Use BTreeMap for dedup and sorting.
+        let left: BTreeMap<_, _> = left.into_iter().collect();
+        let right: BTreeMap<_, _> = right.into_iter().collect();
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn resize() {
+        // ┌─────┬─────┬─────┐
+        // │     │ b1  │     │
+        // │     +─────+     │
+        // │ a1  │c1│c2│  a3 │
+        // │     +─────+     │
+        // │     │ b3  │     │
+        // └─────┴─────┴─────┘
+        let mut tree = Tree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b2 = tree.add_container(a2, LayoutKind::Horizontal);
+        let _c1 = tree.add_window(b2, WindowId::new(3, 1));
+        let c2 = tree.add_window(b2, WindowId::new(3, 2));
+        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let _a3 = tree.add_window(root, WindowId::new(1, 3));
+        let screen = rect(0, 0, 3000, 3000);
+        println!("{}", tree.draw_tree(root));
+
+        let orig = vec![
+            (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
+            (WindowId::new(2, 1), rect(1000, 0, 1000, 1000)),
+            (WindowId::new(3, 1), rect(1000, 1000, 500, 1000)),
+            (WindowId::new(3, 2), rect(1500, 1000, 500, 1000)),
+            (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
+            (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+        ];
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.resize(c2, 0.01, Direction::Right);
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
+                (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
+                (WindowId::new(3, 1), rect(1000, 1000, 515, 1000)),
+                (WindowId::new(3, 2), rect(1515, 1000, 515, 1000)),
+                (WindowId::new(2, 3), rect(1000, 2000, 1030, 1000)),
+                (WindowId::new(1, 3), rect(2030, 0, 970, 3000)),
+            ],
+        );
+
+        tree.resize(c2, -0.01, Direction::Right);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.resize(c2, 0.01, Direction::Left);
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
+                (WindowId::new(2, 1), rect(1000, 0, 1000, 1000)),
+                (WindowId::new(3, 1), rect(1000, 1000, 470, 1000)),
+                (WindowId::new(3, 2), rect(1470, 1000, 530, 1000)),
+                (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
+                (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+            ],
+        );
+
+        tree.resize(c2, -0.01, Direction::Left);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.resize(b2, 0.01, Direction::Right);
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
+                (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
+                (WindowId::new(3, 1), rect(1000, 1000, 515, 1000)),
+                (WindowId::new(3, 2), rect(1515, 1000, 515, 1000)),
+                (WindowId::new(2, 3), rect(1000, 2000, 1030, 1000)),
+                (WindowId::new(1, 3), rect(2030, 0, 970, 3000)),
+            ],
+        );
+
+        tree.resize(b2, -0.01, Direction::Right);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.resize(a1, 0.01, Direction::Right);
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 1030, 3000)),
+                (WindowId::new(2, 1), rect(1030, 0, 970, 1000)),
+                (WindowId::new(3, 1), rect(1030, 1000, 485, 1000)),
+                (WindowId::new(3, 2), rect(1515, 1000, 485, 1000)),
+                (WindowId::new(2, 3), rect(1030, 2000, 970, 1000)),
+                (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+            ],
+        );
+
+        tree.resize(a1, -0.01, Direction::Right);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.resize(a1, 0.01, Direction::Left);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        tree.resize(a1, -0.01, Direction::Left);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
     }
 }

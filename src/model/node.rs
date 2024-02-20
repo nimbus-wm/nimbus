@@ -96,6 +96,31 @@ impl NodeId {
         NodeRevIterator { cur: map[self].last_child, map }
     }
 
+    /// Returns an iterator over all ancestors of the current node, including itself.
+    #[track_caller]
+    pub fn ancestors(self, map: &Forest) -> impl Iterator<Item = NodeId> + '_ {
+        let mut next = Some(self);
+        std::iter::from_fn(move || {
+            let node = next;
+            next = next.and_then(|n| map[n].parent);
+            node
+        })
+    }
+
+    /// Returns an iterator over all ancestors of the current node, including itself.
+    #[track_caller]
+    pub fn ancestors_with_parent(
+        self,
+        map: &Forest,
+    ) -> impl Iterator<Item = (NodeId, Option<NodeId>)> + '_ {
+        let mut next = Some(self);
+        std::iter::from_fn(move || {
+            let node = next;
+            next = next.and_then(|n| map[n].parent);
+            node.map(|n| (n, next))
+        })
+    }
+
     #[track_caller]
     pub fn next_sibling(self, map: &Forest) -> Option<NodeId> {
         map[self].next_sibling
@@ -422,6 +447,17 @@ mod tests {
         assert!(t.get_children_rev(t.gc1).is_empty());
         assert!(t.get_children_rev(t.child3).is_empty());
         assert!(t.get_children_rev(t.other_root).is_empty());
+    }
+
+    #[test]
+    fn ancestors() {
+        let t = TestTree::new();
+        let ancestors = |node: NodeId| node.ancestors(&t.map).collect::<Vec<_>>();
+        assert_eq!([t.child1, t.root], *ancestors(t.child1));
+        assert_eq!([t.gc1, t.child2, t.root], *ancestors(t.gc1));
+        assert_eq!([t.child2, t.root], *ancestors(t.child2));
+        assert_eq!([t.root], *ancestors(t.root));
+        assert_eq!([t.other_root], *ancestors(t.other_root));
     }
 
     #[test]

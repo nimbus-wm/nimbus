@@ -1,11 +1,12 @@
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use core::fmt::Debug;
 
-use crate::{app::WindowId, util::Round};
+use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
 use super::{
     node::{Forest, NodeId},
     tree::{TreeEvent, Windows},
 };
+use crate::{app::WindowId, util::Round};
 
 #[derive(Default)]
 pub struct Layout {
@@ -36,6 +37,14 @@ impl LayoutKind {
             Vertical | Stacked => Orientation::Vertical,
         }
     }
+
+    pub(super) fn is_group(self) -> bool {
+        use LayoutKind::*;
+        match self {
+            Stacked | Tabbed => true,
+            _ => false,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -57,7 +66,7 @@ impl Direction {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct LayoutInfo {
     /// The share of the parent's size taken up by this node; 1.0 by default.
     size: f32,
@@ -90,6 +99,27 @@ impl Layout {
 
     pub(super) fn kind(&self, node: NodeId) -> LayoutKind {
         self.info[node].kind
+    }
+
+    pub(super) fn proportion(&self, forest: &Forest, node: NodeId) -> Option<f64> {
+        let Some(parent) = node.parent(forest) else { return None };
+        Some(f64::from(self.info[node].size) / f64::from(self.info[parent].total))
+    }
+
+    pub(super) fn total(&self, node: NodeId) -> f64 {
+        f64::from(self.info[node].total)
+    }
+
+    pub(super) fn take_share(&mut self, forest: &Forest, node: NodeId, from: NodeId, share: f32) {
+        assert_eq!(node.parent(forest), from.parent(forest));
+        let share = share.min(self.info[from].size);
+        let share = share.max(-self.info[node].size);
+        self.info[from].size -= share;
+        self.info[node].size += share;
+    }
+
+    pub(super) fn debug(&self, node: NodeId) -> impl Debug + '_ {
+        &self.info[node]
     }
 
     pub(super) fn get_sizes(
