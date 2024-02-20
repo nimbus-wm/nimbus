@@ -189,6 +189,52 @@ impl Tree {
         true
     }
 
+    /// Call this during a user resize to have the model respond appropriately.
+    ///
+    /// Only two edges are allowed to change at a time; otherwise, this function
+    /// will panic.
+    pub fn set_frame_from_resize(
+        &mut self,
+        node: NodeId,
+        old_frame: CGRect,
+        new_frame: CGRect,
+        screen: CGRect,
+    ) {
+        let mut count = 0;
+        let mut check_and_resize = |direction, delta, whole| {
+            if delta != 0.0 {
+                count += 1;
+                self.resize(node, f64::from(delta) / f64::from(whole), direction);
+            }
+        };
+        check_and_resize(
+            Direction::Left,
+            old_frame.min().x - new_frame.min().x,
+            screen.size.width,
+        );
+        check_and_resize(
+            Direction::Right,
+            new_frame.max().x - old_frame.max().x,
+            screen.size.width,
+        );
+        check_and_resize(
+            Direction::Up,
+            old_frame.min().y - new_frame.min().y,
+            screen.size.height,
+        );
+        check_and_resize(
+            Direction::Down,
+            new_frame.max().y - old_frame.max().y,
+            screen.size.height,
+        );
+        if count > 2 {
+            panic!(
+                "Only resizing in 2 directions is supported, but was asked \
+                to resize from {old_frame:?} to {new_frame:?}"
+            );
+        }
+    }
+
     pub fn draw_tree(&self, root: NodeId) -> String {
         let tree = self.get_ascii_tree(root);
         let mut out = String::new();
@@ -346,6 +392,9 @@ mod tests {
         ];
         assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
 
+        // We may want to have a mode that adjusts sizes so that only the
+        // requested edge is resized. Notice that the width is redistributed
+        // between c1 and c2 here.
         tree.resize(c2, 0.01, Direction::Right);
         assert_frames_are(
             tree.calculate_layout(space, screen),
@@ -414,5 +463,77 @@ mod tests {
         assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
         tree.resize(a1, -0.01, Direction::Left);
         assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+    }
+
+    #[test]
+    fn set_frame_from_resize() {
+        // ┌─────┬─────┬─────┐
+        // │     │ b1  │     │
+        // │     +─────+     │
+        // │ a1  │c1│c2│  a3 │
+        // │     +─────+     │
+        // │     │ b3  │     │
+        // └─────┴─────┴─────┘
+        let mut tree = Tree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b2 = tree.add_container(a2, LayoutKind::Horizontal);
+        let c1 = tree.add_window(b2, WindowId::new(3, 1));
+        let _c2 = tree.add_window(b2, WindowId::new(3, 2));
+        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let _a3 = tree.add_window(root, WindowId::new(1, 3));
+        let screen = rect(0, 0, 3000, 3000);
+        println!("{}", tree.draw_tree(root));
+
+        let orig = vec![
+            (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
+            (WindowId::new(2, 1), rect(1000, 0, 1000, 1000)),
+            (WindowId::new(3, 1), rect(1000, 1000, 500, 1000)),
+            (WindowId::new(3, 2), rect(1500, 1000, 500, 1000)),
+            (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
+            (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+        ];
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.set_frame_from_resize(a1, rect(0, 0, 1000, 3000), rect(0, 0, 1010, 3000), screen);
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 1010, 3000)),
+                (WindowId::new(2, 1), rect(1010, 0, 990, 1000)),
+                (WindowId::new(3, 1), rect(1010, 1000, 495, 1000)),
+                (WindowId::new(3, 2), rect(1505, 1000, 495, 1000)),
+                (WindowId::new(2, 3), rect(1010, 2000, 990, 1000)),
+                (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+            ],
+        );
+
+        tree.set_frame_from_resize(a1, rect(0, 0, 1010, 3000), rect(0, 0, 1000, 3000), screen);
+        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+
+        tree.set_frame_from_resize(
+            c1,
+            rect(1000, 1000, 500, 1000),
+            rect(900, 900, 600, 1100),
+            screen,
+        );
+        assert_frames_are(
+            tree.calculate_layout(space, screen),
+            [
+                (WindowId::new(1, 1), rect(0, 0, 900, 3000)),
+                (WindowId::new(2, 1), rect(900, 0, 1100, 900)),
+                // This may not be what we actually want; notice the width
+                // increase is redistributed across c1 and c2. In any case it's
+                // confusing to have something called set_frame that results in
+                // a different frame than requested..
+                (WindowId::new(3, 1), rect(900, 900, 550, 1100)),
+                (WindowId::new(3, 2), rect(1450, 900, 550, 1100)),
+                (WindowId::new(2, 3), rect(900, 2000, 1100, 1000)),
+                (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
+            ],
+        );
     }
 }
