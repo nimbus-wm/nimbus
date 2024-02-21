@@ -34,7 +34,6 @@ fn main() {
         .init();
     install_panic_hook();
     let events_tx = reactor::Reactor::spawn();
-    app::spawn_initial_app_threads(events_tx.clone());
     let _mgr = register_hotkeys(events_tx.clone());
     notification_center::watch_for_notifications(events_tx)
 }

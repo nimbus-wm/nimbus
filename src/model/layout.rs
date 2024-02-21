@@ -66,6 +66,32 @@ impl Direction {
     }
 }
 
+// TODO:
+//
+// It'd be much easier to only move specific edges if we keep the min edge
+// of each child (relative to the parent, from 0 to 1). Then we just need
+// to adjust this edge, and preserve the invariant that no edge is greater
+// than the following edge.
+//
+// Calculating the size of a single node is easy and just needs to look at the
+// next sibling.
+//
+// Proportional changes would no longer happen by default, but should still be
+// relatively easy. Just keep a count of children, and we can adjust each child's
+// size in a single scan.
+//
+// This seems *way* simpler than trying to fix up a proportionate representation
+// to create a single edge change.
+//
+// Actually, on second thought, this would still create proportional resizes of
+// children. To prevent that we would need the edges to be absolute (relative
+// to the root) and traverse *recursively* when one is modified, fixing up any
+// edges that violate our invariant.
+//
+// This might still be overall simpler than the resize logic would need to be
+// for the proportionate case, but it feels more like we are distributing the
+// complexity rather than reducing it.
+
 #[derive(Default, Debug)]
 struct LayoutInfo {
     /// The share of the parent's size taken up by this node; 1.0 by default.
@@ -79,15 +105,18 @@ struct LayoutInfo {
 impl Layout {
     pub(super) fn handle_event(&mut self, forest: &Forest, event: TreeEvent) {
         match event {
+            TreeEvent::AddedToForest(node) => {
+                self.info.insert(node, LayoutInfo::default());
+            }
             TreeEvent::AddedToParent(node) => {
                 let parent = node.parent(forest).unwrap();
-                self.info.entry(node).unwrap().or_insert(LayoutInfo::default()).size = 1.0;
-                self.info.entry(parent).unwrap().or_insert(LayoutInfo::default()).total += 1.0;
+                self.info[node].size = 1.0;
+                self.info[parent].total += 1.0;
             }
             TreeEvent::RemovingFromParent(node) => {
                 self.info[node.parent(forest).unwrap()].total -= self.info[node].size;
             }
-            TreeEvent::RemovedFromTree(node) => {
+            TreeEvent::RemovedFromForest(node) => {
                 self.info.remove(node);
             }
         }
@@ -221,7 +250,7 @@ mod tests {
         let _a3 = tree.add_window(root, WindowId::new(1, 4));
 
         let screen = rect(0, 0, 3000, 1000);
-        let mut frames = tree.calculate_layout(space, screen);
+        let mut frames = tree.calculate_layout(root, screen);
         frames.sort_by_key(|&(wid, _)| wid);
         assert_eq!(
             frames,

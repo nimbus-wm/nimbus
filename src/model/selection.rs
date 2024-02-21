@@ -6,6 +6,7 @@ use super::{
 #[derive(Default)]
 pub struct Selection {
     selected_child: slotmap::SecondaryMap<NodeId, Option<NodeId>>,
+    // FIXME: Should be one per root.
     current_selection: Option<NodeId>,
 }
 
@@ -34,9 +35,8 @@ impl Selection {
     pub(super) fn handle_event(&mut self, forest: &Forest, event: TreeEvent) {
         use TreeEvent::*;
         match event {
-            AddedToParent(node) => {
-                self.select(forest, Some(node));
-            }
+            AddedToForest(_node) => {}
+            AddedToParent(_node) => {}
             RemovingFromParent(node) => {
                 let parent = node.parent(forest).unwrap();
                 let alternative = node.next_sibling(forest).or(node.prev_sibling(forest));
@@ -53,7 +53,7 @@ impl Selection {
                     self.current_selection = Some(new_selection);
                 }
             }
-            RemovedFromTree(node) => {
+            RemovedFromForest(node) => {
                 self.selected_child.remove(node);
             }
         }
@@ -73,11 +73,9 @@ mod tests {
         let mut tree = Tree::new();
         let root = tree.space(SpaceId::new(1));
         let n1 = tree.add_window(root, WindowId::new(1, 1));
-        assert_eq!(tree.selection(), Some(n1));
         let n2 = tree.add_window(root, WindowId::new(1, 2));
-        assert_eq!(tree.selection(), Some(n2));
         let n3 = tree.add_window(root, WindowId::new(1, 3));
-        assert_eq!(tree.selection(), Some(n3));
+        assert_eq!(tree.selection(), None);
         tree.select(n2);
         assert_eq!(tree.selection(), Some(n2));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 2));

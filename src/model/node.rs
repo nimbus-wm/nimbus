@@ -24,8 +24,10 @@ pub struct OwnedNode(Option<NodeId>, &'static str);
 
 impl OwnedNode {
     /// Creates a new root node.
-    pub fn new_root_in(map: &mut Forest, name: &'static str) -> Self {
-        Self::own(map.insert(Node::default()), name)
+    pub fn new_root_in(map: &mut Forest, name: &'static str, obs: &mut impl Observer) -> Self {
+        let node = map.insert(Node::default());
+        obs.added_to_forest(map, node);
+        Self::own(node, name)
     }
 
     /// Marks a non-root node as owned.
@@ -143,17 +145,22 @@ impl NodeId {
 }
 
 pub trait Observer {
+    // FIXME: We can't guarantee this event will always fire since
+    // forest.insert() is callable by anyone.
+    fn added_to_forest(&mut self, forest: &Forest, node: NodeId);
+
     fn added_to_parent(&mut self, forest: &Forest, node: NodeId);
     fn removing_from_parent(&mut self, forest: &Forest, node: NodeId);
-    fn removed_from_tree(&mut self, forest: &Forest, node: NodeId);
+    fn removed_from_forest(&mut self, forest: &Forest, node: NodeId);
 }
 
 #[derive(Clone, Copy)]
 pub struct NoopObserver;
 impl Observer for NoopObserver {
+    fn added_to_forest(&mut self, _forest: &Forest, _node: NodeId) {}
     fn added_to_parent(&mut self, _forest: &Forest, _node: NodeId) {}
     fn removing_from_parent(&mut self, _forest: &Forest, _node: NodeId) {}
-    fn removed_from_tree(&mut self, _forest: &Forest, _node: NodeId) {}
+    fn removed_from_forest(&mut self, _forest: &Forest, _node: NodeId) {}
 }
 pub const NOOP: NoopObserver = NoopObserver;
 
@@ -161,6 +168,7 @@ impl NodeId {
     #[track_caller]
     pub(super) fn push_back(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
+        obs.added_to_forest(&map, new);
         new.link_under_back(self, map);
         obs.added_to_parent(&map, new);
         new
@@ -169,6 +177,7 @@ impl NodeId {
     #[track_caller]
     pub(super) fn push_front(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
+        obs.added_to_forest(&map, new);
         new.link_under_front(self, map);
         obs.added_to_parent(&map, new);
         new
@@ -177,6 +186,7 @@ impl NodeId {
     #[track_caller]
     pub(super) fn insert_before(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
+        obs.added_to_forest(&map, new);
         new.link_before(self, map);
         obs.added_to_parent(&map, new);
         new
@@ -185,6 +195,7 @@ impl NodeId {
     #[track_caller]
     pub(super) fn insert_after(self, map: &mut Forest, obs: &mut impl Observer) -> NodeId {
         let new = map.insert(Node::default());
+        obs.added_to_forest(&map, new);
         new.link_after(self, map);
         obs.added_to_parent(&map, new);
         new
@@ -297,7 +308,7 @@ impl Node {
         let mut iter = self.first_child;
         while let Some(child) = iter {
             let node = map.remove(child).unwrap();
-            obs.removed_from_tree(&map, child);
+            obs.removed_from_forest(&map, child);
             node.delete_recursive(map, obs);
             iter = node.next_sibling;
         }
@@ -375,14 +386,14 @@ mod tests {
             let mut map = Forest::default();
             let m = &mut map;
 
-            let tree = OwnedNode::new_root_in(m, "tree");
+            let tree = OwnedNode::new_root_in(m, "tree", &mut NOOP);
             let root = tree.id();
             let child1 = root.push_back(m, &mut NOOP);
             let child2 = root.push_back(m, &mut NOOP);
             let child3 = root.push_back(m, &mut NOOP);
 
             let gc1 = child2.push_back(m, &mut NOOP);
-            let other_tree = OwnedNode::new_root_in(m, "other_tree");
+            let other_tree = OwnedNode::new_root_in(m, "other_tree", &mut NOOP);
             let other_root = other_tree.id();
 
             TestTree {

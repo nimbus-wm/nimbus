@@ -157,7 +157,7 @@ pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
         }
     }
 
-    let handler = NotificationHandler::new(events_tx);
+    let handler = NotificationHandler::new(events_tx.clone());
 
     // SAFETY: Selector must have signature fn(&self, &NSNotification)
     let register_unsafe = |selector, notif_name, center: &Id<NSNotificationCenter>, object| unsafe {
@@ -213,5 +213,6 @@ pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
     if let Some(app) = unsafe { workspace.frontmostApplication() } {
         handler.send_event(Event::ApplicationGloballyActivated(app.pid()));
     }
+    app::spawn_initial_app_threads(events_tx);
     CFRunLoop::run_current();
 }

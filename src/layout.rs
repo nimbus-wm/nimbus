@@ -2,13 +2,17 @@ use std::iter;
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use rand::seq::SliceRandom;
+use tracing::debug;
 
-use crate::app::WindowId;
+use crate::{
+    app::WindowId,
+    model::{Direction, Tree},
+    screen::SpaceId,
+};
 
 pub struct LayoutManager {
     current_layout: Layout,
-    window_order: Vec<WindowId>,
-    main_window: Option<WindowId>,
+    tree: Tree,
 }
 
 #[allow(dead_code)]
@@ -33,7 +37,7 @@ pub enum LayoutCommand {
 
 #[derive(Debug, Clone)]
 pub enum LayoutEvent {
-    WindowRaised(Option<WindowId>),
+    WindowRaised(SpaceId, Option<WindowId>),
 }
 
 #[must_use]
@@ -45,64 +49,70 @@ pub struct EventResponse {
 impl LayoutManager {
     pub fn new() -> Self {
         LayoutManager {
-            current_layout: Layout::Bsp(Orientation::Horizontal),
-            window_order: Vec::new(),
-            main_window: None,
+            current_layout: Layout::Slice(Orientation::Horizontal),
+            tree: Tree::new(),
         }
     }
 
-    pub fn add_window(&mut self, wid: WindowId) {
-        self.window_order.push(wid);
+    pub fn add_window(&mut self, space: SpaceId, wid: WindowId) {
+        let space = self.tree.space(space);
+        self.tree.add_window(space, wid);
     }
 
-    pub fn add_windows(&mut self, wids: impl Iterator<Item = WindowId>) {
-        self.window_order.extend(wids);
+    pub fn add_windows(&mut self, space: SpaceId, wids: impl Iterator<Item = WindowId>) {
+        let space = self.tree.space(space);
+        self.tree.add_windows(space, wids);
     }
 
-    pub fn retain_windows(&mut self, f: impl Fn(&WindowId) -> bool) {
-        self.window_order.retain(f);
+    pub fn retain_windows(&mut self, f: impl FnMut(&WindowId) -> bool) {
+        self.tree.retain_windows(f)
     }
 
-    pub fn windows(&self) -> &[WindowId] {
-        &self.window_order
+    pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.tree.windows()
     }
 
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
+        debug!(?event);
         match event {
-            LayoutEvent::WindowRaised(wid) => self.main_window = wid,
+            LayoutEvent::WindowRaised(space, wid) => {
+                let space = self.tree.space(space);
+                self.tree.select(wid.and_then(|wid| self.tree.window_node(space, wid)));
+            }
         }
         EventResponse::default()
     }
 
-    pub fn handle_command(&mut self, command: LayoutCommand) -> EventResponse {
+    pub fn handle_command(&mut self, space: SpaceId, command: LayoutCommand) -> EventResponse {
+        let root = self.tree.space(space);
+        debug!("Tree:\n{}", self.tree.draw_tree(root).trim());
+        debug!(selection = ?self.tree.selection());
         match command {
             LayoutCommand::Shuffle => {
-                self.window_order.shuffle(&mut rand::thread_rng());
+                // TODO
+                // self.window_order.shuffle(&mut rand::thread_rng());
                 EventResponse::default()
             }
             LayoutCommand::NextWindow => {
-                let Some(cur) = self.main_window else {
-                    return EventResponse::default();
-                };
-                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
-                    return EventResponse::default();
-                };
-                let Some(&new) = self.window_order.get(idx + 1) else {
+                let new = self
+                    .tree
+                    .selection()
+                    // TODO
+                    .and_then(|cur| self.tree.traverse(cur, Direction::Right))
+                    .and_then(|new| self.tree.window_at(new));
+                let Some(new) = new else {
                     return EventResponse::default();
                 };
                 EventResponse { raise_window: Some(new) }
             }
             LayoutCommand::PrevWindow => {
-                let Some(cur) = self.main_window else {
-                    return EventResponse::default();
-                };
-                let Some(idx) = self.window_order.iter().position(|&wid| wid == cur) else {
-                    return EventResponse::default();
-                };
-                if idx == 0 {
-                    return EventResponse::default();
-                }
-                let Some(&new) = self.window_order.get(idx - 1) else {
+                let new = self
+                    .tree
+                    .selection()
+                    // TODO
+                    .and_then(|cur| self.tree.traverse(cur, Direction::Left))
+                    .and_then(|new| self.tree.window_at(new));
+                let Some(new) = new else {
                     return EventResponse::default();
                 };
                 EventResponse { raise_window: Some(new) }
@@ -110,82 +120,9 @@ impl LayoutManager {
         }
     }
 
-    pub fn calculate(&self, screen: CGRect) -> Vec<CGRect> {
-        calculate_layout(screen, self.window_order.len() as u32, self.current_layout)
-    }
-}
-
-fn calculate_layout(screen: CGRect, num_windows: u32, layout: Layout) -> Vec<CGRect> {
-    use Layout::*;
-    use Orientation::*;
-    if num_windows == 0 {
-        return vec![];
-    }
-    if num_windows == 1 {
-        return vec![screen];
-    }
-    match layout {
-        Slice(Horizontal) => {
-            let width = screen.size.width / f64::from(num_windows);
-            (0..num_windows)
-                .map(|i| CGRect {
-                    origin: CGPoint {
-                        x: screen.origin.x + f64::from(i) * width,
-                        y: screen.origin.y,
-                    },
-                    size: CGSize {
-                        width,
-                        height: screen.size.height,
-                    },
-                })
-                .collect()
-        }
-        Slice(Vertical) => todo!(),
-        Bsp(Horizontal) => {
-            let size = CGSize {
-                width: screen.size.width / 2.0,
-                height: screen.size.height,
-            };
-
-            let window_frame = CGRect { origin: screen.origin, size };
-            let remainder = CGRect {
-                origin: CGPoint {
-                    x: screen.origin.x + size.width,
-                    y: screen.origin.y,
-                },
-                size,
-            };
-
-            iter::once(window_frame)
-                .chain(calculate_layout(
-                    remainder,
-                    num_windows - 1,
-                    Layout::Bsp(Orientation::Vertical),
-                ))
-                .collect()
-        }
-        Layout::Bsp(Orientation::Vertical) => {
-            let size = CGSize {
-                width: screen.size.width,
-                height: screen.size.height / 2.0,
-            };
-
-            let window_frame = CGRect { origin: screen.origin, size };
-            let remainder = CGRect {
-                origin: CGPoint {
-                    x: screen.origin.x,
-                    y: screen.origin.y + size.height,
-                },
-                size,
-            };
-
-            iter::once(window_frame)
-                .chain(calculate_layout(
-                    remainder,
-                    num_windows - 1,
-                    Layout::Bsp(Orientation::Horizontal),
-                ))
-                .collect()
-        }
+    pub fn calculate(&mut self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
+        let space = self.tree.space(space);
+        //debug!("{}", self.tree.draw_tree(space));
+        self.tree.calculate_layout(space, screen)
     }
 }

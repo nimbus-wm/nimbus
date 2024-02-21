@@ -6,5 +6,5 @@ mod node;
 mod selection;
 mod tree;
 
-#[allow(unused)]
+pub use layout::{Direction, LayoutKind};
 pub use tree::Tree;

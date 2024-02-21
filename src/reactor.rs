@@ -121,11 +121,17 @@ impl Reactor {
         let mut animation_focus_wid = None;
         match event {
             Event::ApplicationLaunched(pid, state, windows) => {
+                let is_frontmost = state.is_frontmost;
                 self.apps.insert(pid, state);
                 self.layout.add_windows(
+                    self.space.unwrap(),
                     windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
                 );
                 self.windows.extend(windows.into_iter());
+                // See comment for ApplicationActivated below.
+                if is_frontmost && self.global_frontmost_app_pid == Some(pid) {
+                    self.frontmost_app = Some(pid);
+                }
             }
             Event::ApplicationTerminated(pid) => {
                 // FIXME: This isn't ordered wrt other events from the app;
@@ -188,7 +194,7 @@ impl Reactor {
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
                 if self.main_screen.map(|s| s.space) == self.space && window.is_standard {
-                    self.layout.add_window(wid);
+                    self.layout.add_window(self.space.unwrap(), wid);
                 }
                 self.windows.insert(wid, window);
                 animation_focus_wid = Some(wid);
@@ -227,13 +233,16 @@ impl Reactor {
                 println!("Hello, world!");
             }
             Event::Command(Command::Layout(cmd)) => {
-                let response = self.layout.handle_command(cmd);
+                let response = self.layout.handle_command(self.space.unwrap(), cmd);
                 self.handle_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if self.main_window() != main_window_orig {
-            let response = self.layout.handle_event(LayoutEvent::WindowRaised(self.main_window()));
+            let response = self.layout.handle_event(LayoutEvent::WindowRaised(
+                self.space.unwrap(),
+                self.main_window(),
+            ));
             self.handle_response(response);
         }
         self.update_layout(animation_focus_wid);
@@ -241,6 +250,7 @@ impl Reactor {
 
     fn handle_response(&mut self, response: layout::EventResponse) {
         if let Some(wid) = response.raise_window {
+            info!(raise_window = ?wid);
             self.raise_window(wid);
         }
     }
@@ -261,22 +271,26 @@ impl Reactor {
             return;
         };
 
-        info!(?main_screen);
-        let main_window = self.main_window();
-        info!(?main_window);
-        let layout = self.layout.calculate(main_screen.frame.clone());
-        info!(?layout, "Layout");
+        debug!(?self.apps);
+        debug!(?self.frontmost_app);
+        debug!(?self.global_frontmost_app_pid);
 
-        assert_eq!(layout.len(), self.layout.windows().len());
-        let layout: Vec<_> = self.layout.windows().iter().copied().zip(layout).collect();
+        debug!(?main_screen);
+        let main_window = self.main_window();
+        debug!(?main_window);
+        let layout = self.layout.calculate(self.space.unwrap(), main_screen.frame.clone());
+        debug!(?layout, "Layout");
+
         if let Some(last) = &self.last_layout {
             if last.len() == layout.len()
                 && last.iter().zip(&layout).all(|(a, b)| a.0 == b.0 && a.1.same_as(b.1))
             {
-                info!("Layout unchanged");
+                debug!("Layout unchanged");
                 return;
             }
         }
+
+        info!(?layout, "New layout");
 
         let mut anim = Animation::new();
         for &(wid, target_frame) in &layout {
@@ -309,6 +323,16 @@ mod tests {
     struct Apps(HashMap<pid_t, Receiver<(Span, Request)>>);
     impl Apps {
         fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Event {
+            self.make_app_with_opts(pid, windows, None, false)
+        }
+
+        fn make_app_with_opts(
+            &mut self,
+            pid: pid_t,
+            windows: Vec<WindowInfo>,
+            main_window: Option<WindowId>,
+            is_frontmost: bool,
+        ) -> Event {
             let (handle, rx) = AppThreadHandle::new_for_test();
             let existing = self.0.insert(pid, rx);
             assert!(existing.is_none());
@@ -320,8 +344,8 @@ mod tests {
                         localized_name: Some(format!("TestApp{pid}")),
                     },
                     handle,
-                    main_window: None,
-                    is_frontmost: false,
+                    main_window,
+                    is_frontmost,
                 },
                 (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
             )
@@ -346,6 +370,11 @@ mod tests {
         use Event::*;
         let mut apps = Apps::default();
         let mut reactor = Reactor::new();
+        reactor.handle_event(ScreenParametersChanged(
+            vec![CGRect::ZERO],
+            vec![SpaceId::new(1)],
+        ));
+
         reactor.handle_event(apps.make_app(1, make_windows(2)));
         reactor.handle_event(apps.make_app(2, make_windows(2)));
         assert_eq!(None, reactor.frontmost_app);
@@ -370,5 +399,18 @@ mod tests {
         reactor.handle_event(ApplicationDeactivated(2));
         assert_eq!(None, reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
+
+        reactor.handle_event(ApplicationGloballyActivated(3));
+        assert_eq!(None, reactor.frontmost_app);
+        assert_eq!(None, reactor.main_window());
+
+        reactor.handle_event(apps.make_app_with_opts(
+            3,
+            make_windows(2),
+            Some(WindowId::new(3, 1)),
+            true,
+        ));
+        assert_eq!(Some(3), reactor.frontmost_app);
+        assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
     }
 }

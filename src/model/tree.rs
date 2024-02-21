@@ -22,12 +22,18 @@ use super::{
 /// type.
 pub struct Tree {
     forest: Forest,
-    windows: Windows,
+    windows: slotmap::SecondaryMap<NodeId, WindowId>,
+    window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
     spaces: HashMap<SpaceId, OwnedNode>,
     c: Components,
 }
 
-pub type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
+pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
+
+struct WindowNodeInfo {
+    root: NodeId,
+    node: NodeId,
+}
 
 #[derive(Default)]
 struct Components {
@@ -37,33 +43,38 @@ struct Components {
 
 #[derive(Copy, Clone)]
 pub(super) enum TreeEvent {
+    /// A node was added to the forest.
+    AddedToForest(NodeId),
     /// A node was added to its parent. Note that the node may have existed in
     /// the tree previously under a different parent.
     AddedToParent(NodeId),
     /// A node will be removed from its parent.
     RemovingFromParent(NodeId),
-    /// A node was removed from the tree.
-    RemovedFromTree(NodeId),
+    /// A node was removed from the forest.
+    RemovedFromForest(NodeId),
 }
 
 impl Tree {
     pub fn new() -> Tree {
         Tree {
-            spaces: Default::default(),
             forest: Forest::default(),
             windows: Default::default(),
+            window_nodes: Default::default(),
+            spaces: Default::default(),
             c: Components::default(),
         }
     }
 
     pub fn add_window(&mut self, parent: NodeId, wid: WindowId) -> NodeId {
+        let root = parent.ancestors(&self.forest).last().unwrap();
         let node = parent.push_back(&mut self.forest, &mut self.c);
         self.windows.insert(node, wid);
+        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { root, node });
         node
     }
 
-    pub fn add_windows(&mut self, parent: NodeId, wids: impl ExactSizeIterator<Item = WindowId>) {
-        self.forest.reserve(wids.len());
+    pub fn add_windows(&mut self, parent: NodeId, wids: impl Iterator<Item = WindowId>) {
+        self.forest.reserve(wids.size_hint().1.unwrap_or(0));
         self.windows.set_capacity(self.forest.capacity());
         for wid in wids {
             self.add_window(parent, wid);
@@ -71,13 +82,33 @@ impl Tree {
     }
 
     pub fn retain_windows(&mut self, mut predicate: impl FnMut(&WindowId) -> bool) {
-        self.windows.retain(|node, wid| {
+        self.window_nodes.retain(|wid, nodes| {
             if !predicate(wid) {
-                node.remove(&mut self.forest, &mut self.c);
+                for info in nodes {
+                    info.node.remove(&mut self.forest, &mut self.c);
+                    self.windows.remove(info.node);
+                }
                 return false;
             }
             true
         })
+    }
+
+    pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.window_nodes.keys().copied()
+    }
+
+    pub fn window_node(&self, root: NodeId, wid: WindowId) -> Option<NodeId> {
+        self.window_nodes
+            .get(&wid)
+            .into_iter()
+            .flat_map(|nodes| nodes.iter().filter(|info| info.root == root))
+            .next()
+            .map(|info| info.node)
+    }
+
+    pub fn window_at(&self, node: NodeId) -> Option<WindowId> {
+        self.windows.get(node).copied()
     }
 
     pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
@@ -86,14 +117,12 @@ impl Tree {
         node
     }
 
-    pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.windows.iter().map(|(_, &wid)| wid)
-    }
-
+    // FIXME: root
     pub fn select(&mut self, selection: impl Into<Option<NodeId>>) {
         self.c.selection.select(&self.forest, selection.into())
     }
 
+    // FIXME: root
     pub fn selection(&self) -> Option<NodeId> {
         self.c.selection.current_selection()
     }
@@ -101,14 +130,12 @@ impl Tree {
     pub fn space(&mut self, space: SpaceId) -> NodeId {
         self.spaces
             .entry(space)
-            .or_insert_with(|| OwnedNode::new_root_in(&mut self.forest, "space_root"))
+            .or_insert_with(|| OwnedNode::new_root_in(&mut self.forest, "space_root", &mut self.c))
             .id()
     }
 
-    pub fn calculate_layout(&self, space: SpaceId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.c
-            .layout
-            .get_sizes(&self.forest, &self.windows, self.spaces[&space].id(), frame)
+    pub fn calculate_layout(&self, root: NodeId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
+        self.c.layout.get_sizes(&self.forest, &self.windows, root, frame)
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
@@ -273,6 +300,10 @@ impl Components {
 }
 
 impl node::Observer for Components {
+    fn added_to_forest(&mut self, forest: &Forest, node: NodeId) {
+        self.dispatch_event(forest, TreeEvent::AddedToForest(node))
+    }
+
     fn added_to_parent(&mut self, forest: &Forest, node: NodeId) {
         self.dispatch_event(forest, TreeEvent::AddedToParent(node))
     }
@@ -281,8 +312,8 @@ impl node::Observer for Components {
         self.dispatch_event(forest, TreeEvent::RemovingFromParent(node))
     }
 
-    fn removed_from_tree(&mut self, forest: &Forest, node: NodeId) {
-        self.dispatch_event(forest, TreeEvent::RemovedFromTree(node))
+    fn removed_from_forest(&mut self, forest: &Forest, node: NodeId) {
+        self.dispatch_event(forest, TreeEvent::RemovedFromForest(node))
     }
 }
 
@@ -390,14 +421,14 @@ mod tests {
             (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
             (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
         ];
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         // We may want to have a mode that adjusts sizes so that only the
         // requested edge is resized. Notice that the width is redistributed
         // between c1 and c2 here.
         tree.resize(c2, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
@@ -409,11 +440,11 @@ mod tests {
         );
 
         tree.resize(c2, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.resize(c2, 0.01, Direction::Left);
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1000, 1000)),
@@ -425,11 +456,11 @@ mod tests {
         );
 
         tree.resize(c2, -0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.resize(b2, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
@@ -441,11 +472,11 @@ mod tests {
         );
 
         tree.resize(b2, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.resize(a1, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1030, 3000)),
                 (WindowId::new(2, 1), rect(1030, 0, 970, 1000)),
@@ -457,12 +488,12 @@ mod tests {
         );
 
         tree.resize(a1, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.resize(a1, 0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
         tree.resize(a1, -0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
     }
 
     #[test]
@@ -496,11 +527,11 @@ mod tests {
             (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
             (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
         ];
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.set_frame_from_resize(a1, rect(0, 0, 1000, 3000), rect(0, 0, 1010, 3000), screen);
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1010, 3000)),
                 (WindowId::new(2, 1), rect(1010, 0, 990, 1000)),
@@ -512,7 +543,7 @@ mod tests {
         );
 
         tree.set_frame_from_resize(a1, rect(0, 0, 1010, 3000), rect(0, 0, 1000, 3000), screen);
-        assert_frames_are(tree.calculate_layout(space, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
 
         tree.set_frame_from_resize(
             c1,
@@ -521,7 +552,7 @@ mod tests {
             screen,
         );
         assert_frames_are(
-            tree.calculate_layout(space, screen),
+            tree.calculate_layout(root, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 900, 3000)),
                 (WindowId::new(2, 1), rect(900, 0, 1100, 900)),
