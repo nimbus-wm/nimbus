@@ -2,7 +2,9 @@ mod observer;
 
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fmt::Debug,
+    hash::Hash,
     num::NonZeroI32,
     rc::{Rc, Weak},
     sync::{
@@ -31,7 +33,7 @@ use tracing::{debug, error, instrument, trace, Span};
 
 use crate::{
     app::observer::Observer,
-    reactor::{self, AppInfo, AppState, Event, WindowInfo},
+    reactor::{self, AppInfo, AppState, Event, TransactionId, WindowInfo},
     run_loop::WakeupHandle,
     util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
@@ -103,8 +105,8 @@ impl Debug for AppThreadHandle {
 
 #[derive(Debug, Clone)]
 pub enum Request {
-    SetWindowFrame(WindowId, CGRect),
-    SetWindowPos(WindowId, CGPoint),
+    SetWindowFrame(WindowId, CGRect, TransactionId),
+    SetWindowPos(WindowId, CGPoint, TransactionId),
 
     /// Temporarily suspends position and size update events for this window.
     BeginWindowAnimation(WindowId),
@@ -158,7 +160,7 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Even
 
 struct State {
     app: AXUIElement,
-    windows: Vec<WindowState>,
+    windows: HashMap<WindowId, WindowState>,
     events_tx: Sender<(Span, Event)>,
     requests_rx: Receiver<(Span, Request)>,
     pid: pid_t,
@@ -168,8 +170,8 @@ struct State {
 }
 
 struct WindowState {
-    wid: WindowId,
     elem: AXUIElement,
+    last_seen_txid: TransactionId,
 }
 
 const APP_NOTIFICATIONS: &[&str] = &[
@@ -228,7 +230,7 @@ impl State {
         let app_state = AppState {
             handle,
             info,
-            main_window: self.app.main_window().ok().and_then(|w| self.id(w).ok()),
+            main_window: self.app.main_window().ok().and_then(|w| self.id(&w).ok()),
             is_frontmost: self.app.frontmost().map(|b| b.into()).unwrap_or(false),
         };
         let Ok(()) = self.events_tx.send((
@@ -243,37 +245,43 @@ impl State {
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
-    fn handle_request(&self, request: Request) -> Result<(), accessibility::Error> {
+    fn handle_request(&mut self, request: Request) -> Result<(), accessibility::Error> {
         match request {
-            Request::SetWindowPos(wid, pos) => {
-                let window = self.window_element(wid)?;
-                trace("set_position", window, || {
-                    window.set_position(pos.to_cgtype())
+            Request::SetWindowPos(wid, pos, txid) => {
+                let window = self.window_mut(wid)?;
+                window.last_seen_txid = txid;
+                trace("set_position", &window.elem, || {
+                    window.elem.set_position(pos.to_cgtype())
                 })?;
             }
-            Request::SetWindowFrame(wid, frame) => {
-                let window = self.window_element(wid)?;
-                trace("set_position", window, || {
-                    window.set_position(frame.origin.to_cgtype())
+            Request::SetWindowFrame(wid, frame, txid) => {
+                let window = self.window_mut(wid)?;
+                window.last_seen_txid = txid;
+                trace("set_position", &window.elem, || {
+                    window.elem.set_position(frame.origin.to_cgtype())
                 })?;
-                trace("set_size", window, || {
-                    window.set_size(frame.size.to_cgtype())
+                trace("set_size", &window.elem, || {
+                    window.elem.set_size(frame.size.to_cgtype())
                 })?;
             }
             Request::BeginWindowAnimation(wid) => {
-                let window = self.window_element(wid)?;
-                self.stop_notifications_for_animation(window);
+                let window = self.window(wid)?;
+                self.stop_notifications_for_animation(&window.elem);
             }
             Request::EndWindowAnimation(wid) => {
-                let window = self.window_element(wid)?;
-                self.restart_notifications_after_animation(window);
-                let frame = trace("frame", window, || window.frame())?;
-                self.send_event(Event::WindowMoved(wid, frame.origin.to_icrate()));
-                self.send_event(Event::WindowResized(wid, frame.to_icrate()));
+                let &WindowState { ref elem, last_seen_txid } = self.window(wid)?;
+                self.restart_notifications_after_animation(elem);
+                let frame = trace("frame", elem, || elem.frame())?;
+                self.send_event(Event::WindowMoved(
+                    wid,
+                    frame.origin.to_icrate(),
+                    last_seen_txid,
+                ));
+                self.send_event(Event::WindowResized(wid, frame.to_icrate(), last_seen_txid));
             }
             Request::Raise(wid, token) => {
-                let window = self.window_element(wid)?;
-                trace("raise", window, || window.raise())?;
+                let window = self.window(wid)?;
+                trace("raise", &window.elem, || window.elem.raise())?;
                 // This request could be handled out of order with respect to
                 // later requests sent to other apps by the reactor. To avoid
                 // raising ourselves after a later request was processed to
@@ -326,14 +334,14 @@ impl State {
                 // case where the app was activated and the main window has
                 // *not* changed, we read the main window and send it along with
                 // the notification.
-                let main = elem.main_window().ok().and_then(|w| self.id(w).ok());
+                let main = elem.main_window().ok().and_then(|w| self.id(&w).ok());
                 self.send_event(Event::ApplicationActivated(self.pid, main));
             }
             kAXApplicationDeactivatedNotification => {
                 self.send_event(Event::ApplicationDeactivated(self.pid));
             }
             kAXMainWindowChangedNotification => {
-                let main = self.id(elem).ok();
+                let main = self.id(&elem).ok();
                 self.send_event(Event::ApplicationMainWindowChanged(self.pid, main));
             }
             kAXWindowCreatedNotification => {
@@ -346,31 +354,33 @@ impl State {
                 self.send_event(Event::WindowCreated(wid, window));
             }
             kAXUIElementDestroyedNotification => {
-                let Some(idx) = self.windows.iter().position(|w| w.elem == elem) else {
+                let Some((&wid, _)) = self.windows.iter().find(|(_, w)| w.elem == elem) else {
                     return;
                 };
-                let wid = self.windows.remove(idx).wid;
+                self.windows.remove(&wid);
                 self.send_event(Event::WindowDestroyed(wid));
             }
             kAXWindowMovedNotification => {
-                let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+                let Ok(wid) = self.id(&elem) else {
                     return;
                 };
-                let Ok(pos) = window.elem.position() else {
+                let last_seen = self.window(wid).unwrap().last_seen_txid;
+                let Ok(pos) = elem.position() else {
                     return;
                 };
-                self.send_event(Event::WindowMoved(window.wid, pos.to_icrate()));
+                self.send_event(Event::WindowMoved(wid, pos.to_icrate(), last_seen));
             }
             kAXWindowResizedNotification => {
-                let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+                let Ok(wid) = self.id(&elem) else {
                     return;
                 };
+                let last_seen = self.window(wid).unwrap().last_seen_txid;
                 // A resize can also affect the position, so we read and send
                 // the whole frame.
-                let Ok(frame) = window.elem.frame() else {
+                let Ok(frame) = elem.frame() else {
                     return;
                 };
-                self.send_event(Event::WindowResized(window.wid, frame.to_icrate()));
+                self.send_event(Event::WindowResized(wid, frame.to_icrate(), last_seen));
             }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}
@@ -391,7 +401,13 @@ impl State {
             pid: self.pid,
             idx: NonZeroI32::new(self.last_window_idx).unwrap(),
         };
-        self.windows.push(WindowState { elem, wid });
+        self.windows.insert(
+            wid,
+            WindowState {
+                elem,
+                last_seen_txid: TransactionId::default(),
+            },
+        );
         return Some(wid);
 
         fn register_notifs(win: &AXUIElement, state: &State) -> bool {
@@ -415,19 +431,21 @@ impl State {
         self.events_tx.send((Span::current(), event)).unwrap();
     }
 
-    fn window_element(&self, wid: WindowId) -> Result<&AXUIElement, accessibility::Error> {
+    fn window(&self, wid: WindowId) -> Result<&WindowState, accessibility::Error> {
         assert_eq!(wid.pid, self.pid);
-        let Some(window) = self.windows.iter().find(|w| w.wid == wid) else {
-            return Err(accessibility::Error::NotFound);
-        };
-        Ok(&window.elem)
+        self.windows.get(&wid).ok_or(accessibility::Error::NotFound)
     }
 
-    fn id(&self, elem: AXUIElement) -> Result<WindowId, accessibility::Error> {
-        let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
+    fn window_mut(&mut self, wid: WindowId) -> Result<&mut WindowState, accessibility::Error> {
+        assert_eq!(wid.pid, self.pid);
+        self.windows.get_mut(&wid).ok_or(accessibility::Error::NotFound)
+    }
+
+    fn id(&self, elem: &AXUIElement) -> Result<WindowId, accessibility::Error> {
+        let Some((&wid, _)) = self.windows.iter().find(|(_, w)| &w.elem == elem) else {
             return Err(accessibility::Error::NotFound);
         };
-        Ok(window.wid)
+        Ok(wid)
     }
 
     fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
@@ -474,7 +492,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
 
         RefCell::new(State {
             app: app.clone(),
-            windows: vec![],
+            windows: HashMap::new(),
             events_tx,
             requests_rx,
             pid,
@@ -501,16 +519,14 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         // Multiple source wakeups can be collapsed into one, so we have to make
         // sure all pending events are handled eventually. For now just handle
         // them all.
-        let state = state.borrow();
-        let State { bundle_id, pid, .. } = &*state;
-        let bundle_id = bundle_id.as_deref().unwrap_or("None");
+        let mut state = state.borrow_mut();
         while let Ok((span, request)) = state.requests_rx.try_recv() {
             let _guard = span.enter();
-            debug!(?bundle_id, ?pid, ?request, "Got request");
+            debug!(?state.bundle_id, ?state.pid, ?request, "Got request");
             match state.handle_request(request.clone()) {
                 Ok(()) => (),
                 Err(err) => {
-                    error!(?bundle_id, ?pid, ?request, "Error handling request: {err}");
+                    error!(?state.bundle_id, ?state.pid, ?request, "Error handling request: {err}");
                 }
             }
         }
@@ -525,6 +541,7 @@ impl TryFrom<&AXUIElement> for WindowInfo {
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
             frame: element.frame()?.to_icrate(),
+            last_sent_txid: TransactionId::default(),
         })
     }
 }

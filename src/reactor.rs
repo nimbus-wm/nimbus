@@ -26,8 +26,8 @@ pub enum Event {
     ApplicationMainWindowChanged(pid_t, Option<WindowId>),
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
-    WindowMoved(WindowId, CGPoint),
-    WindowResized(WindowId, CGRect),
+    WindowMoved(WindowId, CGPoint, TransactionId),
+    WindowResized(WindowId, CGRect, TransactionId),
     ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
@@ -45,7 +45,13 @@ pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
     pub frame: CGRect,
+    pub last_sent_txid: TransactionId,
 }
+
+/// A per-window counter that tracks the last time the reactor sent a request to
+/// change the window frame.
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub struct TransactionId(u32);
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -79,6 +85,13 @@ pub struct AppState {
 struct Screen {
     frame: CGRect,
     space: SpaceId,
+}
+
+impl WindowInfo {
+    fn next_txid(&mut self) -> TransactionId {
+        self.last_sent_txid.0 += 1;
+        self.last_sent_txid
+    }
 }
 
 impl Reactor {
@@ -204,16 +217,29 @@ impl Reactor {
                 self.windows.remove(&wid).unwrap();
                 //animation_focus_wid = self.window_order.last().cloned();
             }
-            Event::WindowMoved(wid, pos) => {
-                self.windows.get_mut(&wid).unwrap().frame.origin = pos;
-                return;
-            }
-            Event::WindowResized(wid, new_frame) => {
-                let frame = &mut self.windows.get_mut(&wid).unwrap().frame;
-                if *frame == new_frame {
+            Event::WindowMoved(wid, pos, last_seen) => {
+                let window = self.windows.get_mut(&wid).unwrap();
+                if last_seen != window.last_sent_txid {
+                    // Ignore events that happened before the last time we
+                    // changed the size or position of this window.
                     return;
                 }
-                *frame = new_frame;
+                window.frame.origin = pos;
+                return;
+            }
+            Event::WindowResized(wid, new_frame, last_seen) => {
+                let window = self.windows.get_mut(&wid).unwrap();
+                if last_seen != window.last_sent_txid {
+                    // Ignore events that happened before the last time we
+                    // changed the size or position of this window. Otherwise
+                    // we would update the layout model incorrectly.
+                    debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
+                    return;
+                }
+                if window.frame == new_frame {
+                    return;
+                }
+                window.frame = new_frame;
                 let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
@@ -307,7 +333,8 @@ impl Reactor {
 
         let mut anim = Animation::new();
         for &(wid, target_frame) in &layout {
-            let current_frame = self.windows[&wid].frame;
+            let window = self.windows.get_mut(&wid).unwrap();
+            let current_frame = window.frame;
             let target_frame = target_frame.round();
             if target_frame.same_as(current_frame) {
                 continue;
@@ -315,7 +342,8 @@ impl Reactor {
             debug!(?current_frame, ?target_frame, "Change");
             let handle = &self.apps.get(&wid.pid).unwrap().handle;
             let is_new = Some(wid) == new_wid;
-            anim.add_window(handle, wid, current_frame, target_frame, is_new);
+            let txid = window.next_txid();
+            anim.add_window(handle, wid, current_frame, target_frame, is_new, txid);
         }
         if is_resize {
             // If the user is doing something with the mouse we don't want to
@@ -380,6 +408,7 @@ mod tests {
                     CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
                     CGSize::new(50.0, 50.0),
                 ),
+                last_sent_txid: TransactionId::default(),
             })
             .collect()
     }

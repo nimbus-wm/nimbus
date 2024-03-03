@@ -5,7 +5,10 @@ use std::{
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
-use crate::app::{AppThreadHandle, Request, WindowId};
+use crate::{
+    app::{AppThreadHandle, Request, WindowId},
+    reactor::TransactionId,
+};
 
 #[derive(Debug)]
 pub struct Animation<'a> {
@@ -15,7 +18,14 @@ pub struct Animation<'a> {
     interval: Duration,
     frames: u32,
 
-    windows: Vec<(&'a AppThreadHandle, WindowId, CGRect, CGRect, bool)>,
+    windows: Vec<(
+        &'a AppThreadHandle,
+        WindowId,
+        CGRect,
+        CGRect,
+        bool,
+        TransactionId,
+    )>,
 }
 
 impl<'a> Animation<'a> {
@@ -40,8 +50,9 @@ impl<'a> Animation<'a> {
         start: CGRect,
         finish: CGRect,
         is_focus: bool,
+        txid: TransactionId,
     ) {
-        self.windows.push((handle, wid, start, finish, is_focus))
+        self.windows.push((handle, wid, start, finish, is_focus, txid))
     }
 
     pub fn run(self) {
@@ -49,7 +60,7 @@ impl<'a> Animation<'a> {
             return;
         }
 
-        for &(handle, wid, from, to, is_focus) in &self.windows {
+        for &(handle, wid, from, to, is_focus, txid) in &self.windows {
             handle.send(Request::BeginWindowAnimation(wid)).unwrap();
             // Resize new windows immediately.
             if is_focus {
@@ -57,7 +68,7 @@ impl<'a> Animation<'a> {
                     origin: from.origin,
                     size: to.size,
                 };
-                handle.send(Request::SetWindowFrame(wid, frame)).unwrap();
+                handle.send(Request::SetWindowFrame(wid, frame, txid)).unwrap();
             }
         }
 
@@ -66,7 +77,7 @@ impl<'a> Animation<'a> {
             let t: f64 = f64::from(frame) / f64::from(self.frames);
 
             next_frames.clear();
-            for (_, _, from, to, _) in &self.windows {
+            for (_, _, from, to, _, _) in &self.windows {
                 next_frames.push(get_frame(*from, *to, t));
             }
 
@@ -77,29 +88,29 @@ impl<'a> Animation<'a> {
             }
             thread::sleep(duration);
 
-            for (&(handle, wid, _, to, _), rect) in self.windows.iter().zip(&next_frames) {
+            for (&(handle, wid, _, to, _, txid), rect) in self.windows.iter().zip(&next_frames) {
                 let mut rect = *rect;
                 // Actually don't animate size, too slow. Resize halfway through
                 // and then set the size again at the end, in case it got
                 // clipped during the animation.
                 if frame * 2 == self.frames || frame == self.frames {
                     rect.size = to.size;
-                    handle.send(Request::SetWindowFrame(wid, rect)).unwrap();
+                    handle.send(Request::SetWindowFrame(wid, rect, txid)).unwrap();
                 } else {
-                    handle.send(Request::SetWindowPos(wid, rect.origin)).unwrap();
+                    handle.send(Request::SetWindowPos(wid, rect.origin, txid)).unwrap();
                 }
             }
         }
 
-        for &(handle, wid, _, _, _) in &self.windows {
+        for &(handle, wid, _, _, _, _) in &self.windows {
             handle.send(Request::EndWindowAnimation(wid)).unwrap();
         }
     }
 
     #[allow(dead_code)]
     pub fn skip_to_end(self) {
-        for &(handle, wid, _from, to, _) in &self.windows {
-            handle.send(dbg!(Request::SetWindowFrame(wid, to))).unwrap();
+        for &(handle, wid, _from, to, _, txid) in &self.windows {
+            handle.send(dbg!(Request::SetWindowFrame(wid, to, txid))).unwrap();
         }
     }
 }
