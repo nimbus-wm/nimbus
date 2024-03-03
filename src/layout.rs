@@ -1,7 +1,4 @@
-use std::iter;
-
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
-use rand::seq::SliceRandom;
+use icrate::Foundation::CGRect;
 use tracing::debug;
 
 use crate::{
@@ -11,17 +8,10 @@ use crate::{
 };
 
 pub struct LayoutManager {
-    current_layout: Layout,
     tree: Tree,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
-pub enum Layout {
-    Slice(Orientation),
-    Bsp(Orientation),
-}
-
 #[derive(Debug, Copy, Clone)]
 pub enum Orientation {
     Horizontal,
@@ -54,10 +44,7 @@ pub struct EventResponse {
 
 impl LayoutManager {
     pub fn new() -> Self {
-        LayoutManager {
-            current_layout: Layout::Slice(Orientation::Horizontal),
-            tree: Tree::new(),
-        }
+        LayoutManager { tree: Tree::new() }
     }
 
     pub fn add_window(&mut self, space: SpaceId, wid: WindowId) {
@@ -74,6 +61,7 @@ impl LayoutManager {
         self.tree.retain_windows(f)
     }
 
+    #[allow(dead_code)]
     pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
         self.tree.windows()
     }

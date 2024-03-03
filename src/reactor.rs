@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync, thread};
 
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use icrate::Foundation::{CGPoint, CGRect};
 use tracing::Span;
 use tracing::{debug, info};
 
@@ -41,7 +41,6 @@ pub struct AppInfo {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
@@ -334,9 +333,10 @@ impl Reactor {
 mod tests {
     use std::sync::mpsc::Receiver;
 
-    use crate::app::Request;
+    use icrate::Foundation::CGSize;
 
     use super::*;
+    use crate::app::Request;
 
     #[derive(Default)]
     struct Apps(HashMap<pid_t, Receiver<(Span, Request)>>);

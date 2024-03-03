@@ -6,5 +6,6 @@ mod node;
 mod selection;
 mod tree;
 
+#[allow(unused_imports)]
 pub use layout::{Direction, LayoutKind};
 pub use tree::Tree;
