@@ -33,7 +33,7 @@ use tracing::{debug, error, instrument, trace, Span};
 
 use crate::{
     app::observer::Observer,
-    reactor::{self, AppInfo, AppState, Event, TransactionId, WindowInfo},
+    reactor::{AppState, Event, TransactionId},
     run_loop::WakeupHandle,
     util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
@@ -58,6 +58,20 @@ impl WindowId {
             idx: NonZeroI32::new(idx).unwrap(),
         }
     }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct AppInfo {
+    pub bundle_id: Option<String>,
+    pub localized_name: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct WindowInfo {
+    pub is_standard: bool,
+    pub title: String,
+    pub frame: CGRect,
 }
 
 pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
@@ -535,12 +549,11 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
 impl TryFrom<&AXUIElement> for WindowInfo {
     type Error = accessibility::Error;
     fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(reactor::WindowInfo {
+        Ok(WindowInfo {
             is_standard: element.role()? == kAXWindowRole
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
             frame: element.frame()?.to_icrate(),
-            last_sent_txid: TransactionId::default(),
         })
     }
 }

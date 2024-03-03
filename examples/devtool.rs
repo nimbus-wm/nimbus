@@ -13,7 +13,7 @@ use structopt::StructOpt;
 use tokio::sync::mpsc;
 
 use nimbus::{
-    app, reactor,
+    app,
     screen::{self, ScreenCache},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -106,11 +106,11 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
 }
 
-fn get_windows_for_app(app: AXUIElement) -> Result<Vec<reactor::WindowInfo>, accessibility::Error> {
+fn get_windows_for_app(app: AXUIElement) -> Result<Vec<app::WindowInfo>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows.into_iter().map(|win| reactor::WindowInfo::try_from(&*win)).collect()
+    windows.into_iter().map(|win| app::WindowInfo::try_from(&*win)).collect()
 }
 
 fn get_apps(opt: &Opt) {

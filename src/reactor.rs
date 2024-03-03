@@ -4,6 +4,7 @@ use icrate::Foundation::{CGPoint, CGRect};
 use tracing::Span;
 use tracing::{debug, info};
 
+use crate::app::{AppInfo, WindowInfo};
 use crate::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 use crate::metrics::{self, MetricsCommand};
 use crate::{
@@ -33,26 +34,6 @@ pub enum Event {
     Command(Command),
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct AppInfo {
-    pub bundle_id: Option<String>,
-    pub localized_name: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct WindowInfo {
-    pub is_standard: bool,
-    pub title: String,
-    pub frame: CGRect,
-    pub last_sent_txid: TransactionId,
-}
-
-/// A per-window counter that tracks the last time the reactor sent a request to
-/// change the window frame.
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
-pub struct TransactionId(u32);
-
 #[derive(Debug, Clone)]
 pub enum Command {
     Hello,
@@ -63,7 +44,7 @@ pub enum Command {
 pub struct Reactor {
     apps: HashMap<pid_t, AppState>,
     layout: LayoutManager,
-    windows: HashMap<WindowId, WindowInfo>,
+    windows: HashMap<WindowId, WindowState>,
     main_screen: Option<Screen>,
     space: Option<SpaceId>,
     frontmost_app: Option<pid_t>,
@@ -87,10 +68,33 @@ struct Screen {
     space: SpaceId,
 }
 
-impl WindowInfo {
+/// A per-window counter that tracks the last time the reactor sent a request to
+/// change the window frame.
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub struct TransactionId(u32);
+
+#[derive(Debug)]
+pub struct WindowState {
+    #[allow(unused)]
+    title: String,
+    frame: CGRect,
+    last_sent_txid: TransactionId,
+}
+
+impl WindowState {
     fn next_txid(&mut self) -> TransactionId {
         self.last_sent_txid.0 += 1;
         self.last_sent_txid
+    }
+}
+
+impl From<WindowInfo> for WindowState {
+    fn from(info: WindowInfo) -> Self {
+        WindowState {
+            title: info.title,
+            frame: info.frame,
+            last_sent_txid: TransactionId::default(),
+        }
     }
 }
 
@@ -140,7 +144,7 @@ impl Reactor {
                     self.space.unwrap(),
                     windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
                 );
-                self.windows.extend(windows.into_iter());
+                self.windows.extend(windows.into_iter().map(|(wid, info)| (wid, info.into())));
                 // See comment for ApplicationActivated below.
                 if is_frontmost && self.global_frontmost_app_pid == Some(pid) {
                     self.frontmost_app = Some(pid);
@@ -209,7 +213,7 @@ impl Reactor {
                 if self.main_screen.map(|s| s.space) == self.space && window.is_standard {
                     self.layout.add_window(self.space.unwrap(), wid);
                 }
-                self.windows.insert(wid, window);
+                self.windows.insert(wid, window.into());
                 animation_focus_wid = Some(wid);
             }
             Event::WindowDestroyed(wid) => {
@@ -410,7 +414,6 @@ mod tests {
                     CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
                     CGSize::new(50.0, 50.0),
                 ),
-                last_sent_txid: TransactionId::default(),
             })
             .collect()
     }

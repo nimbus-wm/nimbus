@@ -14,8 +14,8 @@ use tracing::{info_span, Span};
 use tracing::{trace, warn};
 
 use crate::{
-    app::{self},
-    reactor::{AppInfo, Event},
+    app::{self, AppInfo},
+    reactor::Event,
     screen::ScreenCache,
     util::NSRunningApplicationExt,
 };
