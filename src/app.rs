@@ -81,13 +81,12 @@ pub struct AppThreadHandle {
 
 impl AppThreadHandle {
     #[cfg(test)]
-    pub(crate) fn new_for_test() -> (Self, Receiver<(Span, Request)>) {
-        let (requests_tx, requests_rx) = channel();
+    pub(crate) fn new_for_test(requests_tx: Sender<(Span, Request)>) -> Self {
         let this = AppThreadHandle {
             requests_tx,
             wakeup: WakeupHandle::for_current_thread(0, || {}),
         };
-        (this, requests_rx)
+        this
     }
 
     pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<(Span, Request)>> {

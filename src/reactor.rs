@@ -355,16 +355,20 @@ impl Reactor {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::Receiver;
+    use std::sync::mpsc::{channel, Receiver, Sender};
 
     use icrate::Foundation::CGSize;
 
     use super::*;
     use crate::app::Request;
 
-    #[derive(Default)]
-    struct Apps(HashMap<pid_t, Receiver<(Span, Request)>>);
+    struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
     impl Apps {
+        fn new() -> Apps {
+            let (tx, rx) = channel();
+            Apps(tx, rx)
+        }
+
         fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Event {
             self.make_app_with_opts(pid, windows, None, false)
         }
@@ -376,9 +380,7 @@ mod tests {
             main_window: Option<WindowId>,
             is_frontmost: bool,
         ) -> Event {
-            let (handle, rx) = AppThreadHandle::new_for_test();
-            let existing = self.0.insert(pid, rx);
-            assert!(existing.is_none());
+            let handle = AppThreadHandle::new_for_test(self.0.clone());
             Event::ApplicationLaunched(
                 pid,
                 AppState {
@@ -392,6 +394,10 @@ mod tests {
                 },
                 (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
             )
+        }
+
+        fn requests(&mut self) -> Vec<Request> {
+            self.1.try_iter().map(|(_span, rq)| rq).collect()
         }
     }
 
@@ -412,7 +418,7 @@ mod tests {
     #[test]
     fn it_tracks_frontmost_app_and_main_window_correctly() {
         use Event::*;
-        let mut apps = Apps::default();
+        let mut apps = Apps::new();
         let mut reactor = Reactor::new();
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
@@ -456,5 +462,130 @@ mod tests {
         ));
         assert_eq!(Some(3), reactor.frontmost_app);
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
+    }
+
+    #[derive(Default)]
+    struct WindowState {
+        last_seen_txid: TransactionId,
+        animating: bool,
+        frame: CGRect,
+    }
+
+    fn simulate_events_for_requests(
+        requests: Vec<Request>,
+    ) -> (Vec<Event>, HashMap<WindowId, WindowState>) {
+        let mut events = vec![];
+        let mut windows: HashMap<WindowId, WindowState> = HashMap::new();
+
+        for request in requests {
+            match request {
+                Request::SetWindowFrame(wid, frame, txid) => {
+                    let window = windows.entry(wid).or_default();
+                    window.last_seen_txid = txid;
+                    let old_frame = window.frame;
+                    if !window.animating && !old_frame.origin.same_as(frame.origin) {
+                        events.push(Event::WindowMoved(wid, frame.origin, txid));
+                    }
+                    if !window.animating && !old_frame.size.same_as(frame.size) {
+                        events.push(Event::WindowResized(wid, frame, txid));
+                    }
+                    window.frame = frame;
+                }
+                Request::SetWindowPos(wid, pos, txid) => {
+                    let window = windows.entry(wid).or_default();
+                    window.last_seen_txid = txid;
+                    let old_frame = window.frame;
+                    if !window.animating && !old_frame.origin.same_as(pos) {
+                        events.push(Event::WindowMoved(wid, pos, txid));
+                    }
+                    window.frame.origin = pos;
+                }
+                Request::BeginWindowAnimation(wid) => {
+                    windows.entry(wid).or_default().animating = true;
+                }
+                Request::EndWindowAnimation(wid) => {
+                    let window = windows.entry(wid).or_default();
+                    window.animating = false;
+                    events.push(Event::WindowMoved(
+                        wid,
+                        window.frame.origin,
+                        window.last_seen_txid,
+                    ));
+                    events.push(Event::WindowResized(
+                        wid,
+                        window.frame,
+                        window.last_seen_txid,
+                    ));
+                }
+                Request::Raise(_, _) => todo!(),
+            }
+        }
+
+        (events, windows)
+    }
+
+    #[test]
+    fn it_ignores_stale_resize_events() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
+            vec![SpaceId::new(1)],
+        ));
+
+        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        let requests = apps.requests();
+        assert!(!requests.is_empty());
+        let (events_1, _) = simulate_events_for_requests(requests);
+
+        reactor.handle_event(apps.make_app(2, make_windows(2)));
+        assert!(!apps.requests().is_empty());
+
+        for event in dbg!(events_1) {
+            reactor.handle_event(event);
+        }
+        let requests = apps.requests();
+        assert!(
+            requests.is_empty(),
+            "got requests when there should have been none: {requests:?}"
+        );
+    }
+
+    #[test]
+    fn it_responds_to_resizes() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
+            vec![SpaceId::new(1)],
+        ));
+
+        reactor.handle_event(apps.make_app(1, make_windows(3)));
+
+        let (events, windows) = simulate_events_for_requests(apps.requests());
+        for event in events {
+            reactor.handle_event(event);
+        }
+        assert!(
+            apps.requests().is_empty(),
+            "reactor shouldn't react to unsurprising events"
+        );
+
+        // Resize the right edge of the middle window.
+        let resizing = WindowId::new(1, 2);
+        let window = &windows[&resizing];
+        let frame = CGRect::new(
+            window.frame.origin,
+            CGSize::new(window.frame.size.width + 10., window.frame.size.height),
+        );
+        reactor.handle_event(Event::WindowResized(resizing, frame, window.last_seen_txid));
+
+        // Expect the next window to be resized.
+        let next = WindowId::new(1, 3);
+        let old_frame = windows[&next].frame;
+        let requests = apps.requests();
+        assert!(!requests.is_empty());
+        let (_events, windows) = simulate_events_for_requests(requests);
+        assert_ne!(old_frame, windows[&next].frame);
     }
 }

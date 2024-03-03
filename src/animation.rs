@@ -110,7 +110,7 @@ impl<'a> Animation<'a> {
     #[allow(dead_code)]
     pub fn skip_to_end(self) {
         for &(handle, wid, _from, to, _, txid) in &self.windows {
-            handle.send(dbg!(Request::SetWindowFrame(wid, to, txid))).unwrap();
+            handle.send(Request::SetWindowFrame(wid, to, txid)).unwrap();
         }
     }
 }
