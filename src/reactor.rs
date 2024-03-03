@@ -310,10 +310,6 @@ impl Reactor {
             return;
         };
 
-        debug!(?self.apps);
-        debug!(?self.frontmost_app);
-        debug!(?self.global_frontmost_app_pid);
-
         debug!(?main_screen);
         let main_window = self.main_window();
         debug!(?main_window);
