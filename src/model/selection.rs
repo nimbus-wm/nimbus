@@ -40,7 +40,7 @@ impl Selection {
             RemovingFromParent(node) => {
                 let parent = node.parent(forest).unwrap();
                 let alternative = node.next_sibling(forest).or(node.prev_sibling(forest));
-                if self.selected_child[parent] == Some(node) {
+                if self.selected_child.get(parent) == Some(&Some(node)) {
                     self.selected_child[parent] = alternative;
                 }
                 if self.current_selection == Some(node) {

@@ -49,7 +49,6 @@ pub struct Reactor {
     space: Option<SpaceId>,
     frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
-    last_layout: Option<Vec<(WindowId, CGRect)>>,
     raise_token: RaiseToken,
 }
 
@@ -77,7 +76,8 @@ pub struct TransactionId(u32);
 pub struct WindowState {
     #[allow(unused)]
     title: String,
-    frame: CGRect,
+    frame_last_read: CGRect,
+    frame_last_written: CGRect,
     last_sent_txid: TransactionId,
 }
 
@@ -92,7 +92,8 @@ impl From<WindowInfo> for WindowState {
     fn from(info: WindowInfo) -> Self {
         WindowState {
             title: info.title,
-            frame: info.frame,
+            frame_last_read: info.frame,
+            frame_last_written: CGRect::ZERO,
             last_sent_txid: TransactionId::default(),
         }
     }
@@ -120,7 +121,6 @@ impl Reactor {
             space: None,
             frontmost_app: None,
             global_frontmost_app_pid: None,
-            last_layout: None,
             raise_token: RaiseToken::default(),
         }
     }
@@ -228,7 +228,7 @@ impl Reactor {
                     // changed the size or position of this window.
                     return;
                 }
-                window.frame.origin = pos;
+                window.frame_last_read.origin = pos;
                 return;
             }
             Event::WindowResized(wid, new_frame, last_seen) => {
@@ -240,10 +240,10 @@ impl Reactor {
                     debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
                     return;
                 }
-                if window.frame == new_frame {
+                if window.frame_last_read == new_frame {
                     return;
                 }
-                window.frame = new_frame;
+                window.frame_last_read = new_frame;
                 let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
@@ -320,23 +320,16 @@ impl Reactor {
         let layout = self.layout.calculate(self.space.unwrap(), main_screen.frame.clone());
         debug!(?layout, "Layout");
 
-        if let Some(last) = &self.last_layout {
-            if last.len() == layout.len()
-                && last.iter().zip(&layout).all(|(a, b)| a.0 == b.0 && a.1.same_as(b.1))
-            {
-                debug!("Layout unchanged");
-                return;
-            }
-        }
-
         info!(?layout, "New layout");
 
         let mut anim = Animation::new();
         for &(wid, target_frame) in &layout {
             let window = self.windows.get_mut(&wid).unwrap();
-            let current_frame = window.frame;
             let target_frame = target_frame.round();
+            let current_frame = window.frame_last_written;
             if target_frame.same_as(current_frame) {
+                // TODO: If there's been a read since this write that differs
+                // from the written value, we should write again.
                 continue;
             }
             debug!(?current_frame, ?target_frame, "Change");
@@ -353,13 +346,18 @@ impl Reactor {
             anim.run();
         }
 
-        self.last_layout = Some(layout);
+        for &(wid, target_frame) in &layout {
+            self.windows.get_mut(&wid).unwrap().frame_last_written = target_frame;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::{
+        collections::BTreeMap,
+        sync::mpsc::{channel, Receiver, Sender},
+    };
 
     use icrate::Foundation::CGSize;
 
@@ -467,7 +465,7 @@ mod tests {
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
     }
 
-    #[derive(Default)]
+    #[derive(Default, PartialEq, Debug)]
     struct WindowState {
         last_seen_txid: TransactionId,
         animating: bool,
@@ -476,9 +474,9 @@ mod tests {
 
     fn simulate_events_for_requests(
         requests: Vec<Request>,
-    ) -> (Vec<Event>, HashMap<WindowId, WindowState>) {
+    ) -> (Vec<Event>, BTreeMap<WindowId, WindowState>) {
         let mut events = vec![];
-        let mut windows: HashMap<WindowId, WindowState> = HashMap::new();
+        let mut windows: BTreeMap<WindowId, WindowState> = BTreeMap::new();
 
         for request in requests {
             match request {
@@ -552,6 +550,39 @@ mod tests {
             requests.is_empty(),
             "got requests when there should have been none: {requests:?}"
         );
+    }
+
+    #[test]
+    fn it_sends_writes_when_stale_read_state_looks_same_as_written_state() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
+            vec![SpaceId::new(1)],
+        ));
+
+        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        let (events_1, state_1) = simulate_events_for_requests(apps.requests());
+        assert!(!state_1.is_empty());
+
+        for event in events_1 {
+            reactor.handle_event(event);
+        }
+        assert!(apps.requests().is_empty());
+
+        reactor.handle_event(apps.make_app(2, make_windows(1)));
+        let (_events_2, _state_2) = simulate_events_for_requests(apps.requests());
+
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(2, 1)));
+        let (_events_3, state_3) = simulate_events_for_requests(apps.requests());
+
+        // These should be the same, because we should have resized the first
+        // two windows both at the beginning, and at the end when the third
+        // window was destroyed.
+        for (wid, state) in state_1 {
+            assert!(state_3.contains_key(&wid), "{wid:?} not in {state_3:#?}");
+            assert_eq!(state.frame, state_3[&wid].frame);
+        }
     }
 
     #[test]
