@@ -76,8 +76,11 @@ pub struct TransactionId(u32);
 pub struct WindowState {
     #[allow(unused)]
     title: String,
-    frame_last_read: CGRect,
-    frame_last_written: CGRect,
+    /// The last known frame of the window. Always includes the last write.
+    ///
+    /// This value only updates monotonically with respect to writes; in other
+    /// words, we only accept reads when we know they come after the last write.
+    frame_monotonic: CGRect,
     last_sent_txid: TransactionId,
 }
 
@@ -92,8 +95,7 @@ impl From<WindowInfo> for WindowState {
     fn from(info: WindowInfo) -> Self {
         WindowState {
             title: info.title,
-            frame_last_read: info.frame,
-            frame_last_written: CGRect::ZERO,
+            frame_monotonic: info.frame,
             last_sent_txid: TransactionId::default(),
         }
     }
@@ -228,7 +230,7 @@ impl Reactor {
                     // changed the size or position of this window.
                     return;
                 }
-                window.frame_last_read.origin = pos;
+                window.frame_monotonic.origin = pos;
                 return;
             }
             Event::WindowResized(wid, new_frame, last_seen) => {
@@ -240,10 +242,10 @@ impl Reactor {
                     debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
                     return;
                 }
-                if window.frame_last_read == new_frame {
+                if window.frame_monotonic == new_frame {
                     return;
                 }
-                window.frame_last_read = new_frame;
+                window.frame_monotonic = new_frame;
                 let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
@@ -326,10 +328,8 @@ impl Reactor {
         for &(wid, target_frame) in &layout {
             let window = self.windows.get_mut(&wid).unwrap();
             let target_frame = target_frame.round();
-            let current_frame = window.frame_last_written;
+            let current_frame = window.frame_monotonic;
             if target_frame.same_as(current_frame) {
-                // TODO: If there's been a read since this write that differs
-                // from the written value, we should write again.
                 continue;
             }
             debug!(?current_frame, ?target_frame, "Change");
@@ -347,7 +347,7 @@ impl Reactor {
         }
 
         for &(wid, target_frame) in &layout {
-            self.windows.get_mut(&wid).unwrap().frame_last_written = target_frame;
+            self.windows.get_mut(&wid).unwrap().frame_monotonic = target_frame;
         }
     }
 }
@@ -583,6 +583,42 @@ mod tests {
             assert!(state_3.contains_key(&wid), "{wid:?} not in {state_3:#?}");
             assert_eq!(state.frame, state_3[&wid].frame);
         }
+    }
+
+    #[test]
+    fn sends_writes_same_as_last_written_state_if_changed_externally() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
+            vec![SpaceId::new(1)],
+        ));
+
+        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        let (events_1, state_1) = simulate_events_for_requests(apps.requests());
+        assert!(!state_1.is_empty());
+
+        for event in events_1 {
+            reactor.handle_event(event);
+        }
+        assert!(apps.requests().is_empty());
+
+        // Move a window in an invalid way.
+        let wid = WindowId::new(1, 1);
+        let old_frame = state_1[&wid].frame;
+        reactor.handle_event(Event::WindowResized(
+            wid,
+            CGRect::new(
+                CGPoint::new(old_frame.origin.x, old_frame.origin.y + 10.),
+                old_frame.size,
+            ),
+            state_1[&wid].last_seen_txid,
+        ));
+
+        let requests = apps.requests();
+        assert!(!requests.is_empty());
+        let (_events_2, state_2) = simulate_events_for_requests(requests);
+        assert_eq!(state_2[&wid].frame, old_frame);
     }
 
     #[test]
