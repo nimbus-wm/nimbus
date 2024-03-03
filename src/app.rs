@@ -267,10 +267,9 @@ impl State {
             Request::EndWindowAnimation(wid) => {
                 let window = self.window_element(wid)?;
                 self.restart_notifications_after_animation(window);
-                let pos = trace("position", window, || window.position())?;
-                let size = trace("size", window, || window.size())?;
-                self.send_event(Event::WindowMoved(wid, pos.to_icrate()));
-                self.send_event(Event::WindowResized(wid, size.to_icrate()));
+                let frame = trace("frame", window, || window.frame())?;
+                self.send_event(Event::WindowMoved(wid, frame.origin.to_icrate()));
+                self.send_event(Event::WindowResized(wid, frame.to_icrate()));
             }
             Request::Raise(wid, token) => {
                 let window = self.window_element(wid)?;
@@ -366,10 +365,12 @@ impl State {
                 let Some(window) = self.windows.iter().find(|w| w.elem == elem) else {
                     return;
                 };
-                let Ok(size) = window.elem.size() else {
+                // A resize can also affect the position, so we read and send
+                // the whole frame.
+                let Ok(frame) = window.elem.frame() else {
                     return;
                 };
-                self.send_event(Event::WindowResized(window.wid, size.to_icrate()));
+                self.send_event(Event::WindowResized(window.wid, frame.to_icrate()));
             }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}

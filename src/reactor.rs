@@ -27,7 +27,7 @@ pub enum Event {
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
     WindowMoved(WindowId, CGPoint),
-    WindowResized(WindowId, CGSize),
+    WindowResized(WindowId, CGRect),
     ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
@@ -119,6 +119,7 @@ impl Reactor {
         info!(?event, "Event");
         let main_window_orig = self.main_window();
         let mut animation_focus_wid = None;
+        let mut is_resize = false;
         match event {
             Event::ApplicationLaunched(pid, state, windows) => {
                 let is_frontmost = state.is_frontmost;
@@ -208,9 +209,22 @@ impl Reactor {
                 self.windows.get_mut(&wid).unwrap().frame.origin = pos;
                 return;
             }
-            Event::WindowResized(wid, size) => {
-                self.windows.get_mut(&wid).unwrap().frame.size = size;
-                return;
+            Event::WindowResized(wid, new_frame) => {
+                let frame = &mut self.windows.get_mut(&wid).unwrap().frame;
+                if *frame == new_frame {
+                    return;
+                }
+                *frame = new_frame;
+                let Some(space) = self.space else { return };
+                let Some(screen) = self.main_screen else { return };
+                let response = self.layout.handle_event(LayoutEvent::WindowResized {
+                    space,
+                    wid,
+                    new_frame,
+                    screen: screen.frame,
+                });
+                self.handle_response(response);
+                is_resize = true;
             }
             Event::ScreenParametersChanged(frame, spaces) => {
                 if self.space.is_none() {
@@ -245,7 +259,7 @@ impl Reactor {
             ));
             self.handle_response(response);
         }
-        self.update_layout(animation_focus_wid);
+        self.update_layout(animation_focus_wid, is_resize);
     }
 
     fn handle_response(&mut self, response: layout::EventResponse) {
@@ -265,7 +279,7 @@ impl Reactor {
             .unwrap();
     }
 
-    pub fn update_layout(&mut self, new_wid: Option<WindowId>) {
+    pub fn update_layout(&mut self, new_wid: Option<WindowId>, is_resize: bool) {
         let Some(main_screen) = self.main_screen else { return };
         if Some(main_screen.space) != self.space {
             return;
@@ -304,8 +318,13 @@ impl Reactor {
             let is_new = Some(wid) == new_wid;
             anim.add_window(handle, wid, current_frame, target_frame, is_new);
         }
-        anim.run();
-        //anim.skip_to_end();
+        if is_resize {
+            // If the user is doing something with the mouse we don't want to
+            // animate on top of that.
+            anim.skip_to_end();
+        } else {
+            anim.run();
+        }
 
         self.last_layout = Some(layout);
     }

@@ -38,6 +38,12 @@ pub enum LayoutCommand {
 #[derive(Debug, Clone)]
 pub enum LayoutEvent {
     WindowRaised(SpaceId, Option<WindowId>),
+    WindowResized {
+        space: SpaceId,
+        wid: WindowId,
+        new_frame: CGRect,
+        screen: CGRect,
+    },
 }
 
 #[must_use]
@@ -78,6 +84,21 @@ impl LayoutManager {
             LayoutEvent::WindowRaised(space, wid) => {
                 let space = self.tree.space(space);
                 self.tree.select(wid.and_then(|wid| self.tree.window_node(space, wid)));
+            }
+            LayoutEvent::WindowResized { space, wid, new_frame, screen } => {
+                let space = self.tree.space(space);
+                if let Some(node) = self.tree.window_node(space, wid) {
+                    // This is inefficient, but works for now.
+                    if let Some((_, old_frame)) = self
+                        .tree
+                        .calculate_layout(space, screen)
+                        .into_iter()
+                        .filter(|(w, _)| *w == wid)
+                        .next()
+                    {
+                        self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
+                    }
+                }
             }
         }
         EventResponse::default()
