@@ -1,3 +1,4 @@
+use std::mem;
 use std::{collections::HashMap, sync, thread};
 
 use icrate::Foundation::{CGPoint, CGRect};
@@ -245,12 +246,13 @@ impl Reactor {
                 if window.frame_monotonic == new_frame {
                     return;
                 }
-                window.frame_monotonic = new_frame;
+                let old_frame = mem::replace(&mut window.frame_monotonic, new_frame);
                 let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
                     space,
                     wid,
+                    old_frame,
                     new_frame,
                     screen: screen.frame,
                 });
