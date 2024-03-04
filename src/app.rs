@@ -285,12 +285,11 @@ impl State {
                 let &WindowState { ref elem, last_seen_txid } = self.window(wid)?;
                 self.restart_notifications_after_animation(elem);
                 let frame = trace("frame", elem, || elem.frame())?;
-                self.send_event(Event::WindowMoved(
+                self.send_event(Event::WindowFrameChanged(
                     wid,
-                    frame.origin.to_icrate(),
+                    frame.to_icrate(),
                     last_seen_txid,
                 ));
-                self.send_event(Event::WindowResized(wid, frame.to_icrate(), last_seen_txid));
             }
             Request::Raise(wid, token) => {
                 let window = self.window(wid)?;
@@ -373,27 +372,20 @@ impl State {
                 self.windows.remove(&wid);
                 self.send_event(Event::WindowDestroyed(wid));
             }
-            kAXWindowMovedNotification => {
+            kAXWindowMovedNotification | kAXWindowResizedNotification => {
+                // The difference between these two events isn't very useful to
+                // expose. Anytime there's a resize we'll want to check the
+                // position to see which corner the window was resized from. So
+                // we always read and send the full frame since it's a single
+                // request anyway.
                 let Ok(wid) = self.id(&elem) else {
                     return;
                 };
                 let last_seen = self.window(wid).unwrap().last_seen_txid;
-                let Ok(pos) = elem.position() else {
-                    return;
-                };
-                self.send_event(Event::WindowMoved(wid, pos.to_icrate(), last_seen));
-            }
-            kAXWindowResizedNotification => {
-                let Ok(wid) = self.id(&elem) else {
-                    return;
-                };
-                let last_seen = self.window(wid).unwrap().last_seen_txid;
-                // A resize can also affect the position, so we read and send
-                // the whole frame.
                 let Ok(frame) = elem.frame() else {
                     return;
                 };
-                self.send_event(Event::WindowResized(wid, frame.to_icrate(), last_seen));
+                self.send_event(Event::WindowFrameChanged(wid, frame.to_icrate(), last_seen));
             }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}

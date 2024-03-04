@@ -1,9 +1,8 @@
 use std::mem;
 use std::{collections::HashMap, sync, thread};
 
-use icrate::Foundation::{CGPoint, CGRect};
-use tracing::Span;
-use tracing::{debug, info};
+use icrate::Foundation::CGRect;
+use tracing::{debug, info, Span};
 
 use crate::app::{AppInfo, WindowInfo};
 use crate::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
@@ -28,8 +27,7 @@ pub enum Event {
     ApplicationMainWindowChanged(pid_t, Option<WindowId>),
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
-    WindowMoved(WindowId, CGPoint, TransactionId),
-    WindowResized(WindowId, CGRect, TransactionId),
+    WindowFrameChanged(WindowId, CGRect, TransactionId),
     ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
@@ -86,6 +84,7 @@ pub struct WindowState {
 }
 
 impl WindowState {
+    #[must_use]
     fn next_txid(&mut self) -> TransactionId {
         self.last_sent_txid.0 += 1;
         self.last_sent_txid
@@ -224,17 +223,7 @@ impl Reactor {
                 self.windows.remove(&wid).unwrap();
                 //animation_focus_wid = self.window_order.last().cloned();
             }
-            Event::WindowMoved(wid, pos, last_seen) => {
-                let window = self.windows.get_mut(&wid).unwrap();
-                if last_seen != window.last_sent_txid {
-                    // Ignore events that happened before the last time we
-                    // changed the size or position of this window.
-                    return;
-                }
-                window.frame_monotonic.origin = pos;
-                return;
-            }
-            Event::WindowResized(wid, new_frame, last_seen) => {
+            Event::WindowFrameChanged(wid, new_frame, last_seen) => {
                 let window = self.windows.get_mut(&wid).unwrap();
                 if last_seen != window.last_sent_txid {
                     // Ignore events that happened before the last time we
@@ -361,7 +350,7 @@ mod tests {
         sync::mpsc::{channel, Receiver, Sender},
     };
 
-    use icrate::Foundation::CGSize;
+    use icrate::Foundation::{CGPoint, CGSize};
 
     use super::*;
     use crate::app::Request;
@@ -486,22 +475,19 @@ mod tests {
                     let window = windows.entry(wid).or_default();
                     window.last_seen_txid = txid;
                     let old_frame = window.frame;
-                    if !window.animating && !old_frame.origin.same_as(frame.origin) {
-                        events.push(Event::WindowMoved(wid, frame.origin, txid));
-                    }
-                    if !window.animating && !old_frame.size.same_as(frame.size) {
-                        events.push(Event::WindowResized(wid, frame, txid));
-                    }
                     window.frame = frame;
+                    if !window.animating && !old_frame.same_as(frame) {
+                        events.push(Event::WindowFrameChanged(wid, frame, txid));
+                    }
                 }
                 Request::SetWindowPos(wid, pos, txid) => {
                     let window = windows.entry(wid).or_default();
                     window.last_seen_txid = txid;
                     let old_frame = window.frame;
-                    if !window.animating && !old_frame.origin.same_as(pos) {
-                        events.push(Event::WindowMoved(wid, pos, txid));
-                    }
                     window.frame.origin = pos;
+                    if !window.animating && !old_frame.same_as(window.frame) {
+                        events.push(Event::WindowFrameChanged(wid, window.frame, txid));
+                    }
                 }
                 Request::BeginWindowAnimation(wid) => {
                     windows.entry(wid).or_default().animating = true;
@@ -509,12 +495,7 @@ mod tests {
                 Request::EndWindowAnimation(wid) => {
                     let window = windows.entry(wid).or_default();
                     window.animating = false;
-                    events.push(Event::WindowMoved(
-                        wid,
-                        window.frame.origin,
-                        window.last_seen_txid,
-                    ));
-                    events.push(Event::WindowResized(
+                    events.push(Event::WindowFrameChanged(
                         wid,
                         window.frame,
                         window.last_seen_txid,
@@ -608,7 +589,7 @@ mod tests {
         // Move a window in an invalid way.
         let wid = WindowId::new(1, 1);
         let old_frame = state_1[&wid].frame;
-        reactor.handle_event(Event::WindowResized(
+        reactor.handle_event(Event::WindowFrameChanged(
             wid,
             CGRect::new(
                 CGPoint::new(old_frame.origin.x, old_frame.origin.y + 10.),
@@ -650,7 +631,11 @@ mod tests {
             window.frame.origin,
             CGSize::new(window.frame.size.width + 10., window.frame.size.height),
         );
-        reactor.handle_event(Event::WindowResized(resizing, frame, window.last_seen_txid));
+        reactor.handle_event(Event::WindowFrameChanged(
+            resizing,
+            frame,
+            window.last_seen_txid,
+        ));
 
         // Expect the next window to be resized.
         let next = WindowId::new(1, 3);
