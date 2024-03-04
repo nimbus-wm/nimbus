@@ -10,12 +10,11 @@ use core_graphics::{
 };
 use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
 use structopt::StructOpt;
-use tokio::sync::mpsc;
-
 use nimbus::{
     app,
     screen::{self, ScreenCache},
 };
+use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(StructOpt)]

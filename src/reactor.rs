@@ -1,20 +1,17 @@
-use std::mem;
-use std::{collections::HashMap, sync, thread};
+pub use std::sync::mpsc::Sender;
+use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
 use tracing::{debug, info, Span};
 
-use crate::app::{AppInfo, WindowInfo};
-use crate::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
-use crate::metrics::{self, MetricsCommand};
 use crate::{
     animation::Animation,
-    app::{pid_t, AppThreadHandle, RaiseToken, Request, WindowId},
+    app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
+    layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
+    metrics::{self, MetricsCommand},
     screen::SpaceId,
     util::{Round, SameAs},
 };
-
-pub use std::sync::mpsc::Sender;
 
 #[derive(Debug)]
 pub enum Event {

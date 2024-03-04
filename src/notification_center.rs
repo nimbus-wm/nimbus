@@ -10,8 +10,7 @@ use icrate::{
     AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
-use tracing::{info_span, Span};
-use tracing::{trace, warn};
+use tracing::{info_span, trace, warn, Span};
 
 use crate::{
     app::{self, AppInfo},

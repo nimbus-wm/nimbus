@@ -4,16 +4,15 @@ use std::{collections::HashMap, mem};
 
 use icrate::Foundation::CGRect;
 
-use crate::{
-    app::WindowId,
-    model::node::{Forest, NodeId, OwnedNode},
-    screen::SpaceId,
-};
-
 use super::{
     layout::{Direction, Layout, LayoutKind},
     node,
     selection::Selection,
+};
+use crate::{
+    app::WindowId,
+    model::node::{Forest, NodeId, OwnedNode},
+    screen::SpaceId,
 };
 
 /// The layout tree.

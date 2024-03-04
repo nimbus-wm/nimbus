@@ -17,6 +17,7 @@ use std::{
 };
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
+pub use accessibility_sys::pid_t;
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
@@ -37,8 +38,6 @@ use crate::{
     run_loop::WakeupHandle,
     util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
-
-pub use accessibility_sys::pid_t;
 
 /// An identifier representing a window.
 ///

@@ -227,9 +227,10 @@ impl Layout {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::{model::Tree, screen::SpaceId};
-    use pretty_assertions::assert_eq;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
         CGRect::new(
