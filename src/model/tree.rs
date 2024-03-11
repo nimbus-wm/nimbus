@@ -6,7 +6,7 @@ use icrate::Foundation::CGRect;
 
 use super::{
     layout::{Direction, Layout, LayoutKind},
-    node,
+    node::{self, TreeContext},
     selection::Selection,
 };
 use crate::{
@@ -20,11 +20,10 @@ use crate::{
 /// All interactions with the data model happen through the public APIs on this
 /// type.
 pub struct Tree {
-    forest: Forest,
+    tree: TreeContext<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
     window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
     spaces: HashMap<SpaceId, OwnedNode>,
-    c: Components,
 }
 
 pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
@@ -56,25 +55,24 @@ pub(super) enum TreeEvent {
 impl Tree {
     pub fn new() -> Tree {
         Tree {
-            forest: Forest::new(),
+            tree: TreeContext::with_observer(Components::default()),
             windows: Default::default(),
             window_nodes: Default::default(),
             spaces: Default::default(),
-            c: Components::default(),
         }
     }
 
     pub fn add_window(&mut self, parent: NodeId, wid: WindowId) -> NodeId {
-        let root = parent.ancestors(&self.forest).last().unwrap();
-        let node = parent.push_back(&mut self.forest, &mut self.c);
+        let root = parent.ancestors(&self.tree.forest).last().unwrap();
+        let node = self.tree.mk_node().push_back(parent);
         self.windows.insert(node, wid);
         self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { root, node });
         node
     }
 
     pub fn add_windows(&mut self, parent: NodeId, wids: impl Iterator<Item = WindowId>) {
-        self.forest.reserve(wids.size_hint().1.unwrap_or(0));
-        self.windows.set_capacity(self.forest.capacity());
+        self.tree.forest.reserve(wids.size_hint().1.unwrap_or(0));
+        self.windows.set_capacity(self.tree.forest.capacity());
         for wid in wids {
             self.add_window(parent, wid);
         }
@@ -84,7 +82,7 @@ impl Tree {
         self.window_nodes.retain(|wid, nodes| {
             if !predicate(wid) {
                 for info in nodes {
-                    info.node.remove(&mut self.forest, &mut self.c);
+                    info.node.remove(&mut self.tree);
                     self.windows.remove(info.node);
                 }
                 return false;
@@ -111,35 +109,35 @@ impl Tree {
     }
 
     pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
-        let node = parent.push_back(&mut self.forest, &mut self.c);
-        self.c.layout.set_kind(node, kind);
+        let node = self.tree.mk_node().push_back(parent);
+        self.tree.data.layout.set_kind(node, kind);
         node
     }
 
     // FIXME: root
     pub fn select(&mut self, selection: impl Into<Option<NodeId>>) {
-        self.c.selection.select(&self.forest, selection.into())
+        self.tree.data.selection.select(&self.tree.forest, selection.into())
     }
 
     // FIXME: root
     pub fn selection(&self) -> Option<NodeId> {
-        self.c.selection.current_selection()
+        self.tree.data.selection.current_selection()
     }
 
     pub fn space(&mut self, space: SpaceId) -> NodeId {
         self.spaces
             .entry(space)
-            .or_insert_with(|| OwnedNode::new_root_in(&mut self.forest, "space_root", &mut self.c))
+            .or_insert_with(|| OwnedNode::new_root_in(&mut self.tree, "space_root"))
             .id()
     }
 
     pub fn calculate_layout(&self, root: NodeId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.c.layout.get_sizes(&self.forest, &self.windows, root, frame)
+        self.tree.data.layout.get_sizes(&self.tree.forest, &self.windows, root, frame)
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        let forest = &self.forest;
-        let selection = &self.c.selection;
+        let forest = &self.tree.forest;
+        let selection = &self.tree.data.selection;
         let Some(mut node) =
             // Keep going up...
             from.ancestors(forest)
@@ -151,7 +149,8 @@ impl Tree {
         // Descend as far down as we can go, keeping close to the direction we're
         // moving from.
         loop {
-            let child = if self.c.layout.kind(node).orientation() == direction.orientation() {
+            let child = if self.tree.data.layout.kind(node).orientation() == direction.orientation()
+            {
                 match direction {
                     Direction::Up | Direction::Left => node.first_child(forest),
                     Direction::Down | Direction::Right => node.last_child(forest),
@@ -166,13 +165,13 @@ impl Tree {
     }
 
     fn move_over(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        let Some(parent) = from.parent(&self.forest) else {
+        let Some(parent) = from.parent(&self.tree.forest) else {
             return None;
         };
-        if self.c.layout.kind(parent).orientation() == direction.orientation() {
+        if self.tree.data.layout.kind(parent).orientation() == direction.orientation() {
             match direction {
-                Direction::Up | Direction::Left => from.prev_sibling(&self.forest),
-                Direction::Down | Direction::Right => from.next_sibling(&self.forest),
+                Direction::Up | Direction::Left => from.prev_sibling(&self.tree.forest),
+                Direction::Down | Direction::Right => from.next_sibling(&self.tree.forest),
             }
         } else {
             None
@@ -182,35 +181,42 @@ impl Tree {
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
         // Pick an ancestor to resize that has a sibling in the given direction.
         let can_resize = |&node: &NodeId| -> bool {
-            let Some(parent) = node.parent(&self.forest) else {
+            let Some(parent) = node.parent(&self.tree.forest) else {
                 return false;
             };
-            !self.c.layout.kind(parent).is_group() && self.move_over(node, direction).is_some()
+            !self.tree.data.layout.kind(parent).is_group()
+                && self.move_over(node, direction).is_some()
         };
-        let Some(resizing_node) = node.ancestors(&self.forest).filter(can_resize).next() else {
+        let Some(resizing_node) = node.ancestors(&self.tree.forest).filter(can_resize).next()
+        else {
             return false;
         };
         let sibling = self.move_over(resizing_node, direction).unwrap();
 
         // Compute the share of resizing_node's parent that needs to be taken
         // from the sibling.
-        let exchange_rate = resizing_node.ancestors(&self.forest).skip(1).fold(1.0, |r, node| {
-            match node.parent(&self.forest) {
-                Some(parent)
-                    if self.c.layout.kind(parent).orientation() == direction.orientation()
-                        && !self.c.layout.kind(parent).is_group() =>
-                {
-                    r * self.c.layout.proportion(&self.forest, node).unwrap()
+        let exchange_rate =
+            resizing_node.ancestors(&self.tree.forest).skip(1).fold(1.0, |r, node| {
+                match node.parent(&self.tree.forest) {
+                    Some(parent)
+                        if self.tree.data.layout.kind(parent).orientation()
+                            == direction.orientation()
+                            && !self.tree.data.layout.kind(parent).is_group() =>
+                    {
+                        r * self.tree.data.layout.proportion(&self.tree.forest, node).unwrap()
+                    }
+                    _ => r,
                 }
-                _ => r,
-            }
-        });
+            });
         let local_ratio = f64::from(screen_ratio)
-            * self.c.layout.total(resizing_node.parent(&self.forest).unwrap())
+            * self.tree.data.layout.total(resizing_node.parent(&self.tree.forest).unwrap())
             / exchange_rate;
-        self.c
-            .layout
-            .take_share(&self.forest, resizing_node, sibling, local_ratio as f32);
+        self.tree.data.layout.take_share(
+            &self.tree.forest,
+            resizing_node,
+            sibling,
+            local_ratio as f32,
+        );
 
         true
     }
@@ -269,9 +275,12 @@ impl Tree {
     }
 
     fn get_ascii_tree(&self, node: NodeId) -> ascii_tree::Tree {
-        let desc = format!("{node:?} {layout:?}", layout = self.c.layout.debug(node));
+        let desc = format!(
+            "{node:?} {layout:?}",
+            layout = self.tree.data.layout.debug(node)
+        );
         let children: Vec<_> =
-            node.children(&self.forest).map(|c| self.get_ascii_tree(c)).collect();
+            node.children(&self.tree.forest).map(|c| self.get_ascii_tree(c)).collect();
         if children.is_empty() {
             let lines = [
                 Some(desc),
