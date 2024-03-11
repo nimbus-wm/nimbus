@@ -56,7 +56,7 @@ pub(super) enum TreeEvent {
 impl Tree {
     pub fn new() -> Tree {
         Tree {
-            forest: Forest::default(),
+            forest: Forest::new(),
             windows: Default::default(),
             window_nodes: Default::default(),
             spaces: Default::default(),
