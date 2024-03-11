@@ -23,6 +23,7 @@ pub enum LayoutCommand {
     Shuffle,
     NextWindow,
     PrevWindow,
+    MoveFocus(Direction),
 }
 
 #[derive(Debug, Clone)]
@@ -101,23 +102,18 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::NextWindow => {
-                let new = self
-                    .tree
-                    .selection()
-                    // TODO
-                    .and_then(|cur| self.tree.traverse(cur, Direction::Right))
-                    .and_then(|new| self.tree.window_at(new));
-                let Some(new) = new else {
-                    return EventResponse::default();
-                };
-                EventResponse { raise_window: Some(new) }
+                // TODO
+                self.handle_command(space, LayoutCommand::MoveFocus(Direction::Left))
             }
             LayoutCommand::PrevWindow => {
+                // TODO
+                self.handle_command(space, LayoutCommand::MoveFocus(Direction::Right))
+            }
+            LayoutCommand::MoveFocus(direction) => {
                 let new = self
                     .tree
                     .selection()
-                    // TODO
-                    .and_then(|cur| self.tree.traverse(cur, Direction::Left))
+                    .and_then(|cur| self.tree.traverse(cur, direction))
                     .and_then(|new| self.tree.window_at(new));
                 let Some(new) = new else {
                     return EventResponse::default();
