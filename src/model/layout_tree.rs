@@ -82,7 +82,7 @@ impl LayoutTree {
         self.window_nodes.retain(|wid, nodes| {
             if !predicate(wid) {
                 for info in nodes {
-                    info.node.remove(&mut self.tree);
+                    info.node.detach(&mut self.tree).remove();
                     self.windows.remove(info.node);
                 }
                 return false;

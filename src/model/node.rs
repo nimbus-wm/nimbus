@@ -27,13 +27,6 @@ impl<O: Observer> Tree<O> {
     }
 }
 
-#[must_use = "Detached nodes should be inserted into the tree or created as a root with OwnedNode"]
-pub struct DetachedNode<'a, O> {
-    // Nothing prevents this from being public, just haven't needed it yet.
-    id: NodeId,
-    tree: &'a mut Tree<O>,
-}
-
 /// Map that holds the structure of the tree.
 ///
 /// Multiple trees can be contained within a map. This also makes it easier
@@ -102,7 +95,7 @@ impl OwnedNode {
 
     #[track_caller]
     pub fn remove(&mut self, map: &mut Tree<impl Observer>) {
-        self.0.take().unwrap().remove(map)
+        self.0.take().unwrap().detach(map).remove()
     }
 }
 
@@ -124,7 +117,7 @@ impl Drop for OwnedNode {
     fn drop(&mut self) {
         if let Some(node) = self.0 {
             panic!(
-                "OwnedNode {name:?} dropped without being removed: {node:?}",
+                "OwnedNode {name:?} dropped without OwnedNode::remove being called: {node:?}",
                 name = self.1,
             );
         }
@@ -137,6 +130,13 @@ slotmap::new_key_type! {
 }
 
 impl NodeId {
+    #[track_caller]
+    pub fn detach<O: Observer>(self, tree: &mut Tree<O>) -> DetachedNode<O> {
+        tree.data.removing_from_parent(&tree.map, self);
+        tree.map[self].clone().unlink(self, &mut tree.map);
+        DetachedNode { id: self, tree }
+    }
+
     #[track_caller]
     pub fn parent(self, map: &NodeMap) -> Option<NodeId> {
         map[self].parent
@@ -215,6 +215,13 @@ impl Observer for () {
     fn removed_from_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
 }
 
+#[must_use = "Detached nodes should be inserted into the tree or created as a root with OwnedNode"]
+pub struct DetachedNode<'a, O> {
+    // Nothing prevents this from being public, just haven't needed it yet.
+    id: NodeId,
+    tree: &'a mut Tree<O>,
+}
+
 impl<'a, O: Observer> DetachedNode<'a, O> {
     #[track_caller]
     pub(super) fn push_back(self, parent: NodeId) -> NodeId {
@@ -243,13 +250,10 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
         self.tree.data.added_to_parent(&self.tree.map, self.id);
         self.id
     }
-}
 
-impl NodeId {
     #[track_caller]
-    pub(super) fn remove(self, cx: &mut Tree<impl Observer>) {
-        cx.data.removing_from_parent(&cx.map, self);
-        cx.map.map.remove(self).unwrap().unlink(self, &mut cx.map).delete_recursive(cx);
+    pub(super) fn remove(self) {
+        self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree);
     }
 }
 
@@ -328,9 +332,8 @@ impl NodeId {
 }
 
 impl Node {
-    #[must_use]
     #[track_caller]
-    fn unlink(self, id: NodeId, map: &mut NodeMap) -> Self {
+    fn unlink(&self, id: NodeId, map: &mut NodeMap) {
         if let Some(prev) = self.prev_sibling {
             map[prev].next_sibling = self.next_sibling;
         }
@@ -345,7 +348,6 @@ impl Node {
                 map[parent].last_child = self.prev_sibling;
             }
         }
-        self
     }
 
     #[track_caller]
@@ -587,16 +589,16 @@ mod tests {
     fn remove() {
         let mut t = TestTree::new();
 
-        t.child2.remove(&mut t.tree);
+        t.child2.detach(&mut t.tree).remove();
         t.assert_children_are([t.child1, t.child3], t.root);
         assert!(!t.tree.map.map.contains_key(t.child2));
         assert!(!t.tree.map.map.contains_key(t.gc1));
 
-        t.child3.remove(&mut t.tree);
+        t.child3.detach(&mut t.tree).remove();
         t.assert_children_are([t.child1], t.root);
         assert!(!t.tree.map.map.contains_key(t.child3));
 
-        t.child1.remove(&mut t.tree);
+        t.child1.detach(&mut t.tree).remove();
         t.assert_children_are([], t.root);
         assert!(!t.tree.map.map.contains_key(t.child1));
 
