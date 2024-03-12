@@ -1,6 +1,6 @@
 use super::{
     layout_tree::TreeEvent,
-    node::{NodeId, NodeMap},
+    tree::{NodeId, NodeMap},
 };
 
 #[derive(Default)]

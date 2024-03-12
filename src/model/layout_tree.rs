@@ -6,12 +6,12 @@ use icrate::Foundation::CGRect;
 
 use super::{
     layout::{Direction, Layout, LayoutKind},
-    node::{self, Tree},
     selection::Selection,
+    tree::{self, Tree},
 };
 use crate::{
     app::WindowId,
-    model::node::{NodeId, NodeMap, OwnedNode},
+    model::tree::{NodeId, NodeMap, OwnedNode},
     screen::SpaceId,
 };
 
@@ -305,7 +305,7 @@ impl Components {
     }
 }
 
-impl node::Observer for Components {
+impl tree::Observer for Components {
     fn added_to_forest(&mut self, map: &NodeMap, node: NodeId) {
         self.dispatch_event(map, TreeEvent::AddedToForest(node))
     }

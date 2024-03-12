@@ -4,7 +4,7 @@ use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
 use super::{
     layout_tree::{TreeEvent, Windows},
-    node::{NodeId, NodeMap},
+    tree::{NodeId, NodeMap},
 };
 use crate::{app::WindowId, util::Round};
 
