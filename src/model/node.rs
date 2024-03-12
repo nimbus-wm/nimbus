@@ -9,6 +9,12 @@ pub struct Tree<O> {
     pub data: O,
 }
 
+impl Tree<()> {
+    pub fn new() -> Self {
+        Self::with_observer(())
+    }
+}
+
 impl<O: Observer> Tree<O> {
     pub fn with_observer(data: O) -> Self {
         Tree { map: NodeMap::new(), data }
@@ -202,15 +208,12 @@ pub trait Observer {
     fn removed_from_forest(&mut self, map: &NodeMap, node: NodeId);
 }
 
-#[derive(Clone, Copy)]
-pub struct NoopObserver;
-impl Observer for NoopObserver {
+impl Observer for () {
     fn added_to_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
     fn added_to_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
     fn removing_from_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
     fn removed_from_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
 }
-pub const NOOP: NoopObserver = NoopObserver;
 
 impl<'a, O: Observer> DetachedNode<'a, O> {
     #[track_caller]
@@ -400,7 +403,7 @@ mod tests {
     ///           gc1
     /// ```
     struct TestTree {
-        tree: Tree<NoopObserver>,
+        tree: Tree<()>,
         root_node: OwnedNode,
         root: NodeId,
         child1: NodeId,
@@ -425,7 +428,7 @@ mod tests {
     impl TestTree {
         #[rustfmt::skip]
         fn new() -> Self {
-            let mut tree = Tree::with_observer(NOOP);
+            let mut tree = Tree::new();
 
             let root_node = OwnedNode::new_root_in(&mut tree, "tree");
             let root = root_node.id();
