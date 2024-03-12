@@ -1,6 +1,6 @@
 use super::{
+    layout_tree::TreeEvent,
     node::{Forest, NodeId},
-    tree::TreeEvent,
 };
 
 #[derive(Default)]
@@ -64,13 +64,13 @@ impl Selection {
 mod tests {
     use crate::{
         app::WindowId,
-        model::{layout::LayoutKind, tree::Tree},
+        model::{layout::LayoutKind, layout_tree::LayoutTree},
         screen::SpaceId,
     };
 
     #[test]
     fn it_moves_as_nodes_are_added_and_removed() {
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let root = tree.space(SpaceId::new(1));
         let n1 = tree.add_window(root, WindowId::new(1, 1));
         let n2 = tree.add_window(root, WindowId::new(1, 2));
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn remembers_nested_paths() {
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let root = tree.space(SpaceId::new(1));
         let a1 = tree.add_window(root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Horizontal);
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn selects_parent_when_there_are_no_children() {
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let root = tree.space(SpaceId::new(1));
         let _a1 = tree.add_window(root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Horizontal);

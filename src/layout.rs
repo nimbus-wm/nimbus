@@ -3,12 +3,12 @@ use tracing::debug;
 
 use crate::{
     app::WindowId,
-    model::{Direction, Tree},
+    model::{Direction, LayoutTree},
     screen::SpaceId,
 };
 
 pub struct LayoutManager {
-    tree: Tree,
+    tree: LayoutTree,
 }
 
 #[allow(dead_code)]
@@ -46,7 +46,7 @@ pub struct EventResponse {
 
 impl LayoutManager {
     pub fn new() -> Self {
-        LayoutManager { tree: Tree::new() }
+        LayoutManager { tree: LayoutTree::new() }
     }
 
     pub fn add_window(&mut self, space: SpaceId, wid: WindowId) {

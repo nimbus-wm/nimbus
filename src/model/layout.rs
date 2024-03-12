@@ -3,8 +3,8 @@ use core::fmt::Debug;
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
 use super::{
+    layout_tree::{TreeEvent, Windows},
     node::{Forest, NodeId},
-    tree::{TreeEvent, Windows},
 };
 use crate::{app::WindowId, util::Round};
 
@@ -230,7 +230,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::Tree, screen::SpaceId};
+    use crate::{model::LayoutTree, screen::SpaceId};
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
         CGRect::new(
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn it_lays_out_windows_proportionally() {
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let space = SpaceId::new(1);
         let root = tree.space(space);
         let _a1 = tree.add_window(root, WindowId::new(1, 1));

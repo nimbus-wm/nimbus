@@ -2,10 +2,10 @@
 //! layout logic is defined.
 
 mod layout;
+mod layout_tree;
 mod node;
 mod selection;
-mod tree;
 
 #[allow(unused_imports)]
 pub use layout::{Direction, LayoutKind};
-pub use tree::Tree;
+pub use layout_tree::LayoutTree;

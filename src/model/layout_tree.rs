@@ -19,7 +19,7 @@ use crate::{
 ///
 /// All interactions with the data model happen through the public APIs on this
 /// type.
-pub struct Tree {
+pub struct LayoutTree {
     tree: TreeContext<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
     window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
@@ -52,9 +52,9 @@ pub(super) enum TreeEvent {
     RemovedFromForest(NodeId),
 }
 
-impl Tree {
-    pub fn new() -> Tree {
-        Tree {
+impl LayoutTree {
+    pub fn new() -> LayoutTree {
+        LayoutTree {
             tree: TreeContext::with_observer(Components::default()),
             windows: Default::default(),
             window_nodes: Default::default(),
@@ -293,7 +293,7 @@ impl Tree {
     }
 }
 
-impl Drop for Tree {
+impl Drop for LayoutTree {
     fn drop(&mut self) {
         // It's okay to skip removing these, since we're dropping the Forest too.
         mem::forget(self.spaces.drain());
@@ -333,16 +333,16 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::Tree, screen::SpaceId};
+    use crate::{model::LayoutTree, screen::SpaceId};
 
     struct TestTree {
-        tree: Tree,
+        tree: LayoutTree,
         root: NodeId,
     }
 
     #[test]
     fn traverse() {
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let space = SpaceId::new(1);
         let root = tree.space(space);
         let a1 = tree.add_window(root, WindowId::new(1, 1));
@@ -407,7 +407,7 @@ mod tests {
         // │     +─────+     │
         // │     │ b3  │     │
         // └─────┴─────┴─────┘
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let space = SpaceId::new(1);
         let root = tree.space(space);
         let a1 = tree.add_window(root, WindowId::new(1, 1));
@@ -513,7 +513,7 @@ mod tests {
         // │     +─────+     │
         // │     │ b3  │     │
         // └─────┴─────┴─────┘
-        let mut tree = Tree::new();
+        let mut tree = LayoutTree::new();
         let space = SpaceId::new(1);
         let root = tree.space(space);
         let a1 = tree.add_window(root, WindowId::new(1, 1));
