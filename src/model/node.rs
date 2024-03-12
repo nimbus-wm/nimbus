@@ -4,18 +4,18 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 use slotmap::SlotMap;
 
 pub struct TreeContext<O> {
-    pub forest: Forest,
+    pub map: NodeMap,
     pub data: O,
 }
 
 impl<O: Observer> TreeContext<O> {
     pub fn with_observer(data: O) -> Self {
-        TreeContext { forest: Forest::new(), data }
+        TreeContext { map: NodeMap::new(), data }
     }
 
     pub fn mk_node(&mut self) -> DetachedNode<O> {
-        let id = self.forest.map.insert(Node::default());
-        self.data.added_to_forest(&self.forest, id);
+        let id = self.map.map.insert(Node::default());
+        self.data.added_to_forest(&self.map, id);
         DetachedNode { id, cx: self }
     }
 }
@@ -29,18 +29,18 @@ pub struct DetachedNode<'a, O> {
 
 /// Core data structure that holds tree structures.
 ///
-/// Multiple trees can be contained within a forest. This also makes it easier
+/// Multiple trees can be contained within a map. This also makes it easier
 /// to move branches between trees.
 ///
 /// This type should not be used directly; instead, use the methods on
 /// [`OwnedNode`] and [`NodeId`].
-pub struct Forest {
+pub struct NodeMap {
     map: SlotMap<NodeId, Node>,
 }
 
-impl Forest {
-    fn new() -> Forest {
-        Forest { map: SlotMap::default() }
+impl NodeMap {
+    fn new() -> NodeMap {
+        NodeMap { map: SlotMap::default() }
     }
 
     pub fn capacity(&self) -> usize {
@@ -52,7 +52,7 @@ impl Forest {
     }
 }
 
-impl Index<NodeId> for Forest {
+impl Index<NodeId> for NodeMap {
     type Output = Node;
 
     fn index(&self, index: NodeId) -> &Self::Output {
@@ -60,7 +60,7 @@ impl Index<NodeId> for Forest {
     }
 }
 
-impl IndexMut<NodeId> for Forest {
+impl IndexMut<NodeId> for NodeMap {
     fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
         &mut self.map[index]
     }
@@ -69,7 +69,7 @@ impl IndexMut<NodeId> for Forest {
 /// Represents ownership of a particular node in a tree.
 ///
 /// Nodes must be removed manually, because removal requires a reference to the
-/// [`Forest`].  If a value of this type is dropped without
+/// [`map`].  If a value of this type is dropped without
 /// [`OwnedNode::remove`] being called, it will panic.
 ///
 /// Every `OwnedNode` has a name which will be used in the panic message.
@@ -78,8 +78,8 @@ pub struct OwnedNode(Option<NodeId>, &'static str);
 
 impl OwnedNode {
     /// Creates a new root node.
-    pub fn new_root_in(forest: &mut TreeContext<impl Observer>, name: &'static str) -> Self {
-        let node = forest.mk_node();
+    pub fn new_root_in(map: &mut TreeContext<impl Observer>, name: &'static str) -> Self {
+        let node = map.mk_node();
         Self::own(node.id, name)
     }
 
@@ -97,8 +97,8 @@ impl OwnedNode {
     }
 
     #[track_caller]
-    pub fn remove(&mut self, forest: &mut TreeContext<impl Observer>) {
-        self.0.take().unwrap().remove(forest)
+    pub fn remove(&mut self, map: &mut TreeContext<impl Observer>) {
+        self.0.take().unwrap().remove(map)
     }
 }
 
@@ -134,33 +134,30 @@ slotmap::new_key_type! {
 
 impl NodeId {
     #[track_caller]
-    pub fn parent(self, forest: &Forest) -> Option<NodeId> {
-        forest[self].parent
+    pub fn parent(self, map: &NodeMap) -> Option<NodeId> {
+        map[self].parent
     }
 
     #[track_caller]
-    pub fn children(self, forest: &Forest) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn children(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
         NodeIterator {
-            cur: forest[self].first_child,
-            forest,
+            cur: map[self].first_child,
+            map,
         }
     }
 
     #[track_caller]
-    pub fn children_rev(self, forest: &Forest) -> impl Iterator<Item = NodeId> + '_ {
-        NodeRevIterator {
-            cur: forest[self].last_child,
-            forest,
-        }
+    pub fn children_rev(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
+        NodeRevIterator { cur: map[self].last_child, map }
     }
 
     /// Returns an iterator over all ancestors of the current node, including itself.
     #[track_caller]
-    pub fn ancestors(self, forest: &Forest) -> impl Iterator<Item = NodeId> + '_ {
+    pub fn ancestors(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
         let mut next = Some(self);
         std::iter::from_fn(move || {
             let node = next;
-            next = next.and_then(|n| forest[n].parent);
+            next = next.and_then(|n| map[n].parent);
             node
         })
     }
@@ -169,80 +166,80 @@ impl NodeId {
     #[track_caller]
     pub fn ancestors_with_parent(
         self,
-        forest: &Forest,
+        map: &NodeMap,
     ) -> impl Iterator<Item = (NodeId, Option<NodeId>)> + '_ {
         let mut next = Some(self);
         std::iter::from_fn(move || {
             let node = next;
-            next = next.and_then(|n| forest[n].parent);
+            next = next.and_then(|n| map[n].parent);
             node.map(|n| (n, next))
         })
     }
 
     #[track_caller]
-    pub fn next_sibling(self, forest: &Forest) -> Option<NodeId> {
-        forest[self].next_sibling
+    pub fn next_sibling(self, map: &NodeMap) -> Option<NodeId> {
+        map[self].next_sibling
     }
 
     #[track_caller]
-    pub fn prev_sibling(self, forest: &Forest) -> Option<NodeId> {
-        forest[self].prev_sibling
+    pub fn prev_sibling(self, map: &NodeMap) -> Option<NodeId> {
+        map[self].prev_sibling
     }
 
     #[track_caller]
-    pub fn first_child(self, forest: &Forest) -> Option<NodeId> {
-        forest[self].first_child
+    pub fn first_child(self, map: &NodeMap) -> Option<NodeId> {
+        map[self].first_child
     }
 
     #[track_caller]
-    pub fn last_child(self, forest: &Forest) -> Option<NodeId> {
-        forest[self].last_child
+    pub fn last_child(self, map: &NodeMap) -> Option<NodeId> {
+        map[self].last_child
     }
 }
 
 pub trait Observer {
-    fn added_to_forest(&mut self, forest: &Forest, node: NodeId);
-    fn added_to_parent(&mut self, forest: &Forest, node: NodeId);
-    fn removing_from_parent(&mut self, forest: &Forest, node: NodeId);
-    fn removed_from_forest(&mut self, forest: &Forest, node: NodeId);
+    fn added_to_forest(&mut self, map: &NodeMap, node: NodeId);
+    fn added_to_parent(&mut self, map: &NodeMap, node: NodeId);
+    fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId);
+    fn removed_from_forest(&mut self, map: &NodeMap, node: NodeId);
 }
 
 #[derive(Clone, Copy)]
 pub struct NoopObserver;
 impl Observer for NoopObserver {
-    fn added_to_forest(&mut self, _forest: &Forest, _node: NodeId) {}
-    fn added_to_parent(&mut self, _forest: &Forest, _node: NodeId) {}
-    fn removing_from_parent(&mut self, _forest: &Forest, _node: NodeId) {}
-    fn removed_from_forest(&mut self, _forest: &Forest, _node: NodeId) {}
+    fn added_to_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
+    fn added_to_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
+    fn removing_from_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
+    fn removed_from_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
 }
 pub const NOOP: NoopObserver = NoopObserver;
 
 impl<'a, O: Observer> DetachedNode<'a, O> {
     #[track_caller]
     pub(super) fn push_back(self, parent: NodeId) -> NodeId {
-        self.id.link_under_back(parent, &mut self.cx.forest);
-        self.cx.data.added_to_parent(&self.cx.forest, self.id);
+        self.id.link_under_back(parent, &mut self.cx.map);
+        self.cx.data.added_to_parent(&self.cx.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn push_front(self, parent: NodeId) -> NodeId {
-        self.id.link_under_front(parent, &mut self.cx.forest);
-        self.cx.data.added_to_parent(&self.cx.forest, self.id);
+        self.id.link_under_front(parent, &mut self.cx.map);
+        self.cx.data.added_to_parent(&self.cx.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn insert_before(self, sibling: NodeId) -> NodeId {
-        self.id.link_before(sibling, &mut self.cx.forest);
-        self.cx.data.added_to_parent(&self.cx.forest, self.id);
+        self.id.link_before(sibling, &mut self.cx.map);
+        self.cx.data.added_to_parent(&self.cx.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn insert_after(self, sibling: NodeId) -> NodeId {
-        self.id.link_after(sibling, &mut self.cx.forest);
-        self.cx.data.added_to_parent(&self.cx.forest, self.id);
+        self.id.link_after(sibling, &mut self.cx.map);
+        self.cx.data.added_to_parent(&self.cx.map, self.id);
         self.id
     }
 }
@@ -250,13 +247,8 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
 impl NodeId {
     #[track_caller]
     pub(super) fn remove(self, cx: &mut TreeContext<impl Observer>) {
-        cx.data.removing_from_parent(&cx.forest, self);
-        cx.forest
-            .map
-            .remove(self)
-            .unwrap()
-            .unlink(self, &mut cx.forest)
-            .delete_recursive(cx);
+        cx.data.removing_from_parent(&cx.map, self);
+        cx.map.map.remove(self).unwrap().unlink(self, &mut cx.map).delete_recursive(cx);
     }
 }
 
@@ -270,66 +262,66 @@ pub struct Node {
 }
 
 impl NodeId {
-    fn link_under_back(self, parent: NodeId, forest: &mut Forest) {
-        debug_assert_eq!(forest[self], Node::default());
-        forest[self].parent = Some(parent);
-        forest[parent].first_child.get_or_insert(self);
-        if let Some(prev) = forest[parent].last_child.replace(self) {
-            self.hlink_after(prev, forest);
+    fn link_under_back(self, parent: NodeId, map: &mut NodeMap) {
+        debug_assert_eq!(map[self], Node::default());
+        map[self].parent = Some(parent);
+        map[parent].first_child.get_or_insert(self);
+        if let Some(prev) = map[parent].last_child.replace(self) {
+            self.hlink_after(prev, map);
         }
     }
 
-    fn link_under_front(self, parent: NodeId, forest: &mut Forest) {
-        debug_assert_eq!(forest[self], Node::default());
-        forest[self].parent = Some(parent);
-        forest[parent].last_child.get_or_insert(self);
-        if let Some(next) = forest[parent].first_child.replace(self) {
-            self.hlink_before(next, forest);
+    fn link_under_front(self, parent: NodeId, map: &mut NodeMap) {
+        debug_assert_eq!(map[self], Node::default());
+        map[self].parent = Some(parent);
+        map[parent].last_child.get_or_insert(self);
+        if let Some(next) = map[parent].first_child.replace(self) {
+            self.hlink_before(next, map);
         }
     }
 
     #[track_caller]
-    fn link_before(self, next: NodeId, forest: &mut Forest) {
-        let parent = forest[next].parent.expect("cannot make a sibling of the root node");
-        forest[self].parent.replace(parent);
-        debug_assert!(forest[parent].first_child.is_some());
-        if forest[parent].first_child == Some(next) {
-            forest[parent].first_child.replace(self);
+    fn link_before(self, next: NodeId, map: &mut NodeMap) {
+        let parent = map[next].parent.expect("cannot make a sibling of the root node");
+        map[self].parent.replace(parent);
+        debug_assert!(map[parent].first_child.is_some());
+        if map[parent].first_child == Some(next) {
+            map[parent].first_child.replace(self);
         }
-        self.hlink_before(next, forest);
+        self.hlink_before(next, map);
     }
 
     #[track_caller]
-    fn link_after(self, prev: NodeId, forest: &mut Forest) {
-        debug_assert_eq!(forest[self].parent, None);
-        let parent = forest[prev].parent.expect("cannot make a sibling of the root node");
-        forest[self].parent.replace(parent);
-        debug_assert!(forest[parent].last_child.is_some());
-        if forest[parent].last_child == Some(prev) {
-            forest[parent].last_child.replace(self);
+    fn link_after(self, prev: NodeId, map: &mut NodeMap) {
+        debug_assert_eq!(map[self].parent, None);
+        let parent = map[prev].parent.expect("cannot make a sibling of the root node");
+        map[self].parent.replace(parent);
+        debug_assert!(map[parent].last_child.is_some());
+        if map[parent].last_child == Some(prev) {
+            map[parent].last_child.replace(self);
         }
-        self.hlink_after(prev, forest);
+        self.hlink_after(prev, map);
     }
 
-    fn hlink_after(self, prev: NodeId, forest: &mut Forest) {
+    fn hlink_after(self, prev: NodeId, map: &mut NodeMap) {
         debug_assert_ne!(self, prev);
-        debug_assert_eq!(forest[self].prev_sibling, None);
-        forest[self].prev_sibling.replace(prev);
-        let next = forest[prev].next_sibling.replace(self);
+        debug_assert_eq!(map[self].prev_sibling, None);
+        map[self].prev_sibling.replace(prev);
+        let next = map[prev].next_sibling.replace(self);
         if let Some(next) = next {
-            forest[next].prev_sibling.replace(self);
-            forest[self].next_sibling.replace(next);
+            map[next].prev_sibling.replace(self);
+            map[self].next_sibling.replace(next);
         }
     }
 
-    fn hlink_before(self, next: NodeId, forest: &mut Forest) {
+    fn hlink_before(self, next: NodeId, map: &mut NodeMap) {
         debug_assert_ne!(self, next);
-        debug_assert_eq!(forest[self].next_sibling, None);
-        forest[self].next_sibling.replace(next);
-        let prev = forest[next].prev_sibling.replace(self);
+        debug_assert_eq!(map[self].next_sibling, None);
+        map[self].next_sibling.replace(next);
+        let prev = map[next].prev_sibling.replace(self);
         if let Some(prev) = prev {
-            forest[prev].next_sibling.replace(self);
-            forest[self].prev_sibling.replace(prev);
+            map[prev].next_sibling.replace(self);
+            map[self].prev_sibling.replace(prev);
         }
     }
 }
@@ -337,19 +329,19 @@ impl NodeId {
 impl Node {
     #[must_use]
     #[track_caller]
-    fn unlink(self, id: NodeId, forest: &mut Forest) -> Self {
+    fn unlink(self, id: NodeId, map: &mut NodeMap) -> Self {
         if let Some(prev) = self.prev_sibling {
-            forest[prev].next_sibling = self.next_sibling;
+            map[prev].next_sibling = self.next_sibling;
         }
         if let Some(next) = self.next_sibling {
-            forest[next].prev_sibling = self.prev_sibling;
+            map[next].prev_sibling = self.prev_sibling;
         }
         if let Some(parent) = self.parent {
-            if Some(id) == forest[parent].first_child {
-                forest[parent].first_child = self.next_sibling;
+            if Some(id) == map[parent].first_child {
+                map[parent].first_child = self.next_sibling;
             }
-            if Some(id) == forest[parent].last_child {
-                forest[parent].last_child = self.prev_sibling;
+            if Some(id) == map[parent].last_child {
+                map[parent].last_child = self.prev_sibling;
             }
         }
         self
@@ -359,8 +351,8 @@ impl Node {
     fn delete_recursive(&self, cx: &mut TreeContext<impl Observer>) {
         let mut iter = self.first_child;
         while let Some(child) = iter {
-            let node = cx.forest.map.remove(child).unwrap();
-            cx.data.removed_from_forest(&cx.forest, child);
+            let node = cx.map.map.remove(child).unwrap();
+            cx.data.removed_from_forest(&cx.map, child);
             node.delete_recursive(cx);
             iter = node.next_sibling;
         }
@@ -369,28 +361,28 @@ impl Node {
 
 struct NodeIterator<'a> {
     cur: Option<NodeId>,
-    forest: &'a Forest,
+    map: &'a NodeMap,
 }
 
 impl<'a> Iterator for NodeIterator<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         let Some(id) = self.cur else { return None };
-        self.cur = self.forest[id].next_sibling;
+        self.cur = self.map[id].next_sibling;
         Some(id)
     }
 }
 
 struct NodeRevIterator<'a> {
     cur: Option<NodeId>,
-    forest: &'a Forest,
+    map: &'a NodeMap,
 }
 
 impl<'a> Iterator for NodeRevIterator<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         let Some(id) = self.cur else { return None };
-        self.cur = self.forest[id].prev_sibling;
+        self.cur = self.map[id].prev_sibling;
         Some(id)
     }
 }
@@ -455,11 +447,11 @@ mod tests {
         }
 
         fn get_children(&self, node: NodeId) -> Vec<NodeId> {
-            node.children(&self.tree.forest).collect()
+            node.children(&self.tree.map).collect()
         }
 
         fn get_children_rev(&self, node: NodeId) -> Vec<NodeId> {
-            node.children_rev(&self.tree.forest).collect()
+            node.children_rev(&self.tree.map).collect()
         }
 
         #[track_caller]
@@ -481,7 +473,7 @@ mod tests {
             );
             for child in self.get_children(parent) {
                 assert_eq!(
-                    self.tree.forest[child].parent,
+                    self.tree.map[child].parent,
                     Some(parent),
                     "child has incorrect parent"
                 );
@@ -514,7 +506,7 @@ mod tests {
     #[test]
     fn ancestors() {
         let t = TestTree::new();
-        let ancestors = |node: NodeId| node.ancestors(&t.tree.forest).collect::<Vec<_>>();
+        let ancestors = |node: NodeId| node.ancestors(&t.tree.map).collect::<Vec<_>>();
         assert_eq!([t.child1, t.root], *ancestors(t.child1));
         assert_eq!([t.gc1, t.child2, t.root], *ancestors(t.gc1));
         assert_eq!([t.child2, t.root], *ancestors(t.child2));
@@ -596,22 +588,22 @@ mod tests {
 
         t.child2.remove(&mut t.tree);
         t.assert_children_are([t.child1, t.child3], t.root);
-        assert!(!t.tree.forest.map.contains_key(t.child2));
-        assert!(!t.tree.forest.map.contains_key(t.gc1));
+        assert!(!t.tree.map.map.contains_key(t.child2));
+        assert!(!t.tree.map.map.contains_key(t.gc1));
 
         t.child3.remove(&mut t.tree);
         t.assert_children_are([t.child1], t.root);
-        assert!(!t.tree.forest.map.contains_key(t.child3));
+        assert!(!t.tree.map.map.contains_key(t.child3));
 
         t.child1.remove(&mut t.tree);
         t.assert_children_are([], t.root);
-        assert!(!t.tree.forest.map.contains_key(t.child1));
+        assert!(!t.tree.map.map.contains_key(t.child1));
 
-        assert!(t.tree.forest.map.contains_key(t.root));
-        assert!(t.tree.forest.map.contains_key(t.other_root));
+        assert!(t.tree.map.map.contains_key(t.root));
+        assert!(t.tree.map.map.contains_key(t.other_root));
         t.root_node.remove(&mut t.tree);
-        assert!(!t.tree.forest.map.contains_key(t.root));
+        assert!(!t.tree.map.map.contains_key(t.root));
         t.other_root_node.remove(&mut t.tree);
-        assert!(!t.tree.forest.map.contains_key(t.other_root));
+        assert!(!t.tree.map.map.contains_key(t.other_root));
     }
 }

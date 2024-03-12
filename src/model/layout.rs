@@ -4,7 +4,7 @@ use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
 use super::{
     layout_tree::{TreeEvent, Windows},
-    node::{Forest, NodeId},
+    node::{NodeId, NodeMap},
 };
 use crate::{app::WindowId, util::Round};
 
@@ -103,18 +103,18 @@ struct LayoutInfo {
 }
 
 impl Layout {
-    pub(super) fn handle_event(&mut self, forest: &Forest, event: TreeEvent) {
+    pub(super) fn handle_event(&mut self, map: &NodeMap, event: TreeEvent) {
         match event {
             TreeEvent::AddedToForest(node) => {
                 self.info.insert(node, LayoutInfo::default());
             }
             TreeEvent::AddedToParent(node) => {
-                let parent = node.parent(forest).unwrap();
+                let parent = node.parent(map).unwrap();
                 self.info[node].size = 1.0;
                 self.info[parent].total += 1.0;
             }
             TreeEvent::RemovingFromParent(node) => {
-                self.info[node.parent(forest).unwrap()].total -= self.info[node].size;
+                self.info[node.parent(map).unwrap()].total -= self.info[node].size;
             }
             TreeEvent::RemovedFromForest(node) => {
                 self.info.remove(node);
@@ -130,8 +130,8 @@ impl Layout {
         self.info[node].kind
     }
 
-    pub(super) fn proportion(&self, forest: &Forest, node: NodeId) -> Option<f64> {
-        let Some(parent) = node.parent(forest) else { return None };
+    pub(super) fn proportion(&self, map: &NodeMap, node: NodeId) -> Option<f64> {
+        let Some(parent) = node.parent(map) else { return None };
         Some(f64::from(self.info[node].size) / f64::from(self.info[parent].total))
     }
 
@@ -139,8 +139,8 @@ impl Layout {
         f64::from(self.info[node].total)
     }
 
-    pub(super) fn take_share(&mut self, forest: &Forest, node: NodeId, from: NodeId, share: f32) {
-        assert_eq!(node.parent(forest), from.parent(forest));
+    pub(super) fn take_share(&mut self, map: &NodeMap, node: NodeId, from: NodeId, share: f32) {
+        assert_eq!(node.parent(map), from.parent(map));
         let share = share.min(self.info[from].size);
         let share = share.max(-self.info[node].size);
         self.info[from].size -= share;
@@ -153,19 +153,19 @@ impl Layout {
 
     pub(super) fn get_sizes(
         &self,
-        forest: &Forest,
+        map: &NodeMap,
         windows: &Windows,
         root: NodeId,
         rect: CGRect,
     ) -> Vec<(WindowId, CGRect)> {
         let mut sizes = vec![];
-        self.apply(forest, windows, root, rect, &mut sizes);
+        self.apply(map, windows, root, rect, &mut sizes);
         sizes
     }
 
     fn apply(
         &self,
-        forest: &Forest,
+        map: &NodeMap,
         windows: &Windows,
         node: NodeId,
         rect: CGRect,
@@ -173,7 +173,7 @@ impl Layout {
     ) {
         if let Some(&wid) = windows.get(node) {
             debug_assert!(
-                node.children(forest).next().is_none(),
+                node.children(map).next().is_none(),
                 "non-leaf node with window id"
             );
             sizes.push((wid, rect));
@@ -183,14 +183,14 @@ impl Layout {
         use LayoutKind::*;
         match self.info[node].kind {
             Tabbed | Stacked => {
-                for child in node.children(forest) {
-                    self.apply(forest, windows, child, rect, sizes);
+                for child in node.children(map) {
+                    self.apply(map, windows, child, rect, sizes);
                 }
             }
             Horizontal => {
                 let mut x = rect.origin.x;
                 let total = self.info[node].total;
-                for child in node.children(forest) {
+                for child in node.children(map) {
                     let ratio = f64::from(self.info[child].size) / f64::from(total);
                     let rect = CGRect {
                         origin: CGPoint { x, y: rect.origin.y },
@@ -200,14 +200,14 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(forest, windows, child, rect, sizes);
+                    self.apply(map, windows, child, rect, sizes);
                     x = rect.max().x;
                 }
             }
             Vertical => {
                 let mut y = rect.origin.y;
                 let total = self.info[node].total;
-                for child in node.children(forest) {
+                for child in node.children(map) {
                     let ratio = f64::from(self.info[child].size) / f64::from(total);
                     let rect = CGRect {
                         origin: CGPoint { x: rect.origin.x, y },
@@ -217,7 +217,7 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(forest, windows, child, rect, sizes);
+                    self.apply(map, windows, child, rect, sizes);
                     y = rect.max().y;
                 }
             }

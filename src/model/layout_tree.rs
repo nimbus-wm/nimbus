@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     app::WindowId,
-    model::node::{Forest, NodeId, OwnedNode},
+    model::node::{NodeId, NodeMap, OwnedNode},
     screen::SpaceId,
 };
 
@@ -63,7 +63,7 @@ impl LayoutTree {
     }
 
     pub fn add_window(&mut self, parent: NodeId, wid: WindowId) -> NodeId {
-        let root = parent.ancestors(&self.tree.forest).last().unwrap();
+        let root = parent.ancestors(&self.tree.map).last().unwrap();
         let node = self.tree.mk_node().push_back(parent);
         self.windows.insert(node, wid);
         self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { root, node });
@@ -71,8 +71,8 @@ impl LayoutTree {
     }
 
     pub fn add_windows(&mut self, parent: NodeId, wids: impl Iterator<Item = WindowId>) {
-        self.tree.forest.reserve(wids.size_hint().1.unwrap_or(0));
-        self.windows.set_capacity(self.tree.forest.capacity());
+        self.tree.map.reserve(wids.size_hint().1.unwrap_or(0));
+        self.windows.set_capacity(self.tree.map.capacity());
         for wid in wids {
             self.add_window(parent, wid);
         }
@@ -116,7 +116,7 @@ impl LayoutTree {
 
     // FIXME: root
     pub fn select(&mut self, selection: impl Into<Option<NodeId>>) {
-        self.tree.data.selection.select(&self.tree.forest, selection.into())
+        self.tree.data.selection.select(&self.tree.map, selection.into())
     }
 
     // FIXME: root
@@ -132,11 +132,11 @@ impl LayoutTree {
     }
 
     pub fn calculate_layout(&self, root: NodeId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.tree.data.layout.get_sizes(&self.tree.forest, &self.windows, root, frame)
+        self.tree.data.layout.get_sizes(&self.tree.map, &self.windows, root, frame)
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        let forest = &self.tree.forest;
+        let forest = &self.tree.map;
         let selection = &self.tree.data.selection;
         let Some(mut node) =
             // Keep going up...
@@ -165,13 +165,13 @@ impl LayoutTree {
     }
 
     fn move_over(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        let Some(parent) = from.parent(&self.tree.forest) else {
+        let Some(parent) = from.parent(&self.tree.map) else {
             return None;
         };
         if self.tree.data.layout.kind(parent).orientation() == direction.orientation() {
             match direction {
-                Direction::Up | Direction::Left => from.prev_sibling(&self.tree.forest),
-                Direction::Down | Direction::Right => from.next_sibling(&self.tree.forest),
+                Direction::Up | Direction::Left => from.prev_sibling(&self.tree.map),
+                Direction::Down | Direction::Right => from.next_sibling(&self.tree.map),
             }
         } else {
             None
@@ -181,38 +181,36 @@ impl LayoutTree {
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
         // Pick an ancestor to resize that has a sibling in the given direction.
         let can_resize = |&node: &NodeId| -> bool {
-            let Some(parent) = node.parent(&self.tree.forest) else {
+            let Some(parent) = node.parent(&self.tree.map) else {
                 return false;
             };
             !self.tree.data.layout.kind(parent).is_group()
                 && self.move_over(node, direction).is_some()
         };
-        let Some(resizing_node) = node.ancestors(&self.tree.forest).filter(can_resize).next()
-        else {
+        let Some(resizing_node) = node.ancestors(&self.tree.map).filter(can_resize).next() else {
             return false;
         };
         let sibling = self.move_over(resizing_node, direction).unwrap();
 
         // Compute the share of resizing_node's parent that needs to be taken
         // from the sibling.
-        let exchange_rate =
-            resizing_node.ancestors(&self.tree.forest).skip(1).fold(1.0, |r, node| {
-                match node.parent(&self.tree.forest) {
-                    Some(parent)
-                        if self.tree.data.layout.kind(parent).orientation()
-                            == direction.orientation()
-                            && !self.tree.data.layout.kind(parent).is_group() =>
-                    {
-                        r * self.tree.data.layout.proportion(&self.tree.forest, node).unwrap()
-                    }
-                    _ => r,
+        let exchange_rate = resizing_node.ancestors(&self.tree.map).skip(1).fold(1.0, |r, node| {
+            match node.parent(&self.tree.map) {
+                Some(parent)
+                    if self.tree.data.layout.kind(parent).orientation()
+                        == direction.orientation()
+                        && !self.tree.data.layout.kind(parent).is_group() =>
+                {
+                    r * self.tree.data.layout.proportion(&self.tree.map, node).unwrap()
                 }
-            });
+                _ => r,
+            }
+        });
         let local_ratio = f64::from(screen_ratio)
-            * self.tree.data.layout.total(resizing_node.parent(&self.tree.forest).unwrap())
+            * self.tree.data.layout.total(resizing_node.parent(&self.tree.map).unwrap())
             / exchange_rate;
         self.tree.data.layout.take_share(
-            &self.tree.forest,
+            &self.tree.map,
             resizing_node,
             sibling,
             local_ratio as f32,
@@ -280,7 +278,7 @@ impl LayoutTree {
             layout = self.tree.data.layout.debug(node)
         );
         let children: Vec<_> =
-            node.children(&self.tree.forest).map(|c| self.get_ascii_tree(c)).collect();
+            node.children(&self.tree.map).map(|c| self.get_ascii_tree(c)).collect();
         if children.is_empty() {
             let lines = [
                 Some(desc),
@@ -295,33 +293,33 @@ impl LayoutTree {
 
 impl Drop for LayoutTree {
     fn drop(&mut self) {
-        // It's okay to skip removing these, since we're dropping the Forest too.
+        // It's okay to skip removing these, since we're dropping the map too.
         mem::forget(self.spaces.drain());
     }
 }
 
 impl Components {
-    fn dispatch_event(&mut self, forest: &Forest, event: TreeEvent) {
-        self.selection.handle_event(forest, event);
-        self.layout.handle_event(forest, event);
+    fn dispatch_event(&mut self, map: &NodeMap, event: TreeEvent) {
+        self.selection.handle_event(map, event);
+        self.layout.handle_event(map, event);
     }
 }
 
 impl node::Observer for Components {
-    fn added_to_forest(&mut self, forest: &Forest, node: NodeId) {
-        self.dispatch_event(forest, TreeEvent::AddedToForest(node))
+    fn added_to_forest(&mut self, map: &NodeMap, node: NodeId) {
+        self.dispatch_event(map, TreeEvent::AddedToForest(node))
     }
 
-    fn added_to_parent(&mut self, forest: &Forest, node: NodeId) {
-        self.dispatch_event(forest, TreeEvent::AddedToParent(node))
+    fn added_to_parent(&mut self, map: &NodeMap, node: NodeId) {
+        self.dispatch_event(map, TreeEvent::AddedToParent(node))
     }
 
-    fn removing_from_parent(&mut self, forest: &Forest, node: NodeId) {
-        self.dispatch_event(forest, TreeEvent::RemovingFromParent(node))
+    fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId) {
+        self.dispatch_event(map, TreeEvent::RemovingFromParent(node))
     }
 
-    fn removed_from_forest(&mut self, forest: &Forest, node: NodeId) {
-        self.dispatch_event(forest, TreeEvent::RemovedFromForest(node))
+    fn removed_from_forest(&mut self, map: &NodeMap, node: NodeId) {
+        self.dispatch_event(map, TreeEvent::RemovedFromForest(node))
     }
 }
 

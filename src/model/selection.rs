@@ -1,6 +1,6 @@
 use super::{
     layout_tree::TreeEvent,
-    node::{Forest, NodeId},
+    node::{NodeId, NodeMap},
 };
 
 #[derive(Default)]
@@ -15,16 +15,16 @@ impl Selection {
         self.current_selection
     }
 
-    pub(super) fn local_selection(&self, forest: &Forest, node: NodeId) -> Option<NodeId> {
+    pub(super) fn local_selection(&self, map: &NodeMap, node: NodeId) -> Option<NodeId> {
         let result = self.selected_child.get(node).copied().flatten();
-        debug_assert!(result.is_none() || result.unwrap().parent(forest) == Some(node));
+        debug_assert!(result.is_none() || result.unwrap().parent(map) == Some(node));
         result
     }
 
-    pub(super) fn select(&mut self, forest: &Forest, mut selection: Option<NodeId>) {
+    pub(super) fn select(&mut self, map: &NodeMap, mut selection: Option<NodeId>) {
         self.current_selection = selection;
         while let Some(node) = selection {
-            let parent = node.parent(forest);
+            let parent = node.parent(map);
             if let Some(parent) = parent {
                 self.selected_child.insert(parent, Some(node));
             }
@@ -32,14 +32,14 @@ impl Selection {
         }
     }
 
-    pub(super) fn handle_event(&mut self, forest: &Forest, event: TreeEvent) {
+    pub(super) fn handle_event(&mut self, map: &NodeMap, event: TreeEvent) {
         use TreeEvent::*;
         match event {
             AddedToForest(_node) => {}
             AddedToParent(_node) => {}
             RemovingFromParent(node) => {
-                let parent = node.parent(forest).unwrap();
-                let alternative = node.next_sibling(forest).or(node.prev_sibling(forest));
+                let parent = node.parent(map).unwrap();
+                let alternative = node.next_sibling(map).or(node.prev_sibling(map));
                 if self.selected_child.get(parent) == Some(&Some(node)) {
                     self.selected_child[parent] = alternative;
                 }
