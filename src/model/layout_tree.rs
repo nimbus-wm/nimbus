@@ -6,7 +6,7 @@ use icrate::Foundation::CGRect;
 
 use super::{
     layout::{Direction, Layout, LayoutKind},
-    node::{self, TreeContext},
+    node::{self, Tree},
     selection::Selection,
 };
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
 /// All interactions with the data model happen through the public APIs on this
 /// type.
 pub struct LayoutTree {
-    tree: TreeContext<Components>,
+    tree: Tree<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
     window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
     spaces: HashMap<SpaceId, OwnedNode>,
@@ -55,7 +55,7 @@ pub(super) enum TreeEvent {
 impl LayoutTree {
     pub fn new() -> LayoutTree {
         LayoutTree {
-            tree: TreeContext::with_observer(Components::default()),
+            tree: Tree::with_observer(Components::default()),
             windows: Default::default(),
             window_nodes: Default::default(),
             spaces: Default::default(),

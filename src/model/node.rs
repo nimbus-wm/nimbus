@@ -3,20 +3,21 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 
 use slotmap::SlotMap;
 
-pub struct TreeContext<O> {
+/// N-ary tree.
+pub struct Tree<O> {
     pub map: NodeMap,
     pub data: O,
 }
 
-impl<O: Observer> TreeContext<O> {
+impl<O: Observer> Tree<O> {
     pub fn with_observer(data: O) -> Self {
-        TreeContext { map: NodeMap::new(), data }
+        Tree { map: NodeMap::new(), data }
     }
 
     pub fn mk_node(&mut self) -> DetachedNode<O> {
         let id = self.map.map.insert(Node::default());
         self.data.added_to_forest(&self.map, id);
-        DetachedNode { id, cx: self }
+        DetachedNode { id, tree: self }
     }
 }
 
@@ -24,16 +25,13 @@ impl<O: Observer> TreeContext<O> {
 pub struct DetachedNode<'a, O> {
     // Nothing prevents this from being public, just haven't needed it yet.
     id: NodeId,
-    cx: &'a mut TreeContext<O>,
+    tree: &'a mut Tree<O>,
 }
 
-/// Core data structure that holds tree structures.
+/// Map that holds the structure of the tree.
 ///
 /// Multiple trees can be contained within a map. This also makes it easier
 /// to move branches between trees.
-///
-/// This type should not be used directly; instead, use the methods on
-/// [`OwnedNode`] and [`NodeId`].
 pub struct NodeMap {
     map: SlotMap<NodeId, Node>,
 }
@@ -78,7 +76,7 @@ pub struct OwnedNode(Option<NodeId>, &'static str);
 
 impl OwnedNode {
     /// Creates a new root node.
-    pub fn new_root_in(map: &mut TreeContext<impl Observer>, name: &'static str) -> Self {
+    pub fn new_root_in(map: &mut Tree<impl Observer>, name: &'static str) -> Self {
         let node = map.mk_node();
         Self::own(node.id, name)
     }
@@ -97,7 +95,7 @@ impl OwnedNode {
     }
 
     #[track_caller]
-    pub fn remove(&mut self, map: &mut TreeContext<impl Observer>) {
+    pub fn remove(&mut self, map: &mut Tree<impl Observer>) {
         self.0.take().unwrap().remove(map)
     }
 }
@@ -217,36 +215,36 @@ pub const NOOP: NoopObserver = NoopObserver;
 impl<'a, O: Observer> DetachedNode<'a, O> {
     #[track_caller]
     pub(super) fn push_back(self, parent: NodeId) -> NodeId {
-        self.id.link_under_back(parent, &mut self.cx.map);
-        self.cx.data.added_to_parent(&self.cx.map, self.id);
+        self.id.link_under_back(parent, &mut self.tree.map);
+        self.tree.data.added_to_parent(&self.tree.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn push_front(self, parent: NodeId) -> NodeId {
-        self.id.link_under_front(parent, &mut self.cx.map);
-        self.cx.data.added_to_parent(&self.cx.map, self.id);
+        self.id.link_under_front(parent, &mut self.tree.map);
+        self.tree.data.added_to_parent(&self.tree.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn insert_before(self, sibling: NodeId) -> NodeId {
-        self.id.link_before(sibling, &mut self.cx.map);
-        self.cx.data.added_to_parent(&self.cx.map, self.id);
+        self.id.link_before(sibling, &mut self.tree.map);
+        self.tree.data.added_to_parent(&self.tree.map, self.id);
         self.id
     }
 
     #[track_caller]
     pub(super) fn insert_after(self, sibling: NodeId) -> NodeId {
-        self.id.link_after(sibling, &mut self.cx.map);
-        self.cx.data.added_to_parent(&self.cx.map, self.id);
+        self.id.link_after(sibling, &mut self.tree.map);
+        self.tree.data.added_to_parent(&self.tree.map, self.id);
         self.id
     }
 }
 
 impl NodeId {
     #[track_caller]
-    pub(super) fn remove(self, cx: &mut TreeContext<impl Observer>) {
+    pub(super) fn remove(self, cx: &mut Tree<impl Observer>) {
         cx.data.removing_from_parent(&cx.map, self);
         cx.map.map.remove(self).unwrap().unlink(self, &mut cx.map).delete_recursive(cx);
     }
@@ -348,7 +346,7 @@ impl Node {
     }
 
     #[track_caller]
-    fn delete_recursive(&self, cx: &mut TreeContext<impl Observer>) {
+    fn delete_recursive(&self, cx: &mut Tree<impl Observer>) {
         let mut iter = self.first_child;
         while let Some(child) = iter {
             let node = cx.map.map.remove(child).unwrap();
@@ -402,7 +400,7 @@ mod tests {
     ///           gc1
     /// ```
     struct TestTree {
-        tree: TreeContext<NoopObserver>,
+        tree: Tree<NoopObserver>,
         root_node: OwnedNode,
         root: NodeId,
         child1: NodeId,
@@ -427,7 +425,7 @@ mod tests {
     impl TestTree {
         #[rustfmt::skip]
         fn new() -> Self {
-            let mut tree = TreeContext::with_observer(NOOP);
+            let mut tree = Tree::with_observer(NOOP);
 
             let root_node = OwnedNode::new_root_in(&mut tree, "tree");
             let root = root_node.id();
