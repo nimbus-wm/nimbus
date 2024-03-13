@@ -132,8 +132,6 @@ slotmap::new_key_type! {
 impl NodeId {
     #[track_caller]
     pub fn detach<O: Observer>(self, tree: &mut Tree<O>) -> DetachedNode<O> {
-        tree.data.removing_from_parent(&tree.map, self);
-        tree.map.unlink(self);
         DetachedNode { id: self, tree }
     }
 
@@ -224,36 +222,61 @@ pub struct DetachedNode<'a, O> {
 
 impl<'a, O: Observer> DetachedNode<'a, O> {
     #[track_caller]
-    pub(super) fn push_back(self, parent: NodeId) -> NodeId {
-        self.id.link_under_back(parent, &mut self.tree.map);
-        self.tree.data.added_to_parent(&self.tree.map, self.id);
-        self.id
+    pub(super) fn push_back(mut self, parent: NodeId) -> NodeId {
+        self.attach_with(parent, |this| {
+            this.id.link_under_back(parent, &mut this.tree.map)
+        })
     }
 
     #[track_caller]
-    pub(super) fn push_front(self, parent: NodeId) -> NodeId {
-        self.id.link_under_front(parent, &mut self.tree.map);
-        self.tree.data.added_to_parent(&self.tree.map, self.id);
-        self.id
+    pub(super) fn push_front(mut self, parent: NodeId) -> NodeId {
+        self.attach_with(parent, |this| {
+            this.id.link_under_front(parent, &mut this.tree.map)
+        })
     }
 
     #[track_caller]
-    pub(super) fn insert_before(self, sibling: NodeId) -> NodeId {
-        self.id.link_before(sibling, &mut self.tree.map);
-        self.tree.data.added_to_parent(&self.tree.map, self.id);
-        self.id
+    pub(super) fn insert_before(mut self, sibling: NodeId) -> NodeId {
+        let new_parent =
+            sibling.parent(&self.tree.map).expect("cannot make a sibling of a root node");
+        self.attach_with(new_parent, |this| {
+            this.id.link_before(sibling, &mut this.tree.map)
+        })
     }
 
     #[track_caller]
-    pub(super) fn insert_after(self, sibling: NodeId) -> NodeId {
-        self.id.link_after(sibling, &mut self.tree.map);
-        self.tree.data.added_to_parent(&self.tree.map, self.id);
-        self.id
+    pub(super) fn insert_after(mut self, sibling: NodeId) -> NodeId {
+        let new_parent =
+            sibling.parent(&self.tree.map).expect("cannot make a sibling of a root node");
+        self.attach_with(new_parent, |this| {
+            this.id.link_after(sibling, &mut this.tree.map)
+        })
     }
 
     #[track_caller]
     pub(super) fn remove(self) {
+        if self.id.parent(&self.tree.map).is_some() {
+            self.tree.data.removing_from_parent(&self.tree.map, self.id);
+        }
+        self.tree.map.unlink(self.id);
         self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree);
+    }
+
+    fn attach_with(
+        &mut self,
+        new_parent: NodeId,
+        attach: impl FnOnce(&mut DetachedNode<O>),
+    ) -> NodeId {
+        let old_parent = self.id.parent(&self.tree.map);
+        if old_parent.is_some() && old_parent != Some(new_parent) {
+            self.tree.data.removing_from_parent(&self.tree.map, self.id);
+        }
+        self.tree.map.unlink(self.id);
+        attach(self);
+        if old_parent != Some(new_parent) {
+            self.tree.data.added_to_parent(&self.tree.map, self.id);
+        }
+        self.id
     }
 }
 
