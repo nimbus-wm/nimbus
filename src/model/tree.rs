@@ -133,7 +133,7 @@ impl NodeId {
     #[track_caller]
     pub fn detach<O: Observer>(self, tree: &mut Tree<O>) -> DetachedNode<O> {
         tree.data.removing_from_parent(&tree.map, self);
-        tree.map[self].clone().unlink(self, &mut tree.map);
+        tree.map.unlink(self);
         DetachedNode { id: self, tree }
     }
 
@@ -257,7 +257,7 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug)]
 pub struct Node {
     parent: Option<NodeId>,
     prev_sibling: Option<NodeId>,
@@ -268,7 +268,6 @@ pub struct Node {
 
 impl NodeId {
     fn link_under_back(self, parent: NodeId, map: &mut NodeMap) {
-        debug_assert_eq!(map[self], Node::default());
         map[self].parent = Some(parent);
         map[parent].first_child.get_or_insert(self);
         if let Some(prev) = map[parent].last_child.replace(self) {
@@ -277,7 +276,6 @@ impl NodeId {
     }
 
     fn link_under_front(self, parent: NodeId, map: &mut NodeMap) {
-        debug_assert_eq!(map[self], Node::default());
         map[self].parent = Some(parent);
         map[parent].last_child.get_or_insert(self);
         if let Some(next) = map[parent].first_child.replace(self) {
@@ -287,7 +285,7 @@ impl NodeId {
 
     #[track_caller]
     fn link_before(self, next: NodeId, map: &mut NodeMap) {
-        let parent = map[next].parent.expect("cannot make a sibling of the root node");
+        let parent = map[next].parent.expect("cannot make a sibling of a root node");
         map[self].parent.replace(parent);
         debug_assert!(map[parent].first_child.is_some());
         if map[parent].first_child == Some(next) {
@@ -298,8 +296,7 @@ impl NodeId {
 
     #[track_caller]
     fn link_after(self, prev: NodeId, map: &mut NodeMap) {
-        debug_assert_eq!(map[self].parent, None);
-        let parent = map[prev].parent.expect("cannot make a sibling of the root node");
+        let parent = map[prev].parent.expect("cannot make a sibling of a root node");
         map[self].parent.replace(parent);
         debug_assert!(map[parent].last_child.is_some());
         if map[parent].last_child == Some(prev) {
@@ -331,25 +328,29 @@ impl NodeId {
     }
 }
 
-impl Node {
+impl NodeMap {
     #[track_caller]
-    fn unlink(&self, id: NodeId, map: &mut NodeMap) {
-        if let Some(prev) = self.prev_sibling {
-            map[prev].next_sibling = self.next_sibling;
+    fn unlink(&mut self, id: NodeId) {
+        let prev_sibling = self[id].prev_sibling.take();
+        let next_sibling = self[id].next_sibling.take();
+        if let Some(prev) = prev_sibling {
+            self[prev].next_sibling = next_sibling;
         }
-        if let Some(next) = self.next_sibling {
-            map[next].prev_sibling = self.prev_sibling;
+        if let Some(next) = next_sibling {
+            self[next].prev_sibling = prev_sibling;
         }
-        if let Some(parent) = self.parent {
-            if Some(id) == map[parent].first_child {
-                map[parent].first_child = self.next_sibling;
+        if let Some(parent) = self[id].parent {
+            if Some(id) == self[parent].first_child {
+                self[parent].first_child = next_sibling;
             }
-            if Some(id) == map[parent].last_child {
-                map[parent].last_child = self.prev_sibling;
+            if Some(id) == self[parent].last_child {
+                self[parent].last_child = prev_sibling;
             }
         }
     }
+}
 
+impl Node {
     #[track_caller]
     fn delete_recursive(&self, cx: &mut Tree<impl Observer>) {
         let mut iter = self.first_child;
@@ -608,5 +609,33 @@ mod tests {
         assert!(!t.tree.map.map.contains_key(t.root));
         t.other_root_node.remove(&mut t.tree);
         assert!(!t.tree.map.map.contains_key(t.other_root));
+    }
+
+    #[test]
+    fn detach_and_reattach() {
+        let mut t = TestTree::new();
+
+        t.child1.detach(&mut t.tree).insert_after(t.child2);
+        t.assert_children_are([t.child2, t.child1, t.child3], t.root);
+        t.assert_children_are([t.gc1], t.child2);
+
+        t.child1.detach(&mut t.tree).insert_before(t.child2);
+        t.assert_children_are([t.child1, t.child2, t.child3], t.root);
+
+        t.child2.detach(&mut t.tree).push_back(t.child1);
+        t.assert_children_are([t.child1, t.child3], t.root);
+        t.assert_children_are([t.child2], t.child1);
+
+        t.child2.detach(&mut t.tree).insert_after(t.child1);
+        t.assert_children_are([t.child1, t.child2, t.child3], t.root);
+        t.assert_children_are([], t.child1);
+
+        t.child3.detach(&mut t.tree).push_back(t.child2);
+        t.assert_children_are([t.child1, t.child2], t.root);
+        t.assert_children_are([t.gc1, t.child3], t.child2);
+
+        t.child3.detach(&mut t.tree).insert_after(t.child2);
+        t.assert_children_are([t.child1, t.child2, t.child3], t.root);
+        t.assert_children_are([t.gc1], t.child2);
     }
 }
