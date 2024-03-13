@@ -18,12 +18,14 @@ pub enum Orientation {
     Vertical,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum LayoutCommand {
     Shuffle,
     NextWindow,
     PrevWindow,
     MoveFocus(Direction),
+    MoveNode(Direction),
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +121,12 @@ impl LayoutManager {
                     return EventResponse::default();
                 };
                 EventResponse { raise_window: Some(new) }
+            }
+            LayoutCommand::MoveNode(direction) => {
+                if let Some(selection) = self.tree.selection() {
+                    self.tree.move_node(selection, direction);
+                }
+                EventResponse::default()
             }
         }
     }

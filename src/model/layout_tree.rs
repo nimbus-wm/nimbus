@@ -178,6 +178,18 @@ impl LayoutTree {
         }
     }
 
+    pub fn move_node(&mut self, node: NodeId, direction: Direction) -> bool {
+        let Some(insertion_point) = self.traverse(node, direction) else {
+            return false;
+        };
+        let node = node.detach(&mut self.tree);
+        match direction {
+            Direction::Left | Direction::Up => node.insert_before(insertion_point),
+            Direction::Right | Direction::Down => node.insert_after(insertion_point),
+        };
+        true
+    }
+
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
         // Pick an ancestor to resize that has a sibling in the given direction.
         let can_resize = |&node: &NodeId| -> bool {

@@ -13,7 +13,9 @@ mod util;
 use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use layout::LayoutCommand;
 use metrics::MetricsCommand;
+use model::Direction;
 use reactor::{Command, Event, Sender};
+
 use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_tree::time::UtcDateTime;
@@ -39,15 +41,26 @@ fn main() {
 }
 
 fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
+    const ALT: Modifiers = Modifiers::ALT;
+    const SHIFT: Modifiers = Modifiers::SHIFT;
+    use KeyCode::*;
+
+    use Direction::*;
     use LayoutCommand::*;
     use MetricsCommand::*;
 
     let mgr = HotkeyManager::new(events_tx);
-    mgr.register(Modifiers::ALT, KeyCode::KeyW, Command::Hello);
-    mgr.register(Modifiers::ALT, KeyCode::KeyS, Command::Layout(Shuffle));
-    mgr.register(Modifiers::ALT, KeyCode::KeyJ, Command::Layout(NextWindow));
-    mgr.register(Modifiers::ALT, KeyCode::KeyK, Command::Layout(PrevWindow));
-    mgr.register(Modifiers::ALT, KeyCode::KeyM, Command::Metrics(ShowTiming));
+    mgr.register(ALT, KeyW, Command::Hello);
+    mgr.register(ALT, KeyS, Command::Layout(Shuffle));
+    mgr.register(ALT, KeyH, Command::Layout(MoveFocus(Left)));
+    mgr.register(ALT, KeyJ, Command::Layout(MoveFocus(Down)));
+    mgr.register(ALT, KeyK, Command::Layout(MoveFocus(Up)));
+    mgr.register(ALT, KeyL, Command::Layout(MoveFocus(Right)));
+    mgr.register(ALT | SHIFT, KeyH, Command::Layout(MoveNode(Left)));
+    mgr.register(ALT | SHIFT, KeyJ, Command::Layout(MoveNode(Down)));
+    mgr.register(ALT | SHIFT, KeyK, Command::Layout(MoveNode(Up)));
+    mgr.register(ALT | SHIFT, KeyL, Command::Layout(MoveNode(Right)));
+    mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
     mgr
 }
 

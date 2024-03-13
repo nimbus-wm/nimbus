@@ -64,7 +64,7 @@ impl Selection {
 mod tests {
     use crate::{
         app::WindowId,
-        model::{layout::LayoutKind, layout_tree::LayoutTree},
+        model::{layout::LayoutKind, layout_tree::LayoutTree, Direction},
         screen::SpaceId,
     };
 
@@ -122,5 +122,18 @@ mod tests {
         assert_eq!(tree.selection(), Some(b2));
         tree.retain_windows(|&wid| wid.pid != 2);
         assert_eq!(tree.selection(), Some(a2));
+    }
+
+    #[test]
+    fn preserves_selection_after_move_within_parent() {
+        let mut tree = LayoutTree::new();
+        let root = tree.space(SpaceId::new(1));
+        let _n1 = tree.add_window(root, WindowId::new(1, 1));
+        let n2 = tree.add_window(root, WindowId::new(1, 2));
+        let _n3 = tree.add_window(root, WindowId::new(1, 3));
+        tree.select(n2);
+        assert_eq!(tree.selection(), Some(n2));
+        tree.move_node(n2, Direction::Left);
+        assert_eq!(tree.selection(), Some(n2));
     }
 }
