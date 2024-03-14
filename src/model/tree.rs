@@ -259,7 +259,7 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
             self.tree.data.removing_from_parent(&self.tree.map, self.id);
         }
         self.tree.map.unlink(self.id);
-        self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree);
+        self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree, self.id);
     }
 
     fn attach_with(
@@ -375,12 +375,12 @@ impl NodeMap {
 
 impl Node {
     #[track_caller]
-    fn delete_recursive(&self, cx: &mut Tree<impl Observer>) {
+    fn delete_recursive(&self, cx: &mut Tree<impl Observer>, id: NodeId) {
+        cx.data.removed_from_forest(&cx.map, id);
         let mut iter = self.first_child;
         while let Some(child) = iter {
             let node = cx.map.map.remove(child).unwrap();
-            cx.data.removed_from_forest(&cx.map, child);
-            node.delete_recursive(cx);
+            node.delete_recursive(cx, child);
             iter = node.next_sibling;
         }
     }
@@ -414,7 +414,6 @@ impl<'a> Iterator for NodeRevIterator<'a> {
     }
 }
 
-#[allow(const_item_mutation)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,7 +428,7 @@ mod tests {
     ///           gc1
     /// ```
     struct TestTree {
-        tree: Tree<()>,
+        tree: Tree<Events>,
         root_node: OwnedNode,
         root: NodeId,
         child1: NodeId,
@@ -454,7 +453,7 @@ mod tests {
     impl TestTree {
         #[rustfmt::skip]
         fn new() -> Self {
-            let mut tree = Tree::new();
+            let mut tree = Tree::with_observer(Events(vec![]));
 
             let root_node = OwnedNode::new_root_in(&mut tree, "tree");
             let root = root_node.id();
@@ -466,11 +465,13 @@ mod tests {
             let other_tree = OwnedNode::new_root_in(&mut tree, "other_tree");
             let other_root = other_tree.id();
 
-            TestTree {
+            let mut t = TestTree {
                 tree, root_node, root,
                 child1, child2, child3, gc1,
                 other_root_node: other_tree, other_root,
-            }
+            };
+            t.clear_events();
+            t
         }
 
         fn get_children(&self, node: NodeId) -> Vec<NodeId> {
@@ -505,6 +506,47 @@ mod tests {
                     "child has incorrect parent"
                 );
             }
+        }
+
+        #[track_caller]
+        fn assert_events_are<const N: usize>(&mut self, events: [TreeEvent; N]) {
+            self.assert_events_are_inner(&events);
+        }
+
+        #[track_caller]
+        fn assert_events_are_inner(&mut self, events: &[TreeEvent]) {
+            let actual: Vec<_> = self.tree.data.0.drain(..).collect();
+            pretty_assertions::assert_eq!(events, actual);
+        }
+
+        fn clear_events(&mut self) {
+            self.tree.data.0.clear();
+        }
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    enum TreeEvent {
+        AddedToForest(NodeId),
+        AddedToParent(NodeId),
+        RemovingFromParent(NodeId, NodeId),
+        RemovedFromForest(NodeId),
+    }
+    use TreeEvent::*;
+
+    struct Events(Vec<TreeEvent>);
+
+    impl Observer for Events {
+        fn added_to_forest(&mut self, _map: &NodeMap, node: NodeId) {
+            self.0.push(AddedToForest(node))
+        }
+        fn added_to_parent(&mut self, _map: &NodeMap, node: NodeId) {
+            self.0.push(AddedToParent(node))
+        }
+        fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId) {
+            self.0.push(RemovingFromParent(node, node.parent(map).unwrap()))
+        }
+        fn removed_from_forest(&mut self, _map: &NodeMap, node: NodeId) {
+            self.0.push(RemovedFromForest(node))
         }
     }
 
@@ -545,8 +587,11 @@ mod tests {
     fn push_front() {
         let mut t = TestTree::new();
         let child0 = t.tree.mk_node().push_front(t.root);
+        t.assert_events_are([AddedToForest(child0), AddedToParent(child0)]);
         let gc0 = t.tree.mk_node().push_front(t.child2);
+        t.assert_events_are([AddedToForest(gc0), AddedToParent(gc0)]);
         let gc2 = t.tree.mk_node().push_front(t.child3);
+        t.assert_events_are([AddedToForest(gc2), AddedToParent(gc2)]);
         t.assert_children_are([child0, t.child1, t.child2, t.child3], t.root);
         t.assert_children_are([], t.child1);
         t.assert_children_are([gc0, t.gc1], t.child2);
@@ -559,8 +604,11 @@ mod tests {
     fn push_back() {
         let mut t = TestTree::new();
         let child4 = t.tree.mk_node().push_back(t.root);
+        t.assert_events_are([AddedToForest(child4), AddedToParent(child4)]);
         let gc0 = t.tree.mk_node().push_back(t.child1);
+        t.assert_events_are([AddedToForest(gc0), AddedToParent(gc0)]);
         let gc2 = t.tree.mk_node().push_back(t.child2);
+        t.assert_events_are([AddedToForest(gc2), AddedToParent(gc2)]);
         t.assert_children_are([t.child1, t.child2, t.child3, child4], t.root);
         t.assert_children_are([gc0], t.child1);
         t.assert_children_are([t.gc1, gc2], t.child2);
@@ -573,6 +621,7 @@ mod tests {
     fn insert_before() {
         let mut t = TestTree::new();
         let child0 = t.tree.mk_node().insert_before(t.child1);
+        t.assert_events_are([AddedToForest(child0), AddedToParent(child0)]);
         let child1_5 = t.tree.mk_node().insert_before(t.child2);
         let child2_5 = t.tree.mk_node().insert_before(t.child3);
         let gc0 = t.tree.mk_node().insert_before(t.gc1);
@@ -593,6 +642,7 @@ mod tests {
     fn insert_after() {
         let mut t = TestTree::new();
         let child1_5 = t.tree.mk_node().insert_after(t.child1);
+        t.assert_events_are([AddedToForest(child1_5), AddedToParent(child1_5)]);
         let child2_5 = t.tree.mk_node().insert_after(t.child2);
         let child4 = t.tree.mk_node().insert_after(t.child3);
         let gc2 = t.tree.mk_node().insert_after(t.gc1);
@@ -617,20 +667,35 @@ mod tests {
         t.assert_children_are([t.child1, t.child3], t.root);
         assert!(!t.tree.map.map.contains_key(t.child2));
         assert!(!t.tree.map.map.contains_key(t.gc1));
+        t.assert_events_are([
+            RemovingFromParent(t.child2, t.root),
+            RemovedFromForest(t.child2),
+            RemovedFromForest(t.gc1),
+        ]);
 
         t.child3.detach(&mut t.tree).remove();
         t.assert_children_are([t.child1], t.root);
         assert!(!t.tree.map.map.contains_key(t.child3));
+        t.assert_events_are([
+            RemovingFromParent(t.child3, t.root),
+            RemovedFromForest(t.child3),
+        ]);
 
         t.child1.detach(&mut t.tree).remove();
         t.assert_children_are([], t.root);
         assert!(!t.tree.map.map.contains_key(t.child1));
+        t.assert_events_are([
+            RemovingFromParent(t.child1, t.root),
+            RemovedFromForest(t.child1),
+        ]);
 
         assert!(t.tree.map.map.contains_key(t.root));
         assert!(t.tree.map.map.contains_key(t.other_root));
         t.root_node.remove(&mut t.tree);
+        t.assert_events_are([RemovedFromForest(t.root)]);
         assert!(!t.tree.map.map.contains_key(t.root));
         t.other_root_node.remove(&mut t.tree);
+        t.assert_events_are([RemovedFromForest(t.other_root)]);
         assert!(!t.tree.map.map.contains_key(t.other_root));
     }
 
@@ -641,24 +706,42 @@ mod tests {
         t.child1.detach(&mut t.tree).insert_after(t.child2);
         t.assert_children_are([t.child2, t.child1, t.child3], t.root);
         t.assert_children_are([t.gc1], t.child2);
+        t.assert_events_are([]);
 
         t.child1.detach(&mut t.tree).insert_before(t.child2);
         t.assert_children_are([t.child1, t.child2, t.child3], t.root);
+        t.assert_events_are([]);
 
         t.child2.detach(&mut t.tree).push_back(t.child1);
         t.assert_children_are([t.child1, t.child3], t.root);
         t.assert_children_are([t.child2], t.child1);
+        t.assert_events_are([
+            RemovingFromParent(t.child2, t.root),
+            AddedToParent(t.child2),
+        ]);
 
         t.child2.detach(&mut t.tree).insert_after(t.child1);
         t.assert_children_are([t.child1, t.child2, t.child3], t.root);
         t.assert_children_are([], t.child1);
+        t.assert_events_are([
+            RemovingFromParent(t.child2, t.child1),
+            AddedToParent(t.child2),
+        ]);
 
         t.child3.detach(&mut t.tree).push_back(t.child2);
         t.assert_children_are([t.child1, t.child2], t.root);
         t.assert_children_are([t.gc1, t.child3], t.child2);
+        t.assert_events_are([
+            RemovingFromParent(t.child3, t.root),
+            AddedToParent(t.child3),
+        ]);
 
         t.child3.detach(&mut t.tree).insert_after(t.child2);
         t.assert_children_are([t.child1, t.child2, t.child3], t.root);
         t.assert_children_are([t.gc1], t.child2);
+        t.assert_events_are([
+            RemovingFromParent(t.child3, t.child2),
+            AddedToParent(t.child3),
+        ]);
     }
 }
