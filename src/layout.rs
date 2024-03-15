@@ -75,7 +75,11 @@ impl LayoutManager {
         match event {
             LayoutEvent::WindowRaised(space, wid) => {
                 let space = self.tree.space(space);
-                self.tree.select(wid.and_then(|wid| self.tree.window_node(space, wid)));
+                if let Some(wid) = wid {
+                    if let Some(node) = self.tree.window_node(space, wid) {
+                        self.tree.select(node);
+                    }
+                }
             }
             LayoutEvent::WindowResized {
                 space,
@@ -96,7 +100,7 @@ impl LayoutManager {
     pub fn handle_command(&mut self, space: SpaceId, command: LayoutCommand) -> EventResponse {
         let root = self.tree.space(space);
         debug!("Tree:\n{}", self.tree.draw_tree(root).trim());
-        debug!(selection = ?self.tree.selection());
+        debug!(selection = ?self.tree.selection(root));
         match command {
             LayoutCommand::Shuffle => {
                 // TODO
@@ -114,7 +118,7 @@ impl LayoutManager {
             LayoutCommand::MoveFocus(direction) => {
                 let new = self
                     .tree
-                    .selection()
+                    .selection(root)
                     .and_then(|cur| self.tree.traverse(cur, direction))
                     .and_then(|new| self.tree.window_at(new));
                 let Some(new) = new else {
@@ -123,7 +127,7 @@ impl LayoutManager {
                 EventResponse { raise_window: Some(new) }
             }
             LayoutCommand::MoveNode(direction) => {
-                if let Some(selection) = self.tree.selection() {
+                if let Some(selection) = self.tree.selection(root) {
                     self.tree.move_node(selection, direction);
                 }
                 EventResponse::default()

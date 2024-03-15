@@ -114,14 +114,13 @@ impl LayoutTree {
         node
     }
 
-    // FIXME: root
-    pub fn select(&mut self, selection: impl Into<Option<NodeId>>) {
-        self.tree.data.selection.select(&self.tree.map, selection.into())
+    pub fn select(&mut self, selection: NodeId) {
+        self.tree.data.selection.select(&self.tree.map, selection)
     }
 
-    // FIXME: root
-    pub fn selection(&self) -> Option<NodeId> {
-        self.tree.data.selection.current_selection()
+    // TODO: Remove Option
+    pub fn selection(&self, root: NodeId) -> Option<NodeId> {
+        Some(self.tree.data.selection.current_selection(root))
     }
 
     pub fn space(&mut self, space: SpaceId) -> NodeId {

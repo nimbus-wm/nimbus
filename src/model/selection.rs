@@ -5,30 +5,48 @@ use super::{
 
 #[derive(Default)]
 pub struct Selection {
-    selected_child: slotmap::SecondaryMap<NodeId, Option<NodeId>>,
-    // FIXME: Should be one per root.
-    current_selection: Option<NodeId>,
+    nodes: slotmap::SecondaryMap<NodeId, SelectionInfo>,
+}
+
+struct SelectionInfo {
+    selected_child: NodeId,
+    stop_here: bool,
 }
 
 impl Selection {
-    pub(super) fn current_selection(&self) -> Option<NodeId> {
-        self.current_selection
+    pub(super) fn current_selection(&self, root: NodeId) -> NodeId {
+        let mut node = root;
+        while let Some(info) = self.nodes.get(node) {
+            if info.stop_here {
+                break;
+            }
+            node = info.selected_child;
+        }
+        node
     }
 
     pub(super) fn local_selection(&self, map: &NodeMap, node: NodeId) -> Option<NodeId> {
-        let result = self.selected_child.get(node).copied().flatten();
-        debug_assert!(result.is_none() || result.unwrap().parent(map) == Some(node));
-        result
+        let result = self.nodes.get(node);
+        if let Some(result) = result {
+            debug_assert_eq!(result.selected_child.parent(map), Some(node));
+        }
+        result.filter(|info| !info.stop_here).map(|info| info.selected_child)
     }
 
-    pub(super) fn select(&mut self, map: &NodeMap, mut selection: Option<NodeId>) {
-        self.current_selection = selection;
-        while let Some(node) = selection {
-            let parent = node.parent(map);
-            if let Some(parent) = parent {
-                self.selected_child.insert(parent, Some(node));
-            }
-            selection = parent;
+    pub(super) fn select(&mut self, map: &NodeMap, selection: NodeId) {
+        if let Some(info) = self.nodes.get_mut(selection) {
+            info.stop_here = true;
+        }
+        let mut node = selection;
+        while let Some(parent) = node.parent(map) {
+            self.nodes.insert(
+                parent,
+                SelectionInfo {
+                    selected_child: node,
+                    stop_here: false,
+                },
+            );
+            node = parent;
         }
     }
 
@@ -39,22 +57,16 @@ impl Selection {
             AddedToParent(_node) => {}
             RemovingFromParent(node) => {
                 let parent = node.parent(map).unwrap();
-                let alternative = node.next_sibling(map).or(node.prev_sibling(map));
-                if self.selected_child.get(parent) == Some(&Some(node)) {
-                    self.selected_child[parent] = alternative;
-                }
-                if self.current_selection == Some(node) {
-                    let mut new_selection = parent;
-                    while let Some(selection) =
-                        self.selected_child.get(new_selection).copied().flatten()
-                    {
-                        new_selection = selection;
+                if self.nodes.get(parent).map(|n| n.selected_child) == Some(node) {
+                    if let Some(new_selection) = node.next_sibling(map).or(node.prev_sibling(map)) {
+                        self.nodes[parent].selected_child = new_selection;
+                    } else {
+                        self.nodes.remove(parent);
                     }
-                    self.current_selection = Some(new_selection);
                 }
             }
             RemovedFromForest(node) => {
-                self.selected_child.remove(node);
+                self.nodes.remove(node);
             }
         }
     }
@@ -75,15 +87,15 @@ mod tests {
         let n1 = tree.add_window(root, WindowId::new(1, 1));
         let n2 = tree.add_window(root, WindowId::new(1, 2));
         let n3 = tree.add_window(root, WindowId::new(1, 3));
-        assert_eq!(tree.selection(), None);
+        assert_eq!(tree.selection(root), Some(root));
         tree.select(n2);
-        assert_eq!(tree.selection(), Some(n2));
+        assert_eq!(tree.selection(root), Some(n2));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 2));
-        assert_eq!(tree.selection(), Some(n3));
+        assert_eq!(tree.selection(root), Some(n3));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 3));
-        assert_eq!(tree.selection(), Some(n1));
+        assert_eq!(tree.selection(root), Some(n1));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 1));
-        assert_eq!(tree.selection(), Some(root));
+        assert_eq!(tree.selection(root), Some(root));
     }
 
     #[test]
@@ -98,13 +110,13 @@ mod tests {
         let a3 = tree.add_window(root, WindowId::new(1, 5));
 
         tree.select(b2);
-        assert_eq!(tree.selection(), Some(b2));
+        assert_eq!(tree.selection(root), Some(b2));
         tree.select(a1);
-        assert_eq!(tree.selection(), Some(a1));
+        assert_eq!(tree.selection(root), Some(a1));
         tree.select(a3);
-        assert_eq!(tree.selection(), Some(a3));
+        assert_eq!(tree.selection(root), Some(a3));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 5));
-        assert_eq!(tree.selection(), Some(b2));
+        assert_eq!(tree.selection(root), Some(b2));
     }
 
     #[test]
@@ -119,9 +131,9 @@ mod tests {
         let _a3 = tree.add_window(root, WindowId::new(1, 5));
 
         tree.select(b2);
-        assert_eq!(tree.selection(), Some(b2));
+        assert_eq!(tree.selection(root), Some(b2));
         tree.retain_windows(|&wid| wid.pid != 2);
-        assert_eq!(tree.selection(), Some(a2));
+        assert_eq!(tree.selection(root), Some(a2));
     }
 
     #[test]
@@ -132,8 +144,21 @@ mod tests {
         let n2 = tree.add_window(root, WindowId::new(1, 2));
         let _n3 = tree.add_window(root, WindowId::new(1, 3));
         tree.select(n2);
-        assert_eq!(tree.selection(), Some(n2));
+        assert_eq!(tree.selection(root), Some(n2));
         tree.move_node(n2, Direction::Left);
-        assert_eq!(tree.selection(), Some(n2));
+        assert_eq!(tree.selection(root), Some(n2));
+    }
+
+    #[test]
+    fn allows_parent_selection() {
+        let mut tree = LayoutTree::new();
+        let root = tree.space(SpaceId::new(1));
+        let _a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let b1 = tree.add_window(a2, WindowId::new(1, 2));
+        tree.select(b1);
+        assert_eq!(tree.selection(root), Some(b1));
+        tree.select(a2);
+        assert_eq!(tree.selection(root), Some(a2));
     }
 }
