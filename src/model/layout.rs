@@ -1,4 +1,5 @@
 use core::fmt::Debug;
+use std::mem;
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
@@ -24,7 +25,7 @@ pub enum LayoutKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Orientation {
+pub enum Orientation {
     Horizontal,
     Vertical,
 }
@@ -120,6 +121,13 @@ impl Layout {
                 self.info.remove(node);
             }
         }
+    }
+
+    pub(super) fn assume_size_of(&mut self, new: NodeId, old: NodeId, map: &NodeMap) {
+        assert_eq!(new.parent(map), old.parent(map));
+        let parent = new.parent(map).unwrap();
+        self.info[parent].total -= self.info[new].size;
+        self.info[new].size = mem::replace(&mut self.info[old].size, 0.0);
     }
 
     pub(super) fn set_kind(&mut self, node: NodeId, kind: LayoutKind) {

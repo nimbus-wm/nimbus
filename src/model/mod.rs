@@ -7,5 +7,5 @@ mod selection;
 mod tree;
 
 #[allow(unused_imports)]
-pub use layout::{Direction, LayoutKind};
+pub use layout::{Direction, LayoutKind, Orientation};
 pub use layout_tree::LayoutTree;

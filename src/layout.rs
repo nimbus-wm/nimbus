@@ -3,19 +3,12 @@ use tracing::debug;
 
 use crate::{
     app::WindowId,
-    model::{Direction, LayoutTree},
+    model::{Direction, LayoutKind, LayoutTree, Orientation},
     screen::SpaceId,
 };
 
 pub struct LayoutManager {
     tree: LayoutTree,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Copy, Clone)]
-pub enum Orientation {
-    Horizontal,
-    Vertical,
 }
 
 #[allow(dead_code)]
@@ -26,6 +19,8 @@ pub enum LayoutCommand {
     PrevWindow,
     MoveFocus(Direction),
     MoveNode(Direction),
+    Split(Orientation),
+    Debug,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +125,21 @@ impl LayoutManager {
                 if let Some(selection) = self.tree.selection(root) {
                     self.tree.move_node(selection, direction);
                 }
+                EventResponse::default()
+            }
+            LayoutCommand::Split(orientation) => {
+                if let Some(selection) = self.tree.selection(root) {
+                    let kind = match orientation {
+                        Orientation::Horizontal => LayoutKind::Horizontal,
+                        Orientation::Vertical => LayoutKind::Vertical,
+                    };
+                    self.tree.nest_in_container(selection, kind);
+                }
+                EventResponse::default()
+            }
+            LayoutCommand::Debug => {
+                let root = self.tree.space(space);
+                println!("{}", self.tree.draw_tree(root));
                 EventResponse::default()
             }
         }

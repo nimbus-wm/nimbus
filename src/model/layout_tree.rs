@@ -193,6 +193,26 @@ impl LayoutTree {
         true
     }
 
+    pub fn nest_in_container(&mut self, node: NodeId, kind: LayoutKind) -> Option<NodeId> {
+        let Some(old_parent) = node.parent(&self.tree.map) else {
+            // Can't move root.
+            return None;
+        };
+        let parent = if node.prev_sibling(&self.tree.map).is_some()
+            || node.next_sibling(&self.tree.map).is_some()
+        {
+            let new = self.tree.mk_node().insert_before(node);
+            self.tree.data.layout.assume_size_of(new, node, &self.tree.map);
+            node.detach(&mut self.tree).push_back(new);
+            self.tree.data.selection.select_locally(&self.tree.map, node);
+            new
+        } else {
+            old_parent
+        };
+        self.tree.data.layout.set_kind(parent, kind);
+        Some(parent)
+    }
+
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
         // Pick an ancestor to resize that has a sibling in the given direction.
         let can_resize = |&node: &NodeId| -> bool {
@@ -441,6 +461,46 @@ mod tests {
         let left: BTreeMap<_, _> = left.into_iter().collect();
         let right: BTreeMap<_, _> = right.into_iter().collect();
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn nest_in_container() {
+        let mut tree = LayoutTree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+
+        // Calling on root does nothing.
+        assert_eq!(None, tree.nest_in_container(root, LayoutKind::Vertical));
+
+        // Calling on only child updates the (root) parent.
+        assert_eq!(Some(root), tree.nest_in_container(a1, LayoutKind::Vertical));
+        assert_eq!(LayoutKind::Vertical, tree.tree.data.layout.kind(root));
+
+        let a2 = tree.add_window(root, WindowId::new(1, 2));
+        tree.select(a2);
+        tree.resize(a2, 0.10, Direction::Up);
+        let orig_frames = tree.calculate_layout(root, rect(0, 0, 1000, 1000));
+
+        // Calling on child with siblings creates a new parent.
+        // To keep the naming scheme consistent, rename the node a2 to b1
+        // once it's nested a level deeper.
+        let (b1, a2) = (
+            a2,
+            tree.nest_in_container(a2, LayoutKind::Horizontal).unwrap(),
+        );
+        assert_eq!(Some(b1), tree.selection(root));
+        tree.assert_children_are([a1, a2], root);
+        tree.assert_children_are([b1], a2);
+        assert_frames_are(
+            orig_frames,
+            tree.calculate_layout(root, rect(0, 0, 1000, 1000)),
+        );
+
+        // Calling on only child updates the (non-root) parent.
+        assert_eq!(Some(a2), tree.nest_in_container(b1, LayoutKind::Horizontal));
+        tree.assert_children_are([a1, a2], root);
+        tree.assert_children_are([b1], a2);
     }
 
     #[test]

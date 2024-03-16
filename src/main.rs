@@ -20,6 +20,8 @@ use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_tree::time::UtcDateTime;
 
+use crate::model::Orientation;
+
 fn main() {
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
@@ -60,7 +62,14 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     mgr.register(ALT | SHIFT, KeyJ, Command::Layout(MoveNode(Down)));
     mgr.register(ALT | SHIFT, KeyK, Command::Layout(MoveNode(Up)));
     mgr.register(ALT | SHIFT, KeyL, Command::Layout(MoveNode(Right)));
+    mgr.register(ALT, Equal, Command::Layout(Split(Orientation::Vertical)));
+    mgr.register(
+        ALT,
+        Backslash,
+        Command::Layout(Split(Orientation::Horizontal)),
+    );
     mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
+    mgr.register(ALT, KeyD, Command::Layout(Debug));
     mgr
 }
 
