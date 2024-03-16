@@ -33,6 +33,18 @@ impl Selection {
         result.filter(|info| !info.stop_here).map(|info| info.selected_child)
     }
 
+    pub(super) fn select_locally(&mut self, map: &NodeMap, node: NodeId) {
+        if let Some(parent) = node.parent(map) {
+            self.nodes.insert(
+                parent,
+                SelectionInfo {
+                    selected_child: node,
+                    stop_here: false,
+                },
+            );
+        }
+    }
+
     pub(super) fn select(&mut self, map: &NodeMap, selection: NodeId) {
         if let Some(info) = self.nodes.get_mut(selection) {
             info.stop_here = true;

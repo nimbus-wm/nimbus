@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{collections::HashMap, mem};
 
 use icrate::Foundation::CGRect;
@@ -108,6 +106,7 @@ impl LayoutTree {
         self.windows.get(node).copied()
     }
 
+    #[allow(dead_code)]
     pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
         let node = self.tree.mk_node().push_back(parent);
         self.tree.data.layout.set_kind(node, kind);
@@ -181,11 +180,16 @@ impl LayoutTree {
         let Some(insertion_point) = self.traverse(node, direction) else {
             return false;
         };
+        let root = node.ancestors(&self.tree.map).last().unwrap();
+        let is_selection = self.tree.data.selection.current_selection(root) == node;
         let node = node.detach(&mut self.tree);
-        match direction {
+        let node = match direction {
             Direction::Left | Direction::Up => node.insert_before(insertion_point),
             Direction::Right | Direction::Down => node.insert_after(insertion_point),
         };
+        if is_selection {
+            self.tree.data.selection.select_locally(&self.tree.map, node);
+        }
         true
     }
 
@@ -284,8 +288,15 @@ impl LayoutTree {
     }
 
     fn get_ascii_tree(&self, node: NodeId) -> ascii_tree::Tree {
+        let is_selection = node
+            .parent(&self.tree.map)
+            .map(|parent| {
+                self.tree.data.selection.local_selection(&self.tree.map, parent) == Some(node)
+            })
+            .unwrap_or(false);
         let desc = format!(
-            "{node:?} {layout:?}",
+            "{selection}{node:?} {layout:?}",
+            selection = if is_selection { "＞" } else { "" },
             layout = self.tree.data.layout.debug(node)
         );
         let children: Vec<_> =
@@ -344,11 +355,6 @@ mod tests {
     use super::*;
     use crate::{model::LayoutTree, screen::SpaceId};
 
-    struct TestTree {
-        tree: LayoutTree,
-        root: NodeId,
-    }
-
     #[test]
     fn traverse() {
         let mut tree = LayoutTree::new();
@@ -387,6 +393,36 @@ mod tests {
         assert_eq!(tree.traverse(a3, Up), None);
         assert_eq!(tree.traverse(a3, Down), None);
         assert_eq!(tree.traverse(a3, Right), None);
+    }
+
+    impl LayoutTree {
+        #[track_caller]
+        fn assert_children_are<const N: usize>(&self, children: [NodeId; N], parent: NodeId) {
+            let actual: Vec<_> = parent.children(&self.tree.map).collect();
+            assert_eq!(&children, actual.as_slice());
+        }
+    }
+
+    #[test]
+    fn move_node() {
+        let mut tree = LayoutTree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(a2, WindowId::new(2, 2));
+        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        tree.select(b2);
+        println!("{}", tree.draw_tree(root));
+        tree.assert_children_are([a1, a2, a3], root);
+        assert_eq!(Some(b2), tree.selection(root));
+
+        tree.move_node(b2, Direction::Left);
+        println!("{}", tree.draw_tree(root));
+        tree.assert_children_are([b2, a1, a2, a3], root); // TODO
+        assert_eq!(Some(b2), tree.selection(root));
     }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
