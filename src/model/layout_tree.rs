@@ -150,8 +150,8 @@ impl LayoutTree {
             let child = if self.tree.data.layout.kind(node).orientation() == direction.orientation()
             {
                 match direction {
-                    Direction::Up | Direction::Left => node.first_child(forest),
-                    Direction::Down | Direction::Right => node.last_child(forest),
+                    Direction::Up | Direction::Left => node.last_child(forest),
+                    Direction::Down | Direction::Right => node.first_child(forest),
                 }
             } else {
                 selection.local_selection(forest, node).or(node.first_child(forest))
@@ -428,6 +428,35 @@ mod tests {
         assert_eq!(tree.traverse(a3, Left), Some(b2));
         assert_eq!(tree.traverse(a3, Up), None);
         assert_eq!(tree.traverse(a3, Down), None);
+        assert_eq!(tree.traverse(a3, Right), None);
+    }
+
+    #[test]
+    fn traverse_nested_same_orientation() {
+        let mut tree = LayoutTree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(a2, WindowId::new(2, 2));
+        let b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        tree.select(b2);
+
+        use Direction::*;
+        assert_eq!(tree.traverse(a1, Left), None);
+        assert_eq!(tree.traverse(a2, Left), Some(a1));
+        assert_eq!(tree.traverse(b1, Left), Some(a1));
+        assert_eq!(tree.traverse(b2, Left), Some(b1));
+        assert_eq!(tree.traverse(b2, Left), Some(b1));
+        assert_eq!(tree.traverse(b3, Left), Some(b2));
+        assert_eq!(tree.traverse(a3, Left), Some(b3));
+        assert_eq!(tree.traverse(a1, Right), Some(b1));
+        assert_eq!(tree.traverse(a2, Right), Some(a3));
+        assert_eq!(tree.traverse(b1, Right), Some(b2));
+        assert_eq!(tree.traverse(b2, Right), Some(b3));
+        assert_eq!(tree.traverse(b3, Right), Some(a3));
         assert_eq!(tree.traverse(a3, Right), None);
     }
 
