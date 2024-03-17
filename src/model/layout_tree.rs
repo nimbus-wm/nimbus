@@ -171,14 +171,16 @@ impl LayoutTree {
 
     pub fn move_node(&mut self, moving_node: NodeId, direction: Direction) -> bool {
         let map = &self.tree.map;
-        let Some(parent) = moving_node.parent(map) else {
+        let Some(old_parent) = moving_node.parent(map) else {
             return false;
         };
         let is_selection =
-            self.tree.data.selection.local_selection(map, parent) == Some(moving_node);
+            self.tree.data.selection.local_selection(map, old_parent) == Some(moving_node);
         self.move_node_inner(moving_node, direction);
         if is_selection {
-            self.tree.data.selection.select_locally(&self.tree.map, moving_node);
+            for node in moving_node.ancestors(&self.tree.map).take_while(|&a| a != old_parent) {
+                self.tree.data.selection.select_locally(&self.tree.map, node);
+            }
         }
         true
     }
@@ -568,35 +570,39 @@ mod tests {
         tree.assert_children_are([b2, a1, a2, a3], root);
         assert_eq!(Some(b2), tree.selection(root));
 
-        tree.select(a2);
-        tree.move_node(a2, Direction::Right);
-        tree.assert_children_are([b2, a1, a3, a2], root);
-        assert_eq!(Some(a2), tree.selection(root));
+        tree.move_node(a2, Direction::Left);
+        tree.assert_children_are([b2, a2, a1, a3], root);
+        assert_eq!(Some(b2), tree.selection(root));
+
+        tree.select(a3);
+        tree.move_node(a3, Direction::Left);
+        tree.assert_children_are([b2, a2, a3, a1], root);
+        assert_eq!(Some(a3), tree.selection(root));
+
+        tree.move_node(a3, Direction::Left);
+        tree.assert_children_are([b2, a2, a1], root);
+        tree.assert_children_are([b1, b3, a3], a2);
+        assert_eq!(Some(a3), tree.selection(root));
 
         tree.move_node(a3, Direction::Right);
-        tree.assert_children_are([b2, a1, a2], root);
-        tree.assert_children_are([a3, b1, b3], a2);
-        assert_eq!(Some(a2), tree.selection(root));
-
-        tree.move_node(a3, Direction::Right);
-        tree.assert_children_are([b2, a1, a2, a3], root);
+        tree.assert_children_are([b2, a2, a3, a1], root);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a2), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(root));
 
         tree.move_node(b1, Direction::Down);
         tree.assert_children_are([b3, b1], a2);
-        assert_eq!(Some(a2), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(root));
 
         tree.move_node(b1, Direction::Up);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a2), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(root));
 
         tree.move_node(b1, Direction::Up);
         let (old_root, root) = (root, tree.space(space));
         tree.assert_children_are([b1, old_root], root);
-        tree.assert_children_are([b2, a1, a2, a3], old_root); // TODO unnesting should happen here
+        tree.assert_children_are([b2, a2, a3, a1], old_root); // TODO unnesting should happen here
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
-        assert_eq!(Some(a2), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(root));
 
         assert!(!tree.move_node(root, Direction::Right));
     }
