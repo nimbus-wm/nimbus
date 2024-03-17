@@ -20,6 +20,8 @@ pub enum LayoutCommand {
     MoveFocus(Direction),
     MoveNode(Direction),
     Split(Orientation),
+    Group(Orientation),
+    Ungroup,
     Debug,
 }
 
@@ -134,6 +136,28 @@ impl LayoutManager {
                         Orientation::Vertical => LayoutKind::Vertical,
                     };
                     self.tree.nest_in_container(selection, kind);
+                }
+                EventResponse::default()
+            }
+            LayoutCommand::Group(orientation) => {
+                if let Some(parent) =
+                    self.tree.selection(root).and_then(|s| s.parent(self.tree.map()))
+                {
+                    let kind = match orientation {
+                        Orientation::Horizontal => LayoutKind::Tabbed,
+                        Orientation::Vertical => LayoutKind::Stacked,
+                    };
+                    self.tree.set_layout(parent, kind);
+                }
+                EventResponse::default()
+            }
+            LayoutCommand::Ungroup => {
+                if let Some(parent) =
+                    self.tree.selection(root).and_then(|s| s.parent(self.tree.map()))
+                {
+                    if self.tree.layout(parent).is_group() {
+                        self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
+                    }
                 }
                 EventResponse::default()
             }

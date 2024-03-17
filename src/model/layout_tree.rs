@@ -193,6 +193,22 @@ impl LayoutTree {
         true
     }
 
+    pub fn map(&self) -> &NodeMap {
+        &self.tree.map
+    }
+
+    pub fn layout(&self, node: NodeId) -> LayoutKind {
+        self.tree.data.layout.kind(node)
+    }
+
+    pub fn last_ungrouped_layout(&self, node: NodeId) -> LayoutKind {
+        self.tree.data.layout.last_ungrouped_kind(node)
+    }
+
+    pub fn set_layout(&mut self, node: NodeId, kind: LayoutKind) {
+        self.tree.data.layout.set_kind(node, kind);
+    }
+
     pub fn nest_in_container(&mut self, node: NodeId, kind: LayoutKind) -> Option<NodeId> {
         let Some(old_parent) = node.parent(&self.tree.map) else {
             // Can't move root.

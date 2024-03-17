@@ -31,7 +31,7 @@ pub enum Orientation {
 }
 
 impl LayoutKind {
-    pub(super) fn orientation(self) -> Orientation {
+    pub fn orientation(self) -> Orientation {
         use LayoutKind::*;
         match self {
             Horizontal | Tabbed => Orientation::Horizontal,
@@ -39,7 +39,7 @@ impl LayoutKind {
         }
     }
 
-    pub(super) fn is_group(self) -> bool {
+    pub fn is_group(self) -> bool {
         use LayoutKind::*;
         match self {
             Stacked | Tabbed => true,
@@ -101,6 +101,8 @@ struct LayoutInfo {
     total: f32,
     /// The orientation of this node. Not used for leaf nodes.
     kind: LayoutKind,
+    /// The last ungrouped layout of this node.
+    last_ungrouped_kind: LayoutKind,
 }
 
 impl Layout {
@@ -132,10 +134,17 @@ impl Layout {
 
     pub(super) fn set_kind(&mut self, node: NodeId, kind: LayoutKind) {
         self.info[node].kind = kind;
+        if !kind.is_group() {
+            self.info[node].last_ungrouped_kind = kind;
+        }
     }
 
     pub(super) fn kind(&self, node: NodeId) -> LayoutKind {
         self.info[node].kind
+    }
+
+    pub(super) fn last_ungrouped_kind(&self, node: NodeId) -> LayoutKind {
+        self.info[node].last_ungrouped_kind
     }
 
     pub(super) fn proportion(&self, map: &NodeMap, node: NodeId) -> Option<f64> {
