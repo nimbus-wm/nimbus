@@ -298,6 +298,7 @@ pub struct Node {
 
 impl NodeId {
     fn link_under_back(self, parent: NodeId, map: &mut NodeMap) {
+        assert_ne!(self, parent);
         map[self].parent = Some(parent);
         map[parent].first_child.get_or_insert(self);
         if let Some(prev) = map[parent].last_child.replace(self) {
@@ -306,6 +307,7 @@ impl NodeId {
     }
 
     fn link_under_front(self, parent: NodeId, map: &mut NodeMap) {
+        assert_ne!(self, parent);
         map[self].parent = Some(parent);
         map[parent].last_child.get_or_insert(self);
         if let Some(next) = map[parent].first_child.replace(self) {

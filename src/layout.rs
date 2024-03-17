@@ -71,7 +71,6 @@ impl LayoutManager {
         debug!(?event);
         match event {
             LayoutEvent::WindowRaised(space, wid) => {
-                let space = self.tree.space(space);
                 if let Some(wid) = wid {
                     if let Some(node) = self.tree.window_node(space, wid) {
                         self.tree.select(node);
@@ -85,7 +84,6 @@ impl LayoutManager {
                 new_frame,
                 screen,
             } => {
-                let space = self.tree.space(space);
                 if let Some(node) = self.tree.window_node(space, wid) {
                     self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
                 }

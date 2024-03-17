@@ -21,13 +21,14 @@ pub struct LayoutTree {
     tree: Tree<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
     window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
-    spaces: HashMap<SpaceId, OwnedNode>,
+    space_roots: HashMap<SpaceId, OwnedNode>,
+    root_spaces: HashMap<NodeId, SpaceId>,
 }
 
 pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
 
 struct WindowNodeInfo {
-    root: NodeId,
+    space: SpaceId,
     node: NodeId,
 }
 
@@ -56,7 +57,8 @@ impl LayoutTree {
             tree: Tree::with_observer(Components::default()),
             windows: Default::default(),
             window_nodes: Default::default(),
-            spaces: Default::default(),
+            space_roots: Default::default(),
+            root_spaces: Default::default(),
         }
     }
 
@@ -64,7 +66,8 @@ impl LayoutTree {
         let root = parent.ancestors(&self.tree.map).last().unwrap();
         let node = self.tree.mk_node().push_back(parent);
         self.windows.insert(node, wid);
-        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { root, node });
+        let space = self.root_spaces[&root];
+        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { space, node });
         node
     }
 
@@ -93,11 +96,11 @@ impl LayoutTree {
         self.window_nodes.keys().copied()
     }
 
-    pub fn window_node(&self, root: NodeId, wid: WindowId) -> Option<NodeId> {
+    pub fn window_node(&self, space: SpaceId, wid: WindowId) -> Option<NodeId> {
         self.window_nodes
             .get(&wid)
             .into_iter()
-            .flat_map(|nodes| nodes.iter().filter(|info| info.root == root))
+            .flat_map(|nodes| nodes.iter().filter(|info| info.space == space))
             .next()
             .map(|info| info.node)
     }
@@ -123,9 +126,13 @@ impl LayoutTree {
     }
 
     pub fn space(&mut self, space: SpaceId) -> NodeId {
-        self.spaces
+        self.space_roots
             .entry(space)
-            .or_insert_with(|| OwnedNode::new_root_in(&mut self.tree, "space_root"))
+            .or_insert_with(|| {
+                let node = OwnedNode::new_root_in(&mut self.tree, "space_root");
+                self.root_spaces.insert(node.id(), space);
+                node
+            })
             .id()
     }
 
@@ -286,16 +293,12 @@ impl LayoutTree {
                 new_parent
             } else {
                 // New root.
-                let Some((_, space_entry)) =
-                    self.spaces.iter_mut().filter(|(_, root)| root.id() == node).next()
-                else {
-                    panic!(
-                        "Could not find root node {node:?} in spaces {:?}",
-                        self.spaces
-                    )
-                };
-                space_entry.replace(self.tree.mk_node()).push_back(space_entry.id());
-                space_entry.id()
+                let space = self.root_spaces[&node];
+                let space_root = self.space_roots.get_mut(&space).unwrap();
+                self.root_spaces.remove(&space_root.id());
+                space_root.replace(self.tree.mk_node()).push_back(space_root.id());
+                self.root_spaces.insert(space_root.id(), space);
+                space_root.id()
             };
             self.tree.data.selection.select_locally(&self.tree.map, node);
             new_parent
@@ -431,7 +434,7 @@ impl LayoutTree {
 impl Drop for LayoutTree {
     fn drop(&mut self) {
         // It's okay to skip removing these, since we're dropping the map too.
-        mem::forget(self.spaces.drain());
+        mem::forget(self.space_roots.drain());
     }
 }
 
@@ -603,6 +606,7 @@ mod tests {
         tree.assert_children_are([b2, a2, a3, a1], old_root); // TODO unnesting should happen here
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
         assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(b1), tree.window_node(space, WindowId::new(2, 1)));
 
         assert!(!tree.move_node(root, Direction::Right));
     }
@@ -659,9 +663,12 @@ mod tests {
         tree.assert_children_are([b1], a2);
 
         // Calling on root works too.
-        let new_root = tree.nest_in_container(root, LayoutKind::Vertical);
-        tree.assert_children_are([root], new_root);
-        tree.assert_children_are([a1, a2], root);
+        let (old_root, root) = (root, tree.nest_in_container(root, LayoutKind::Vertical));
+        tree.assert_children_are([old_root], root);
+        tree.assert_children_are([a1, a2], old_root);
+
+        let a3 = tree.add_window(old_root, WindowId::new(1, 3));
+        tree.assert_children_are([a1, a2, a3], old_root);
     }
 
     #[test]
