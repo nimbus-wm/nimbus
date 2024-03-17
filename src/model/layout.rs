@@ -24,6 +24,22 @@ pub enum LayoutKind {
     Stacked,
 }
 
+impl LayoutKind {
+    pub fn from(orientation: Orientation) -> Self {
+        match orientation {
+            Orientation::Horizontal => LayoutKind::Horizontal,
+            Orientation::Vertical => LayoutKind::Vertical,
+        }
+    }
+
+    pub fn group(orientation: Orientation) -> Self {
+        match orientation {
+            Orientation::Horizontal => LayoutKind::Tabbed,
+            Orientation::Vertical => LayoutKind::Stacked,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Orientation {
     Horizontal,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, iter, mem};
 
 use icrate::Foundation::CGRect;
 
@@ -134,32 +134,25 @@ impl LayoutTree {
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
-        let forest = &self.tree.map;
-        let selection = &self.tree.data.selection;
-        let Some(mut node) =
+        let map = &self.tree.map;
+        let node =
             // Keep going up...
-            from.ancestors(forest)
+            from.ancestors(map)
             // ...until we can move in the desired direction, then move.
-            .flat_map(|n| self.move_over(n, direction)).next()
-        else {
-            return None;
-        };
+            .flat_map(|n| self.move_over(n, direction)).next();
         // Descend as far down as we can go, keeping close to the direction we're
         // moving from.
-        loop {
-            let child = if self.tree.data.layout.kind(node).orientation() == direction.orientation()
-            {
+        iter::successors(node, |&node| {
+            if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
                 match direction {
-                    Direction::Up | Direction::Left => node.last_child(forest),
-                    Direction::Down | Direction::Right => node.first_child(forest),
+                    Direction::Up | Direction::Left => node.last_child(map),
+                    Direction::Down | Direction::Right => node.first_child(map),
                 }
             } else {
-                selection.local_selection(forest, node).or(node.first_child(forest))
-            };
-            let Some(child) = child else { break };
-            node = child;
-        }
-        Some(node)
+                self.tree.data.selection.local_selection(map, node).or(node.first_child(map))
+            }
+        })
+        .last()
     }
 
     fn move_over(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
@@ -176,21 +169,88 @@ impl LayoutTree {
         }
     }
 
-    pub fn move_node(&mut self, node: NodeId, direction: Direction) -> bool {
-        let Some(insertion_point) = self.traverse(node, direction) else {
+    pub fn move_node(&mut self, moving_node: NodeId, direction: Direction) -> bool {
+        let map = &self.tree.map;
+        let Some(parent) = moving_node.parent(map) else {
             return false;
         };
-        let root = node.ancestors(&self.tree.map).last().unwrap();
-        let is_selection = self.tree.data.selection.current_selection(root) == node;
-        let node = node.detach(&mut self.tree);
-        let node = match direction {
-            Direction::Left | Direction::Up => node.insert_before(insertion_point),
-            Direction::Right | Direction::Down => node.insert_after(insertion_point),
-        };
+        let is_selection =
+            self.tree.data.selection.local_selection(map, parent) == Some(moving_node);
+        self.move_node_inner(moving_node, direction);
         if is_selection {
-            self.tree.data.selection.select_locally(&self.tree.map, node);
+            self.tree.data.selection.select_locally(&self.tree.map, moving_node);
         }
         true
+    }
+
+    fn move_node_inner(&mut self, moving_node: NodeId, direction: Direction) {
+        /// Where to insert the node, along the direction we're moving.
+        enum Destination {
+            Ahead(NodeId),
+            Behind(NodeId),
+        }
+        let map = &self.tree.map;
+        let destination;
+        if let Some(sibling) = self.move_over(moving_node, direction) {
+            // Traverse down the sibling until we hit the next node with
+            // the same orientation we're moving in.
+            let mut node = sibling;
+            let target = loop {
+                let Some(next) =
+                    self.tree.data.selection.local_selection(map, node).or(node.first_child(map))
+                else {
+                    break node;
+                };
+                if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
+                    break next;
+                }
+                node = next;
+            };
+            if target == sibling {
+                // Our sibling is a leaf; we're switching places.
+                destination = Destination::Ahead(sibling);
+            } else {
+                // The target is our new sibling. We have already moved laterally,
+                // so don't do that here.
+                destination = Destination::Behind(target);
+            }
+        } else {
+            // Traverse up the tree until we can move in the desired direction.
+            let target = moving_node
+                .ancestors_with_parent(&self.tree.map)
+                .skip(1) // We already tried moving at the current level.
+                .skip_while(|(_node, parent)| {
+                    parent
+                        .map(|p| self.layout(p).orientation() != direction.orientation())
+                        // If we get all the way to the root, give up and skip it too.
+                        .unwrap_or(true)
+                })
+                .next();
+            if let Some((target, _parent)) = target {
+                // The target is our new sibling. We haven't moved laterally yet, so do that here.
+                destination = Destination::Ahead(target);
+            } else {
+                // We went all the way to the root and couldn't move in the
+                // desired direction, so we'll make a new container level above it.
+                let old_root = moving_node.ancestors(map).last().unwrap();
+                self.nest_in_container(old_root, LayoutKind::from(direction.orientation()));
+                destination = Destination::Ahead(old_root);
+            }
+        }
+        match (destination, direction) {
+            (Destination::Ahead(target), Direction::Right | Direction::Down) => {
+                moving_node.detach(&mut self.tree).insert_after(target);
+            }
+            (Destination::Behind(target), Direction::Right | Direction::Down) => {
+                moving_node.detach(&mut self.tree).insert_before(target);
+            }
+            (Destination::Ahead(target), Direction::Left | Direction::Up) => {
+                moving_node.detach(&mut self.tree).insert_before(target);
+            }
+            (Destination::Behind(target), Direction::Left | Direction::Up) => {
+                moving_node.detach(&mut self.tree).insert_after(target);
+            }
+        }
     }
 
     pub fn map(&self) -> &NodeMap {
@@ -488,19 +548,53 @@ mod tests {
         let root = tree.space(space);
         let a1 = tree.add_window(root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let b1 = tree.add_window(a2, WindowId::new(2, 1));
         let b2 = tree.add_window(a2, WindowId::new(2, 2));
-        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
+        let b3 = tree.add_window(a2, WindowId::new(2, 3));
         let a3 = tree.add_window(root, WindowId::new(1, 3));
         tree.select(b2);
-        println!("{}", tree.draw_tree(root));
         tree.assert_children_are([a1, a2, a3], root);
         assert_eq!(Some(b2), tree.selection(root));
 
         tree.move_node(b2, Direction::Left);
-        println!("{}", tree.draw_tree(root));
-        tree.assert_children_are([b2, a1, a2, a3], root); // TODO
+        tree.assert_children_are([a1, b2, a2, a3], root);
         assert_eq!(Some(b2), tree.selection(root));
+
+        tree.move_node(b2, Direction::Left);
+        tree.assert_children_are([b2, a1, a2, a3], root);
+        assert_eq!(Some(b2), tree.selection(root));
+
+        tree.select(a2);
+        tree.move_node(a2, Direction::Right);
+        tree.assert_children_are([b2, a1, a3, a2], root);
+        assert_eq!(Some(a2), tree.selection(root));
+
+        tree.move_node(a3, Direction::Right);
+        tree.assert_children_are([b2, a1, a2], root);
+        tree.assert_children_are([a3, b1, b3], a2);
+        assert_eq!(Some(a2), tree.selection(root));
+
+        tree.move_node(a3, Direction::Right);
+        tree.assert_children_are([b2, a1, a2, a3], root);
+        tree.assert_children_are([b1, b3], a2);
+        assert_eq!(Some(a2), tree.selection(root));
+
+        tree.move_node(b1, Direction::Down);
+        tree.assert_children_are([b3, b1], a2);
+        assert_eq!(Some(a2), tree.selection(root));
+
+        tree.move_node(b1, Direction::Up);
+        tree.assert_children_are([b1, b3], a2);
+        assert_eq!(Some(a2), tree.selection(root));
+
+        tree.move_node(b1, Direction::Up);
+        let (old_root, root) = (root, tree.space(space));
+        tree.assert_children_are([b1, old_root], root);
+        tree.assert_children_are([b2, a1, a2, a3], old_root); // TODO unnesting should happen here
+        assert_eq!(LayoutKind::Vertical, tree.layout(root));
+        assert_eq!(Some(a2), tree.selection(root));
+
+        assert!(!tree.move_node(root, Direction::Right));
     }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {

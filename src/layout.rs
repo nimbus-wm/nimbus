@@ -131,11 +131,7 @@ impl LayoutManager {
             }
             LayoutCommand::Split(orientation) => {
                 if let Some(selection) = self.tree.selection(root) {
-                    let kind = match orientation {
-                        Orientation::Horizontal => LayoutKind::Horizontal,
-                        Orientation::Vertical => LayoutKind::Vertical,
-                    };
-                    self.tree.nest_in_container(selection, kind);
+                    self.tree.nest_in_container(selection, LayoutKind::from(orientation));
                 }
                 EventResponse::default()
             }
@@ -143,11 +139,7 @@ impl LayoutManager {
                 if let Some(parent) =
                     self.tree.selection(root).and_then(|s| s.parent(self.tree.map()))
                 {
-                    let kind = match orientation {
-                        Orientation::Horizontal => LayoutKind::Tabbed,
-                        Orientation::Vertical => LayoutKind::Stacked,
-                    };
-                    self.tree.set_layout(parent, kind);
+                    self.tree.set_layout(parent, LayoutKind::group(orientation));
                 }
                 EventResponse::default()
             }
