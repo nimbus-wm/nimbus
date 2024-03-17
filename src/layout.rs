@@ -155,7 +155,7 @@ impl LayoutManager {
             }
             LayoutCommand::Debug => {
                 let root = self.tree.space(space);
-                println!("{}", self.tree.draw_tree(root));
+                self.tree.print_tree(root);
                 EventResponse::default()
             }
         }

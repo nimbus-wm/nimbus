@@ -389,6 +389,10 @@ impl LayoutTree {
         }
     }
 
+    pub fn print_tree(&self, root: NodeId) {
+        print!("{}", self.draw_tree(root))
+    }
+
     pub fn draw_tree(&self, root: NodeId) -> String {
         let tree = self.get_ascii_tree(root);
         let mut out = String::new();
@@ -397,25 +401,25 @@ impl LayoutTree {
     }
 
     fn get_ascii_tree(&self, node: NodeId) -> ascii_tree::Tree {
-        let is_selection = node
-            .parent(&self.tree.map)
-            .map(|parent| {
-                self.tree.data.selection.local_selection(&self.tree.map, parent) == Some(node)
-            })
-            .unwrap_or(false);
-        let desc = format!(
-            "{selection}{node:?} {layout:?}",
-            selection = if is_selection { "＞" } else { "" },
-            layout = self.tree.data.layout.debug(node)
-        );
+        let status = match node.parent(&self.tree.map) {
+            None => "", // Root
+            Some(parent)
+                if self.tree.data.selection.local_selection(&self.tree.map, parent)
+                    == Some(node) =>
+            {
+                "☒ "
+            }
+            _ => "☐ ",
+        };
+        let desc = format!("{status}{node:?}",);
+        let desc = match self.windows.get(node) {
+            Some(wid) => format!("{desc} {wid:?}"),
+            None => format!("{desc} {:?}", self.tree.data.layout.debug(node)),
+        };
         let children: Vec<_> =
             node.children(&self.tree.map).map(|c| self.get_ascii_tree(c)).collect();
         if children.is_empty() {
-            let lines = [
-                Some(desc),
-                self.windows.get(node).map(|wid| format!("{wid:?}")),
-            ];
-            ascii_tree::Tree::Leaf(lines.into_iter().flatten().collect())
+            ascii_tree::Tree::Leaf(vec![desc])
         } else {
             ascii_tree::Tree::Node(desc, children)
         }
@@ -675,7 +679,6 @@ mod tests {
         let _b3 = tree.add_window(a2, WindowId::new(2, 3));
         let _a3 = tree.add_window(root, WindowId::new(1, 3));
         let screen = rect(0, 0, 3000, 3000);
-        println!("{}", tree.draw_tree(root));
 
         let orig = vec![
             (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),

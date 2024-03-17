@@ -181,7 +181,7 @@ impl Layout {
     }
 
     pub(super) fn debug(&self, node: NodeId) -> impl Debug + '_ {
-        &self.info[node]
+        &self.info[node].kind
     }
 
     pub(super) fn get_sizes(
