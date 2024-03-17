@@ -209,24 +209,37 @@ impl LayoutTree {
         self.tree.data.layout.set_kind(node, kind);
     }
 
-    pub fn nest_in_container(&mut self, node: NodeId, kind: LayoutKind) -> Option<NodeId> {
-        let Some(old_parent) = node.parent(&self.tree.map) else {
-            // Can't move root.
-            return None;
-        };
-        let parent = if node.prev_sibling(&self.tree.map).is_some()
-            || node.next_sibling(&self.tree.map).is_some()
+    pub fn nest_in_container(&mut self, node: NodeId, kind: LayoutKind) -> NodeId {
+        let old_parent = node.parent(&self.tree.map);
+        let parent = if node.prev_sibling(&self.tree.map).is_none()
+            && node.next_sibling(&self.tree.map).is_none()
+            && old_parent.is_some()
         {
-            let new = self.tree.mk_node().insert_before(node);
-            self.tree.data.layout.assume_size_of(new, node, &self.tree.map);
-            node.detach(&mut self.tree).push_back(new);
-            self.tree.data.selection.select_locally(&self.tree.map, node);
-            new
+            old_parent.unwrap()
         } else {
-            old_parent
+            let new_parent = if old_parent.is_some() {
+                let new_parent = self.tree.mk_node().insert_before(node);
+                self.tree.data.layout.assume_size_of(new_parent, node, &self.tree.map);
+                node.detach(&mut self.tree).push_back(new_parent);
+                new_parent
+            } else {
+                // New root.
+                let Some((_, space_entry)) =
+                    self.spaces.iter_mut().filter(|(_, root)| root.id() == node).next()
+                else {
+                    panic!(
+                        "Could not find root node {node:?} in spaces {:?}",
+                        self.spaces
+                    )
+                };
+                space_entry.replace(self.tree.mk_node()).push_back(space_entry.id());
+                space_entry.id()
+            };
+            self.tree.data.selection.select_locally(&self.tree.map, node);
+            new_parent
         };
         self.tree.data.layout.set_kind(parent, kind);
-        Some(parent)
+        parent
     }
 
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
@@ -515,11 +528,8 @@ mod tests {
         let root = tree.space(space);
         let a1 = tree.add_window(root, WindowId::new(1, 1));
 
-        // Calling on root does nothing.
-        assert_eq!(None, tree.nest_in_container(root, LayoutKind::Vertical));
-
         // Calling on only child updates the (root) parent.
-        assert_eq!(Some(root), tree.nest_in_container(a1, LayoutKind::Vertical));
+        assert_eq!(root, tree.nest_in_container(a1, LayoutKind::Vertical));
         assert_eq!(LayoutKind::Vertical, tree.tree.data.layout.kind(root));
 
         let a2 = tree.add_window(root, WindowId::new(1, 2));
@@ -530,10 +540,7 @@ mod tests {
         // Calling on child with siblings creates a new parent.
         // To keep the naming scheme consistent, rename the node a2 to b1
         // once it's nested a level deeper.
-        let (b1, a2) = (
-            a2,
-            tree.nest_in_container(a2, LayoutKind::Horizontal).unwrap(),
-        );
+        let (b1, a2) = (a2, tree.nest_in_container(a2, LayoutKind::Horizontal));
         assert_eq!(Some(b1), tree.selection(root));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a2);
@@ -543,9 +550,14 @@ mod tests {
         );
 
         // Calling on only child updates the (non-root) parent.
-        assert_eq!(Some(a2), tree.nest_in_container(b1, LayoutKind::Horizontal));
+        assert_eq!(a2, tree.nest_in_container(b1, LayoutKind::Horizontal));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a2);
+
+        // Calling on root works too.
+        let new_root = tree.nest_in_container(root, LayoutKind::Vertical);
+        tree.assert_children_are([root], new_root);
+        tree.assert_children_are([a1, a2], root);
     }
 
     #[test]

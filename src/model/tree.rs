@@ -71,6 +71,7 @@ impl IndexMut<NodeId> for NodeMap {
 ///
 /// Every `OwnedNode` has a name which will be used in the panic message.
 #[must_use]
+#[derive(Debug)]
 pub struct OwnedNode(Option<NodeId>, &'static str);
 
 impl OwnedNode {
@@ -96,6 +97,12 @@ impl OwnedNode {
     #[track_caller]
     pub fn remove(&mut self, map: &mut Tree<impl Observer>) {
         self.0.take().unwrap().detach(map).remove()
+    }
+
+    #[track_caller]
+    pub fn replace<'a, O>(&mut self, new: DetachedNode<'a, O>) -> DetachedNode<'a, O> {
+        let id = self.0.replace(new.id).expect("Can't replace removed node");
+        DetachedNode { id, ..new }
     }
 }
 
