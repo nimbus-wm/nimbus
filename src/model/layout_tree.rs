@@ -461,6 +461,15 @@ impl tree::Observer for Components {
         self.dispatch_event(map, TreeEvent::RemovingFromParent(node))
     }
 
+    fn removed_child(tree: &mut Tree<Self>, parent: NodeId) {
+        // parent must be a container, or it wouldn't have had a child in the first place.
+        // Cull it if it's empty.
+        // Don't cull the root node, which would require extra bookkeeping.
+        if parent.is_empty(&tree.map) && parent.parent(&tree.map).is_some() {
+            parent.detach(tree).remove()
+        }
+    }
+
     fn removed_from_forest(&mut self, map: &NodeMap, node: NodeId) {
         self.dispatch_event(map, TreeEvent::RemovedFromForest(node))
     }
@@ -606,10 +615,14 @@ mod tests {
         tree.move_node(b1, Direction::Up);
         let (old_root, root) = (root, tree.space(space));
         tree.assert_children_are([b1, old_root], root);
-        tree.assert_children_are([b2, a2, a3, a1], old_root); // TODO unnesting should happen here
+        tree.assert_children_are([b2, a2, a3, a1], old_root);
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
         assert_eq!(Some(a3), tree.selection(root));
         assert_eq!(Some(b1), tree.window_node(space, WindowId::new(2, 1)));
+
+        // a2 is culled when its last child moves out of it.
+        tree.move_node(b3, Direction::Right);
+        tree.assert_children_are([b2, b3, a3, a1], old_root);
 
         assert!(!tree.move_node(root, Direction::Right));
     }

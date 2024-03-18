@@ -204,12 +204,21 @@ impl NodeId {
     pub fn last_child(self, map: &NodeMap) -> Option<NodeId> {
         map[self].last_child
     }
+
+    #[track_caller]
+    pub fn is_empty(self, map: &NodeMap) -> bool {
+        map[self].first_child.is_none()
+    }
 }
 
-pub trait Observer {
+pub trait Observer
+where
+    Self: Sized,
+{
     fn added_to_forest(&mut self, map: &NodeMap, node: NodeId);
     fn added_to_parent(&mut self, map: &NodeMap, node: NodeId);
     fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId);
+    fn removed_child(tree: &mut Tree<Self>, parent: NodeId);
     fn removed_from_forest(&mut self, map: &NodeMap, node: NodeId);
 }
 
@@ -217,6 +226,7 @@ impl Observer for () {
     fn added_to_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
     fn added_to_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
     fn removing_from_parent(&mut self, _forest: &NodeMap, _node: NodeId) {}
+    fn removed_child(_tree: &mut Tree<Self>, _parent: NodeId) {}
     fn removed_from_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
 }
 
@@ -262,10 +272,14 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
 
     #[track_caller]
     pub(super) fn remove(self) {
-        if self.id.parent(&self.tree.map).is_some() {
+        let parent = self.id.parent(&self.tree.map);
+        if parent.is_some() {
             self.tree.data.removing_from_parent(&self.tree.map, self.id);
         }
         self.tree.map.unlink(self.id);
+        if let Some(parent) = parent {
+            O::removed_child(self.tree, parent);
+        }
         self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree, self.id);
     }
 
@@ -282,6 +296,9 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
         attach(self);
         if old_parent != Some(new_parent) {
             self.tree.data.added_to_parent(&self.tree.map, self.id);
+            if let Some(parent) = old_parent {
+                O::removed_child(self.tree, parent);
+            }
         }
         self.id
     }
@@ -553,6 +570,9 @@ mod tests {
         }
         fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId) {
             self.0.push(RemovingFromParent(node, node.parent(map).unwrap()))
+        }
+        fn removed_child(_tree: &mut Tree<Self>, _parent: NodeId) {
+            // TODO
         }
         fn removed_from_forest(&mut self, _map: &NodeMap, node: NodeId) {
             self.0.push(RemovedFromForest(node))

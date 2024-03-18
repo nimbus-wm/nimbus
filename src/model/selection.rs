@@ -132,23 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn selects_parent_when_there_are_no_children() {
-        let mut tree = LayoutTree::new();
-        let root = tree.space(SpaceId::new(1));
-        let _a1 = tree.add_window(root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Horizontal);
-        let _b1 = tree.add_window(a2, WindowId::new(2, 2));
-        let b2 = tree.add_window(a2, WindowId::new(2, 3));
-        let _b3 = tree.add_window(a2, WindowId::new(2, 4));
-        let _a3 = tree.add_window(root, WindowId::new(1, 5));
-
-        tree.select(b2);
-        assert_eq!(tree.selection(root), Some(b2));
-        tree.retain_windows(|&wid| wid.pid != 2);
-        assert_eq!(tree.selection(root), Some(a2));
-    }
-
-    #[test]
     fn preserves_selection_after_move_within_parent() {
         let mut tree = LayoutTree::new();
         let root = tree.space(SpaceId::new(1));
