@@ -2,7 +2,7 @@ pub use std::sync::mpsc::Sender;
 use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
-use tracing::{debug, info, Span};
+use tracing::{debug, info, instrument, trace, Span};
 
 use crate::{
     animation::Animation,
@@ -131,7 +131,7 @@ impl Reactor {
     }
 
     fn handle_event(&mut self, event: Event) {
-        info!(?event, "Event");
+        debug!(?event, "Event");
         let main_window_orig = self.main_window();
         let mut animation_focus_wid = None;
         let mut is_resize = false;
@@ -266,6 +266,7 @@ impl Reactor {
                 println!("Hello, world!");
             }
             Event::Command(Command::Layout(cmd)) => {
+                info!(?cmd);
                 let response = self.layout.handle_command(self.space.unwrap(), cmd);
                 self.handle_response(response);
             }
@@ -298,19 +299,18 @@ impl Reactor {
             .unwrap();
     }
 
+    #[instrument(skip(self))]
     pub fn update_layout(&mut self, new_wid: Option<WindowId>, is_resize: bool) {
         let Some(main_screen) = self.main_screen else { return };
         if Some(main_screen.space) != self.space {
             return;
         };
 
-        debug!(?main_screen);
+        trace!(?main_screen);
         let main_window = self.main_window();
-        debug!(?main_window);
+        trace!(?main_window);
         let layout = self.layout.calculate(self.space.unwrap(), main_screen.frame.clone());
-        debug!(?layout, "Layout");
-
-        info!(?layout, "New layout");
+        trace!(?layout, "Layout");
 
         let mut anim = Animation::new();
         for &(wid, target_frame) in &layout {
@@ -320,7 +320,7 @@ impl Reactor {
             if target_frame.same_as(current_frame) {
                 continue;
             }
-            debug!(?current_frame, ?target_frame, "Change");
+            info!(?wid, ?current_frame, ?target_frame);
             let handle = &self.apps.get(&wid.pid).unwrap().handle;
             let is_new = Some(wid) == new_wid;
             let txid = window.next_txid();
