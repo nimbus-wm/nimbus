@@ -18,6 +18,8 @@ pub enum LayoutCommand {
     NextWindow,
     PrevWindow,
     MoveFocus(Direction),
+    Ascend,
+    Descend,
     MoveNode(Direction),
     Split(Orientation),
     Group(Orientation),
@@ -120,6 +122,14 @@ impl LayoutManager {
                     return EventResponse::default();
                 };
                 EventResponse { raise_window: Some(new) }
+            }
+            LayoutCommand::Ascend => {
+                self.tree.ascend_selection(root);
+                EventResponse::default()
+            }
+            LayoutCommand::Descend => {
+                self.tree.descend_selection(root);
+                EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
                 if let Some(selection) = self.tree.selection(root) {

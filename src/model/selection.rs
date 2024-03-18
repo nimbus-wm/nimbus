@@ -25,6 +25,10 @@ impl Selection {
         node
     }
 
+    pub(super) fn last_selection(&self, _map: &NodeMap, node: NodeId) -> Option<NodeId> {
+        self.nodes.get(node).map(|info| info.selected_child)
+    }
+
     pub(super) fn local_selection(&self, map: &NodeMap, node: NodeId) -> Option<NodeId> {
         let result = self.nodes.get(node);
         if let Some(result) = result {

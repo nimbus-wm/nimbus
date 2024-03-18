@@ -54,6 +54,8 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     let mgr = HotkeyManager::new(events_tx);
     mgr.register(ALT, KeyW, Command::Hello);
     //mgr.register(ALT, KeyS, Command::Layout(Shuffle));
+    mgr.register(ALT, KeyA, Command::Layout(Ascend));
+    mgr.register(ALT, KeyD, Command::Layout(Descend));
     mgr.register(ALT, KeyH, Command::Layout(MoveFocus(Left)));
     mgr.register(ALT, KeyJ, Command::Layout(MoveFocus(Down)));
     mgr.register(ALT, KeyK, Command::Layout(MoveFocus(Up)));
@@ -72,7 +74,7 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     mgr.register(ALT, KeyT, Command::Layout(Group(Orientation::Horizontal)));
     mgr.register(ALT, KeyE, Command::Layout(Ungroup));
     mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
-    mgr.register(ALT, KeyD, Command::Layout(Debug));
+    mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));
     mgr
 }
 

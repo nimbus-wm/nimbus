@@ -125,6 +125,25 @@ impl LayoutTree {
         Some(self.tree.data.selection.current_selection(root))
     }
 
+    pub fn ascend_selection(&mut self, root: NodeId) -> bool {
+        if let Some(parent) = self.selection(root).and_then(|n| n.parent(self.map())) {
+            self.select(parent);
+            return true;
+        }
+        false
+    }
+
+    pub fn descend_selection(&mut self, root: NodeId) -> bool {
+        if let Some(child) = self
+            .selection(root)
+            .and_then(|n| self.tree.data.selection.last_selection(self.map(), n))
+        {
+            self.select(child);
+            return true;
+        }
+        false
+    }
+
     pub fn space(&mut self, space: SpaceId) -> NodeId {
         self.space_roots
             .entry(space)
