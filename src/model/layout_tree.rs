@@ -418,8 +418,11 @@ impl LayoutTree {
         };
         let desc = format!("{status}{node:?}",);
         let desc = match self.windows.get(node) {
-            Some(wid) => format!("{desc} {wid:?}"),
-            None => format!("{desc} {:?}", self.tree.data.layout.debug(node)),
+            Some(wid) => format!(
+                "{desc} {wid:?} {}",
+                self.tree.data.layout.debug(node, false)
+            ),
+            None => format!("{desc} {}", self.tree.data.layout.debug(node, true)),
         };
         let children: Vec<_> =
             node.children(&self.tree.map).map(|c| self.get_ascii_tree(c)).collect();

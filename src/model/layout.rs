@@ -180,8 +180,13 @@ impl Layout {
         self.info[node].size += share;
     }
 
-    pub(super) fn debug(&self, node: NodeId) -> impl Debug + '_ {
-        &self.info[node].kind
+    pub(super) fn debug(&self, node: NodeId, is_container: bool) -> String {
+        let info = &self.info[node];
+        if is_container {
+            format!("{:?} [size {} total={}]", info.kind, info.size, info.total)
+        } else {
+            format!("[size {}]", info.size)
+        }
     }
 
     pub(super) fn get_sizes(
