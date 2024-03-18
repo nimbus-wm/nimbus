@@ -34,7 +34,7 @@ use tracing::{debug, error, instrument, trace, Span};
 
 use crate::{
     app::observer::Observer,
-    reactor::{AppState, Event, TransactionId},
+    reactor::{AppState, Event, Requested, TransactionId},
     run_loop::WakeupHandle,
     util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
@@ -265,6 +265,13 @@ impl State {
                 trace("set_position", &window.elem, || {
                     window.elem.set_position(pos.to_cgtype())
                 })?;
+                let frame = trace("frame", &window.elem, || window.elem.frame())?;
+                self.send_event(Event::WindowFrameChanged(
+                    wid,
+                    frame.to_icrate(),
+                    txid,
+                    Requested(true),
+                ));
             }
             Request::SetWindowFrame(wid, frame, txid) => {
                 let window = self.window_mut(wid)?;
@@ -275,6 +282,13 @@ impl State {
                 trace("set_size", &window.elem, || {
                     window.elem.set_size(frame.size.to_cgtype())
                 })?;
+                let frame = trace("frame", &window.elem, || window.elem.frame())?;
+                self.send_event(Event::WindowFrameChanged(
+                    wid,
+                    frame.to_icrate(),
+                    txid,
+                    Requested(true),
+                ));
             }
             Request::BeginWindowAnimation(wid) => {
                 let window = self.window(wid)?;
@@ -288,6 +302,7 @@ impl State {
                     wid,
                     frame.to_icrate(),
                     last_seen_txid,
+                    Requested(true),
                 ));
             }
             Request::Raise(wid, token) => {
@@ -384,7 +399,12 @@ impl State {
                 let Ok(frame) = elem.frame() else {
                     return;
                 };
-                self.send_event(Event::WindowFrameChanged(wid, frame.to_icrate(), last_seen));
+                self.send_event(Event::WindowFrameChanged(
+                    wid,
+                    frame.to_icrate(),
+                    last_seen,
+                    Requested(false),
+                ));
             }
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}

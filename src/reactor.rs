@@ -24,11 +24,14 @@ pub enum Event {
     ApplicationMainWindowChanged(pid_t, Option<WindowId>),
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
-    WindowFrameChanged(WindowId, CGRect, TransactionId),
+    WindowFrameChanged(WindowId, CGRect, TransactionId, Requested),
     ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
     SpaceChanged(Vec<SpaceId>),
     Command(Command),
 }
+
+#[derive(Debug)]
+pub struct Requested(pub bool);
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -220,7 +223,7 @@ impl Reactor {
                 self.windows.remove(&wid).unwrap();
                 //animation_focus_wid = self.window_order.last().cloned();
             }
-            Event::WindowFrameChanged(wid, new_frame, last_seen) => {
+            Event::WindowFrameChanged(wid, new_frame, last_seen, requested) => {
                 let window = self.windows.get_mut(&wid).unwrap();
                 if last_seen != window.last_sent_txid {
                     // Ignore events that happened before the last time we
@@ -229,10 +232,16 @@ impl Reactor {
                     debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
                     return;
                 }
-                if window.frame_monotonic == new_frame {
+                if requested.0 {
+                    // TODO: If the size is different from requested, applying a
+                    // correction to the model can result in weird feedback
+                    // loops, so we ignore these for now.
                     return;
                 }
                 let old_frame = mem::replace(&mut window.frame_monotonic, new_frame);
+                if old_frame == new_frame {
+                    return;
+                }
                 let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
@@ -474,7 +483,7 @@ mod tests {
                     let old_frame = window.frame;
                     window.frame = frame;
                     if !window.animating && !old_frame.same_as(frame) {
-                        events.push(Event::WindowFrameChanged(wid, frame, txid));
+                        events.push(Event::WindowFrameChanged(wid, frame, txid, Requested(true)));
                     }
                 }
                 Request::SetWindowPos(wid, pos, txid) => {
@@ -483,7 +492,12 @@ mod tests {
                     let old_frame = window.frame;
                     window.frame.origin = pos;
                     if !window.animating && !old_frame.same_as(window.frame) {
-                        events.push(Event::WindowFrameChanged(wid, window.frame, txid));
+                        events.push(Event::WindowFrameChanged(
+                            wid,
+                            window.frame,
+                            txid,
+                            Requested(true),
+                        ));
                     }
                 }
                 Request::BeginWindowAnimation(wid) => {
@@ -496,6 +510,7 @@ mod tests {
                         wid,
                         window.frame,
                         window.last_seen_txid,
+                        Requested(true),
                     ));
                 }
                 Request::Raise(_, _) => todo!(),
@@ -593,6 +608,7 @@ mod tests {
                 old_frame.size,
             ),
             state_1[&wid].last_seen_txid,
+            Requested(false),
         ));
 
         let requests = apps.requests();
@@ -632,6 +648,7 @@ mod tests {
             resizing,
             frame,
             window.last_seen_txid,
+            Requested(false),
         ));
 
         // Expect the next window to be resized.

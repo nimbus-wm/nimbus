@@ -1,6 +1,7 @@
 use std::{collections::HashMap, iter, mem};
 
 use icrate::Foundation::CGRect;
+use tracing::warn;
 
 use super::{
     layout::{Direction, Layout, LayoutKind},
@@ -374,8 +375,7 @@ impl LayoutTree {
 
     /// Call this during a user resize to have the model respond appropriately.
     ///
-    /// Only two edges are allowed to change at a time; otherwise, this function
-    /// will panic.
+    /// Only two edges are allowed to change at a time.
     pub fn set_frame_from_resize(
         &mut self,
         node: NodeId,
@@ -411,7 +411,7 @@ impl LayoutTree {
             screen.size.height,
         );
         if count > 2 {
-            panic!(
+            warn!(
                 "Only resizing in 2 directions is supported, but was asked \
                 to resize from {old_frame:?} to {new_frame:?}"
             );
