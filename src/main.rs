@@ -37,9 +37,23 @@ fn main() {
         )
         .init();
     install_panic_hook();
+
     let events_tx = reactor::Reactor::spawn();
-    let _mgr = register_hotkeys(events_tx.clone());
-    notification_center::watch_for_notifications(events_tx)
+    let mut active_space = None;
+    let mut _manager = None;
+    notification_center::watch_for_notifications(
+        events_tx.clone(),
+        Box::new(move |space| {
+            if active_space.is_none() {
+                active_space = Some(space);
+            }
+            if Some(space) == active_space {
+                _manager = Some(register_hotkeys(events_tx.clone()));
+            } else {
+                _manager = None;
+            }
+        }),
+    )
 }
 
 fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {

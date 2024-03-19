@@ -15,15 +15,19 @@ use tracing::{info_span, trace, warn, Span};
 use crate::{
     app::{self, AppInfo},
     reactor::Event,
-    screen::ScreenCache,
+    screen::{ScreenCache, SpaceId},
     util::NSRunningApplicationExt,
 };
 
-pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
+pub fn watch_for_notifications(
+    events_tx: Sender<(Span, Event)>,
+    space_cb: Box<dyn FnMut(SpaceId)>,
+) {
     #[repr(C)]
     struct Instance {
         events_tx: &'static mut Sender<(Span, Event)>,
         screen_cache: RefCell<ScreenCache>,
+        space_cb: RefCell<Box<dyn FnMut(SpaceId)>>,
     }
 
     unsafe impl Encode for Instance {
@@ -70,11 +74,12 @@ pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
     }
 
     impl NotificationHandler {
-        fn new(events_tx: Sender<(Span, Event)>) -> Id<Self> {
+        fn new(events_tx: Sender<(Span, Event)>, space_cb: Box<dyn FnMut(SpaceId)>) -> Id<Self> {
             let events_tx = Box::leak(Box::new(events_tx));
             let instance = Instance {
                 events_tx,
                 screen_cache: RefCell::new(ScreenCache::new(MainThreadMarker::new().unwrap())),
+                space_cb: RefCell::new(space_cb),
             };
             unsafe { msg_send_id![Self::alloc(), initWith: instance] }
         }
@@ -102,6 +107,7 @@ pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
 
         fn send_current_space(&self) {
             let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
+            (self.ivars().space_cb.borrow_mut())(spaces[0]);
             self.send_event(Event::SpaceChanged(spaces));
         }
 
@@ -156,7 +162,7 @@ pub fn watch_for_notifications(events_tx: Sender<(Span, Event)>) {
         }
     }
 
-    let handler = NotificationHandler::new(events_tx.clone());
+    let handler = NotificationHandler::new(events_tx.clone(), space_cb);
 
     // SAFETY: Selector must have signature fn(&self, &NSNotification)
     let register_unsafe = |selector, notif_name, center: &Id<NSNotificationCenter>, object| unsafe {
