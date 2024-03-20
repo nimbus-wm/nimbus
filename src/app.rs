@@ -27,10 +27,11 @@ use accessibility_sys::{
 };
 use core_foundation::runloop::CFRunLoop;
 use icrate::{
-    AppKit::{NSRunningApplication, NSWorkspace},
+    objc2::{class, msg_send_id, rc::Id},
+    AppKit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace},
     Foundation::{CGPoint, CGRect},
 };
-use tracing::{debug, error, instrument, trace, Span};
+use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::{
     app::observer::Observer,
@@ -176,6 +177,7 @@ struct State {
     events_tx: Sender<(Span, Event)>,
     requests_rx: Receiver<(Span, Request)>,
     pid: pid_t,
+    running_app: Id<NSRunningApplication>,
     bundle_id: Option<String>,
     last_window_idx: i32,
     observer: Observer,
@@ -315,12 +317,28 @@ impl State {
                 // holding a lock that ensures no other apps are executing a
                 // raise request at the same time.
                 //
+                // FIXME: Unfonrtunately this is still very racy in that we now
+                // use the unsynchronized NSRunningApplication API to raise the
+                // application, which still relies on the application itself to
+                // see and respond to a request, and there is no apparent
+                // ordering between this and the accessibility messaging. The
+                // only way to know whether a raise request was processed is
+                // to wait for an event telling us the app has been activated.
+                // This might benefit from using async/await.
+                //
+                // The below comments are for the old way which used the
+                // accessibility API. This solved the ordering problem, but has
+                // the unfortunate issue that it raises *all* windows of the
+                // application, not just the main window.
+                //
+                // ---
+                //
                 // The only way this can fail to provide eventual consistency is
                 // if we time out on the set_frontmost request but the app
                 // processes it later. For now we set a fairly long timeout to
-                // mitigate this (but not too long, to avoid blocking all raise
-                // requests on an unresponsive app). It's unlikely that an app
-                // will be unresponsive for so long after responding to the
+                // mitigate this (500ms – not too long, to avoid blocking all
+                // raise requests on an unresponsive app). It's unlikely that an
+                // app will be unresponsive for so long after responding to the
                 // raise request.
                 //
                 // In the future, we could do better by asking the app if it was
@@ -331,13 +349,18 @@ impl State {
                 // account user-initiated activations.
                 token
                     .with(self.pid, || {
-                        trace("set_timeout", &self.app, || {
-                            self.app.set_messaging_timeout(0.5)
-                        })?;
-                        trace("set_frontmost", &self.app, || self.app.set_frontmost(true))?;
-                        trace("set_timeout", &self.app, || {
-                            self.app.set_messaging_timeout(0.0)
-                        })?;
+                        // This option is deprecated, but there is no alternative.
+                        #[allow(non_upper_case_globals)]
+                        const NSApplicationActivateIgnoringOtherApps:
+                            NSApplicationActivationOptions = 1 << 1;
+                        let success = unsafe {
+                            // This should be marked as safe.
+                            self.running_app
+                                .activateWithOptions(NSApplicationActivateIgnoringOtherApps)
+                        };
+                        if !success {
+                            warn!(?self.pid, "Failed to activate app");
+                        }
                         Ok(())
                     })
                     .unwrap_or(Ok(()))?;
@@ -499,6 +522,10 @@ impl State {
 
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
     let app = AXUIElement::application(pid);
+    let running_app: Id<NSRunningApplication> = unsafe {
+        // For some reason this binding isn't generated in icrate.
+        msg_send_id![class!(NSRunningApplication), runningApplicationWithProcessIdentifier:pid]
+    };
     let (requests_tx, requests_rx) = channel();
     let Ok(observer) = Observer::new(pid) else {
         debug!(?pid, "Making observer failed; exiting app thread");
@@ -520,6 +547,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
             events_tx,
             requests_rx,
             pid,
+            running_app,
             bundle_id: info.bundle_id.clone(),
             last_window_idx: 0,
             observer,
