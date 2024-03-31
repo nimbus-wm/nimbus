@@ -18,7 +18,7 @@ use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
 pub use accessibility_sys::pid_t;
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
-    kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
+    kAXMainWindowChangedNotification, kAXTitleChangedNotification,
     kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
@@ -26,17 +26,22 @@ use accessibility_sys::{
 use core_foundation::runloop::CFRunLoop;
 use icrate::{
     objc2::{class, msg_send_id, rc::Id},
-    AppKit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace},
+    AppKit::{NSApplicationActivationOptions, NSRunningApplication},
     Foundation::{CGPoint, CGRect},
 };
 use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::{
     reactor::{AppState, Event, Requested, TransactionId},
-    sys::observer::Observer,
-    sys::run_loop::WakeupHandle,
-    sys::util::{NSRunningApplicationExt, ToCGType, ToICrate},
+    sys::{
+        app::running_apps,
+        observer::Observer,
+        run_loop::WakeupHandle,
+        util::{ToCGType, ToICrate},
+    },
 };
+
+pub use crate::sys::app::{AppInfo, WindowInfo};
 
 /// An identifier representing a window.
 ///
@@ -56,34 +61,6 @@ impl WindowId {
             idx: NonZeroI32::new(idx).unwrap(),
         }
     }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct AppInfo {
-    pub bundle_id: Option<String>,
-    pub localized_name: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct WindowInfo {
-    pub is_standard: bool,
-    pub title: String,
-    pub frame: CGRect,
-}
-
-pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
-    unsafe { NSWorkspace::sharedWorkspace().runningApplications() }
-        .into_iter()
-        .flat_map(move |app| {
-            let bundle_id = app.bundle_id()?.to_string();
-            if let Some(filter) = &bundle {
-                if !bundle_id.contains(filter) {
-                    return None;
-                }
-            }
-            Some((app.pid(), AppInfo::from(&*app)))
-        })
 }
 
 pub struct AppThreadHandle {
@@ -579,27 +556,6 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
                     error!(?state.bundle_id, ?state.pid, ?request, "Error handling request: {err}");
                 }
             }
-        }
-    }
-}
-
-impl TryFrom<&AXUIElement> for WindowInfo {
-    type Error = accessibility::Error;
-    fn try_from(element: &AXUIElement) -> Result<Self, accessibility::Error> {
-        Ok(WindowInfo {
-            is_standard: element.role()? == kAXWindowRole
-                && element.subrole()? == kAXStandardWindowSubrole,
-            title: element.title()?.to_string(),
-            frame: element.frame()?.to_icrate(),
-        })
-    }
-}
-
-impl From<&NSRunningApplication> for AppInfo {
-    fn from(app: &NSRunningApplication) -> Self {
-        AppInfo {
-            bundle_id: app.bundle_id().as_deref().map(ToString::to_string),
-            localized_name: app.localized_name().as_deref().map(ToString::to_string),
         }
     }
 }

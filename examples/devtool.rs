@@ -11,7 +11,7 @@ use core_graphics::{
 use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
 use structopt::StructOpt;
 use nimbus::{
-    app,
+    sys::app,
     sys::screen::{self, ScreenCache},
 };
 use tokio::sync::mpsc;
