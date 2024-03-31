@@ -9,7 +9,7 @@ use super::{
     tree::{self, Tree},
 };
 use crate::{
-    app::WindowId,
+    actor::app::WindowId,
     model::tree::{NodeId, NodeMap, OwnedNode},
     sys::screen::SpaceId,
 };

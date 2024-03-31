@@ -1,16 +1,12 @@
-mod animation;
-mod app;
-mod layout;
+mod actor;
 mod metrics;
 mod model;
-mod notification_center;
-mod reactor;
 mod sys;
 
-use layout::LayoutCommand;
+use actor::layout::LayoutCommand;
+use actor::reactor::{Command, Event, Reactor, Sender};
 use metrics::MetricsCommand;
 use model::Direction;
-use reactor::{Command, Event, Sender};
 use sys::hotkey::{HotkeyManager, KeyCode, Modifiers};
 
 use tracing::Span;
@@ -35,10 +31,10 @@ fn main() {
         .init();
     install_panic_hook();
 
-    let events_tx = reactor::Reactor::spawn();
+    let events_tx = Reactor::spawn();
     let mut active_space = None;
     let mut _manager = None;
-    notification_center::watch_for_notifications(
+    actor::notification_center::watch_for_notifications(
         events_tx.clone(),
         Box::new(move |space| {
             if active_space.is_none() {

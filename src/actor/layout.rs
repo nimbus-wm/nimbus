@@ -2,7 +2,7 @@ use icrate::Foundation::CGRect;
 use tracing::debug;
 
 use crate::{
-    app::WindowId,
+    actor::app::WindowId,
     model::{Direction, LayoutKind, LayoutTree, Orientation},
     sys::screen::SpaceId,
 };

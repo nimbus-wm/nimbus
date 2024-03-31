@@ -1,3 +1,8 @@
+//! The app actor manages messaging to an application using the system
+//! accessibility APIs.
+//!
+//! These APIs support reading and writing window states like position and size.
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -15,7 +20,6 @@ use std::{
 };
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
-pub use accessibility_sys::pid_t;
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification, kAXTitleChangedNotification,
@@ -32,7 +36,7 @@ use icrate::{
 use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::{
-    reactor::{AppState, Event, Requested, TransactionId},
+    actor::reactor::{AppState, Event, Requested, TransactionId},
     sys::{
         app::running_apps,
         geometry::{ToCGType, ToICrate},
@@ -41,7 +45,7 @@ use crate::{
     },
 };
 
-pub use crate::sys::app::{AppInfo, WindowInfo};
+pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 
 /// An identifier representing a window.
 ///

@@ -91,7 +91,7 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use crate::{
-        app::WindowId,
+        actor::app::WindowId,
         model::{layout::LayoutKind, layout_tree::LayoutTree, Direction},
         sys::screen::SpaceId,
     };

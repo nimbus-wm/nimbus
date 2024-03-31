@@ -1,3 +1,6 @@
+//! This actor manages the global notification queue, which tells us when an
+//! application is launched or focused or the screen state changes.
+
 use std::{cell::RefCell, mem, sync::mpsc::Sender};
 
 use core_foundation::runloop::CFRunLoop;
@@ -13,8 +16,8 @@ use icrate::{
 use tracing::{info_span, trace, warn, Span};
 
 use crate::{
-    app::{self, AppInfo},
-    reactor::Event,
+    actor::app::{self, AppInfo},
+    actor::reactor::Event,
     sys::app::NSRunningApplicationExt,
     sys::screen::{ScreenCache, SpaceId},
 };

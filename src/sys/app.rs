@@ -7,7 +7,8 @@ use icrate::{
 };
 
 use super::geometry::ToICrate;
-use crate::app::pid_t;
+
+pub use accessibility_sys::pid_t;
 
 pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
     unsafe { NSWorkspace::sharedWorkspace().runningApplications() }

@@ -7,7 +7,7 @@ use super::{
     layout_tree::{TreeEvent, Windows},
     tree::{NodeId, NodeMap},
 };
-use crate::{app::WindowId, sys::geometry::Round};
+use crate::{actor::app::WindowId, sys::geometry::Round};
 
 #[derive(Default)]
 pub struct Layout {

@@ -2,7 +2,7 @@ use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 use tracing::{info_span, Span};
 
-use crate::reactor::{Command, Event, Sender};
+use crate::actor::reactor::{Command, Event, Sender};
 
 pub struct HotkeyManager {
     hook: Hook,

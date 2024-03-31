@@ -5,10 +5,8 @@ use std::{
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
-use crate::{
-    app::{AppThreadHandle, Request, WindowId},
-    reactor::TransactionId,
-};
+use super::TransactionId;
+use crate::actor::app::{AppThreadHandle, Request, WindowId};
 
 #[derive(Debug)]
 pub struct Animation<'a> {

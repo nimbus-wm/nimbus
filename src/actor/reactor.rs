@@ -1,3 +1,11 @@
+//! The Reactor's job is to maintain coherence between the system and model state.
+//!
+//! It takes events from the rest of the system and builds a coherent picture of
+//! what is going on. It shares this with the layout actor, and reacts to layout
+//! changes by sending requests out to the other actors in the system.
+
+mod animation;
+
 pub use std::sync::mpsc::Sender;
 use std::{collections::HashMap, mem, sync, thread};
 
@@ -5,13 +13,13 @@ use icrate::Foundation::CGRect;
 use tracing::{debug, info, instrument, trace, Span};
 
 use crate::{
-    animation::Animation,
-    app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
-    layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
+    actor::app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
+    actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     metrics::{self, MetricsCommand},
     sys::geometry::{Round, SameAs},
     sys::screen::SpaceId,
 };
+use animation::Animation;
 
 #[derive(Debug)]
 pub enum Event {
@@ -359,7 +367,7 @@ mod tests {
     use icrate::Foundation::{CGPoint, CGSize};
 
     use super::*;
-    use crate::app::Request;
+    use crate::actor::app::Request;
 
     struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
     impl Apps {
