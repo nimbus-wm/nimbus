@@ -15,7 +15,7 @@ use icrate::{
 };
 use tracing::{debug, warn};
 
-use crate::util::ToICrate;
+use crate::sys::util::ToICrate;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]

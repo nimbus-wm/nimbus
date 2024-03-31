@@ -1,5 +1,3 @@
-mod observer;
-
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -34,10 +32,10 @@ use icrate::{
 use tracing::{debug, error, instrument, trace, warn, Span};
 
 use crate::{
-    app::observer::Observer,
     reactor::{AppState, Event, Requested, TransactionId},
-    run_loop::WakeupHandle,
-    util::{NSRunningApplicationExt, ToCGType, ToICrate},
+    sys::observer::Observer,
+    sys::run_loop::WakeupHandle,
+    sys::util::{NSRunningApplicationExt, ToCGType, ToICrate},
 };
 
 /// An identifier representing a window.

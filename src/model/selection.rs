@@ -93,7 +93,7 @@ mod tests {
     use crate::{
         app::WindowId,
         model::{layout::LayoutKind, layout_tree::LayoutTree, Direction},
-        screen::SpaceId,
+        sys::screen::SpaceId,
     };
 
     #[test]

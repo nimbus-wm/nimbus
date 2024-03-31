@@ -1,20 +1,17 @@
 mod animation;
 mod app;
-mod hotkey;
 mod layout;
 mod metrics;
 mod model;
 mod notification_center;
 mod reactor;
-mod run_loop;
-mod screen;
-mod util;
+mod sys;
 
-use hotkey::{HotkeyManager, KeyCode, Modifiers};
 use layout::LayoutCommand;
 use metrics::MetricsCommand;
 use model::Direction;
 use reactor::{Command, Event, Sender};
+use sys::hotkey::{HotkeyManager, KeyCode, Modifiers};
 
 use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

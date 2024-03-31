@@ -12,7 +12,7 @@ use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
 use structopt::StructOpt;
 use nimbus::{
     app,
-    screen::{self, ScreenCache},
+    sys::screen::{self, ScreenCache},
 };
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

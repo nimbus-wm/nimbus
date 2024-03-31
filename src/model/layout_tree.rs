@@ -11,7 +11,7 @@ use super::{
 use crate::{
     app::WindowId,
     model::tree::{NodeId, NodeMap, OwnedNode},
-    screen::SpaceId,
+    sys::screen::SpaceId,
 };
 
 /// The layout tree.
@@ -507,7 +507,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::LayoutTree, screen::SpaceId};
+    use crate::{model::LayoutTree, sys::screen::SpaceId};
 
     #[test]
     fn traverse() {

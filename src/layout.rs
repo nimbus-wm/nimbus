@@ -4,7 +4,7 @@ use tracing::debug;
 use crate::{
     app::WindowId,
     model::{Direction, LayoutKind, LayoutTree, Orientation},
-    screen::SpaceId,
+    sys::screen::SpaceId,
 };
 
 pub struct LayoutManager {

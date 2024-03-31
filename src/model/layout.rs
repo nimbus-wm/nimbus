@@ -7,7 +7,7 @@ use super::{
     layout_tree::{TreeEvent, Windows},
     tree::{NodeId, NodeMap},
 };
-use crate::{app::WindowId, util::Round};
+use crate::{app::WindowId, sys::util::Round};
 
 #[derive(Default)]
 pub struct Layout {
@@ -268,7 +268,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::LayoutTree, screen::SpaceId};
+    use crate::{model::LayoutTree, sys::screen::SpaceId};
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
         CGRect::new(

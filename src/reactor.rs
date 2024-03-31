@@ -9,8 +9,8 @@ use crate::{
     app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
     layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     metrics::{self, MetricsCommand},
-    screen::SpaceId,
-    util::{Round, SameAs},
+    sys::screen::SpaceId,
+    sys::util::{Round, SameAs},
 };
 
 #[derive(Debug)]

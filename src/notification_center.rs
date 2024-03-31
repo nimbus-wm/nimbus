@@ -15,8 +15,8 @@ use tracing::{info_span, trace, warn, Span};
 use crate::{
     app::{self, AppInfo},
     reactor::Event,
-    screen::{ScreenCache, SpaceId},
-    util::NSRunningApplicationExt,
+    sys::screen::{ScreenCache, SpaceId},
+    sys::util::NSRunningApplicationExt,
 };
 
 pub fn watch_for_notifications(
