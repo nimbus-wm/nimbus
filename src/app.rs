@@ -35,9 +35,9 @@ use crate::{
     reactor::{AppState, Event, Requested, TransactionId},
     sys::{
         app::running_apps,
+        geometry::{ToCGType, ToICrate},
         observer::Observer,
         run_loop::WakeupHandle,
-        util::{ToCGType, ToICrate},
     },
 };
 

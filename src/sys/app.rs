@@ -6,7 +6,7 @@ use icrate::{
     Foundation::{CGRect, NSString},
 };
 
-use super::util::ToICrate;
+use super::geometry::ToICrate;
 use crate::app::pid_t;
 
 pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
