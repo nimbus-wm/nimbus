@@ -6,3 +6,4 @@ pub mod hotkey;
 pub mod observer;
 pub mod run_loop;
 pub mod screen;
+pub mod window_server;

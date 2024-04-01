@@ -367,7 +367,7 @@ mod tests {
     use icrate::Foundation::{CGPoint, CGSize};
 
     use super::*;
-    use crate::actor::app::Request;
+    use crate::{actor::app::Request, sys::window_server::WindowServerId};
 
     struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
     impl Apps {
@@ -417,6 +417,7 @@ mod tests {
                     CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
                     CGSize::new(50.0, 50.0),
                 ),
+                sys_id: WindowServerId::new(0),
             })
             .collect()
     }

@@ -3,24 +3,41 @@
 use std::{future::Future, time::Instant};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef};
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
-    window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
+    window::{
+        kCGNullWindowID, kCGWindowListOptionExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo,
+    },
 };
-use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
+use icrate::{
+    AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications},
+    Foundation::MainThreadMarker,
+};
 use nimbus::{
     sys::app,
     sys::screen::{self, ScreenCache},
+    sys::window_server,
 };
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
-pub struct Opt {
-    pub bundle: Option<String>,
-    pub resize: Option<String>,
+struct Opt {
+    bundle: Option<String>,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Clone)]
+enum Commands {
+    All,
+    Apps,
+    Ax,
+    Cg,
+    Ns,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -29,49 +46,72 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .with(tracing_tree::HierarchicalLayer::default())
         .init();
-    let opt = Parser::parse();
-    //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
-    time("core-graphics", || get_windows_with_cg(&opt, true)).await;
-    time("accessibility", || get_windows_with_ax(&opt, false, true)).await;
-    time("core-graphics second time", || {
-        get_windows_with_cg(&opt, false)
-    })
-    .await;
-    time("accessibility second time", || {
-        get_windows_with_ax(&opt, false, false)
-    })
-    .await;
-    get_apps(&opt);
+    let opt: Opt = Parser::parse();
 
-    println!("Current space: {:?}", screen::diagnostic::cur_space());
-    println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
-    println!("All spaces: {:?}", screen::diagnostic::all_spaces());
-    println!("{:?}", screen::diagnostic::managed_display_spaces());
+    match opt.command {
+        Commands::Ax => time("accessibility", || get_windows_with_ax(&opt, false, true)).await,
+        Commands::Cg => time("core-graphics", || get_windows_with_cg(&opt, true)).await,
+        Commands::Ns => time("ns-window", || get_windows_with_ns(&opt, true)).await,
+        Commands::Apps => get_apps(&opt),
+        Commands::All => {
+            //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
+            time("core-graphics", || get_windows_with_cg(&opt, true)).await;
+            time("ns-window", || get_windows_with_ns(&opt, true)).await;
+            time("accessibility", || get_windows_with_ax(&opt, false, true)).await;
+            time("core-graphics second time", || {
+                get_windows_with_cg(&opt, false)
+            })
+            .await;
+            time("ns-window second time", || get_windows_with_ns(&opt, false)).await;
+            time("accessibility second time", || {
+                get_windows_with_ax(&opt, false, false)
+            })
+            .await;
 
-    dbg!(screen::diagnostic::managed_displays());
-    let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
-    let frames: Vec<_> = screens.iter().map(|screen| screen.visibleFrame()).collect();
-    println!("NSScreen sizes: {frames:?}");
+            println!("Current space: {:?}", screen::diagnostic::cur_space());
+            println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
+            println!("All spaces: {:?}", screen::diagnostic::all_spaces());
+            println!("{:?}", screen::diagnostic::managed_display_spaces());
 
-    println!();
-    let mut sc = ScreenCache::new(MainThreadMarker::new().unwrap());
-    println!("Frames: {:?}", sc.update_screen_config());
-    println!("Spaces: {:?}", sc.get_screen_spaces());
+            dbg!(screen::diagnostic::managed_displays());
+            let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
+            let frames: Vec<_> = screens.iter().map(|screen| screen.visibleFrame()).collect();
+            println!("NSScreen sizes: {frames:?}");
+
+            println!();
+            let mut sc = ScreenCache::new(MainThreadMarker::new().unwrap());
+            println!("Frames: {:?}", sc.update_screen_config());
+            println!("Spaces: {:?}", sc.get_screen_spaces());
+        }
+    }
 }
 
 async fn get_windows_with_cg(_opt: &Opt, print: bool) {
     let windows: CFArray<CFDictionaryRef> = unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly,
+            kCGWindowListOptionOnScreenOnly | kCGWindowListOptionExcludeDesktopElements,
             kCGNullWindowID,
         ))
     };
     if print {
         println!("{windows:?}");
     }
+    println!(
+        "visible window ids = {:?}",
+        window_server::get_visible_windows()
+    );
     let display_id = unsafe { CGMainDisplayID() };
     let screen = unsafe { CGDisplayBounds(display_id) };
     println!("main display = {screen:?}");
+}
+
+async fn get_windows_with_ns(_opt: &Opt, print: bool) {
+    let mtm = MainThreadMarker::new().unwrap();
+    let windows =
+        unsafe { NSWindow::windowNumbersWithOptions(NSWindowNumberListAllApplications, mtm) };
+    if print {
+        println!("{windows:?}");
+    }
 }
 
 async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {

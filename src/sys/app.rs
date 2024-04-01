@@ -7,6 +7,7 @@ use icrate::{
 };
 
 use super::geometry::ToICrate;
+use super::window_server::WindowServerId;
 
 pub use accessibility_sys::pid_t;
 
@@ -22,6 +23,24 @@ pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppI
             }
             Some((app.pid(), AppInfo::from(&*app)))
         })
+}
+
+pub trait NSRunningApplicationExt {
+    fn pid(&self) -> pid_t;
+    fn bundle_id(&self) -> Option<Id<NSString>>;
+    fn localized_name(&self) -> Option<Id<NSString>>;
+}
+
+impl NSRunningApplicationExt for NSRunningApplication {
+    fn pid(&self) -> pid_t {
+        unsafe { msg_send![self, processIdentifier] }
+    }
+    fn bundle_id(&self) -> Option<Id<NSString>> {
+        unsafe { self.bundleIdentifier() }
+    }
+    fn localized_name(&self) -> Option<Id<NSString>> {
+        unsafe { self.localizedName() }
+    }
 }
 
 #[derive(Debug)]
@@ -45,6 +64,7 @@ pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
     pub frame: CGRect,
+    pub sys_id: WindowServerId,
 }
 
 impl TryFrom<&AXUIElement> for WindowInfo {
@@ -55,24 +75,7 @@ impl TryFrom<&AXUIElement> for WindowInfo {
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
             frame: element.frame()?.to_icrate(),
+            sys_id: WindowServerId::try_from(element)?,
         })
-    }
-}
-
-pub trait NSRunningApplicationExt {
-    fn pid(&self) -> pid_t;
-    fn bundle_id(&self) -> Option<Id<NSString>>;
-    fn localized_name(&self) -> Option<Id<NSString>>;
-}
-
-impl NSRunningApplicationExt for NSRunningApplication {
-    fn pid(&self) -> pid_t {
-        unsafe { msg_send![self, processIdentifier] }
-    }
-    fn bundle_id(&self) -> Option<Id<NSString>> {
-        unsafe { self.bundleIdentifier() }
-    }
-    fn localized_name(&self) -> Option<Id<NSString>> {
-        unsafe { self.localizedName() }
     }
 }
