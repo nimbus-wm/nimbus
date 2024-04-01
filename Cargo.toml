@@ -33,8 +33,8 @@ tracing-timing = { version = "0.6.0", features = ["layer"] }
 tracing-tree = { version = "0.3.0", features = ["time"] }
 
 [dev-dependencies]
+clap = { version = "4.5.4", features = ["derive"] }
 pretty_assertions = "1.4.0"
-structopt = "0.3.26"
 tokio = { version = "1.35.1", features = ["rt", "sync", "macros"] }
 
 [patch.crates-io]

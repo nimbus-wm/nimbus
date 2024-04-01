@@ -3,13 +3,13 @@
 use std::{future::Future, time::Instant};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
+use clap::Parser;
 use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef};
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
 };
 use icrate::{AppKit::NSScreen, Foundation::MainThreadMarker};
-use structopt::StructOpt;
 use nimbus::{
     sys::app,
     sys::screen::{self, ScreenCache},
@@ -17,7 +17,7 @@ use nimbus::{
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-#[derive(StructOpt)]
+#[derive(Parser)]
 pub struct Opt {
     pub bundle: Option<String>,
     pub resize: Option<String>,
@@ -29,7 +29,7 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .with(tracing_tree::HierarchicalLayer::default())
         .init();
-    let opt = Opt::from_args();
+    let opt = Parser::parse();
     //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
     time("core-graphics", || get_windows_with_cg(&opt, true)).await;
     time("accessibility", || get_windows_with_ax(&opt, false, true)).await;
