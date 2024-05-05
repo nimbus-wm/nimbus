@@ -5,6 +5,7 @@ mod sys;
 
 use actor::layout::LayoutCommand;
 use actor::reactor::{Command, Event, Reactor, Sender};
+use clap::Parser;
 use metrics::MetricsCommand;
 use model::Direction;
 use sys::hotkey::{HotkeyManager, KeyCode, Modifiers};
@@ -15,7 +16,16 @@ use tracing_tree::time::UtcDateTime;
 
 use crate::model::Orientation;
 
+#[derive(Parser)]
+struct Cli {
+    /// Only run the window manager on the current space.
+    #[arg(long)]
+    one: bool,
+}
+
 fn main() {
+    let opt: Cli = Parser::parse();
+
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
         .with(metrics::timing_layer())
@@ -32,17 +42,17 @@ fn main() {
     install_panic_hook();
 
     let events_tx = Reactor::spawn();
-    let mut active_space = None;
+    let mut starting_space = None;
     let mut _manager = None;
     actor::notification_center::watch_for_notifications(
         events_tx.clone(),
         Box::new(move |space| {
-            if active_space.is_none() {
-                active_space = Some(space);
+            if starting_space.is_none() {
+                starting_space = Some(space);
             }
-            if Some(space) == active_space {
+            if Some(space) == starting_space {
                 _manager = Some(register_hotkeys(events_tx.clone()));
-            } else {
+            } else if opt.one {
                 _manager = None;
             }
         }),

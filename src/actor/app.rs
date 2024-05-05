@@ -97,6 +97,8 @@ impl Debug for AppThreadHandle {
 
 #[derive(Debug, Clone)]
 pub enum Request {
+    GetVisibleWindows,
+
     SetWindowFrame(WindowId, CGRect, TransactionId),
     SetWindowPos(WindowId, CGPoint, TransactionId),
 
@@ -226,10 +228,25 @@ impl State {
             main_window: self.app.main_window().ok().and_then(|w| self.id(&w).ok()),
             is_frontmost: self.app.frontmost().map(|b| b.into()).unwrap_or(false),
         };
-        let Ok(()) = self.events_tx.send((
-            Span::current(),
-            Event::ApplicationLaunched(self.pid, app_state, windows),
-        )) else {
+        if self
+            .events_tx
+            .send((
+                Span::current(),
+                Event::ApplicationLaunched(self.pid, app_state),
+            ))
+            .is_err()
+            || self
+                .events_tx
+                .send((
+                    Span::current(),
+                    Event::WindowsDiscovered {
+                        pid: self.pid,
+                        new: windows,
+                        known_visible: vec![],
+                    },
+                ))
+                .is_err()
+        {
             debug!(pid = ?self.pid, "Failed to send ApplicationLaunched event, exiting thread");
             return false;
         };
@@ -240,6 +257,31 @@ impl State {
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
     fn handle_request(&mut self, request: Request) -> Result<(), accessibility::Error> {
         match request {
+            Request::GetVisibleWindows => {
+                let window_elems = self.app.windows()?;
+                let mut new = Vec::with_capacity(window_elems.len() as usize);
+                let mut known_visible = Vec::with_capacity(window_elems.len() as usize);
+                for elem in window_elems.iter() {
+                    let elem = elem.clone();
+                    // FIXME: This check is quadratic.
+                    if let Ok(id) = self.id(&elem) {
+                        known_visible.push(id);
+                        continue;
+                    }
+                    let Ok(info) = WindowInfo::try_from(&elem) else {
+                        continue;
+                    };
+                    let Some(wid) = self.register_window(elem) else {
+                        continue;
+                    };
+                    new.push((wid, info));
+                }
+                self.send_event(Event::WindowsDiscovered {
+                    pid: self.pid,
+                    new,
+                    known_visible,
+                });
+            }
             Request::SetWindowPos(wid, pos, txid) => {
                 let window = self.window_mut(wid)?;
                 window.last_seen_txid = txid;

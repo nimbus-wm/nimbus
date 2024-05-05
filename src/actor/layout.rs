@@ -2,7 +2,7 @@ use icrate::Foundation::CGRect;
 use tracing::debug;
 
 use crate::{
-    actor::app::WindowId,
+    actor::app::{pid_t, WindowId},
     model::{Direction, LayoutKind, LayoutTree, Orientation},
     sys::screen::SpaceId,
 };
@@ -62,6 +62,10 @@ impl LayoutManager {
 
     pub fn retain_windows(&mut self, f: impl FnMut(&WindowId) -> bool) {
         self.tree.retain_windows(f)
+    }
+
+    pub fn set_windows_for_app(&mut self, space: SpaceId, app: pid_t, wids: Vec<WindowId>) {
+        self.tree.set_windows_for_app(space, app, wids);
     }
 
     #[allow(dead_code)]

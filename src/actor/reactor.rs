@@ -10,7 +10,7 @@ pub use std::sync::mpsc::Sender;
 use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
-use tracing::{debug, info, instrument, trace, Span};
+use tracing::{debug, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
@@ -23,13 +23,18 @@ use animation::Animation;
 
 #[derive(Debug)]
 pub enum Event {
-    ApplicationLaunched(pid_t, AppState, Vec<(WindowId, WindowInfo)>),
+    ApplicationLaunched(pid_t, AppState),
     ApplicationTerminated(pid_t),
     ApplicationActivated(pid_t, Option<WindowId>),
     ApplicationGloballyActivated(pid_t),
     ApplicationGloballyDeactivated(pid_t),
     ApplicationDeactivated(pid_t),
     ApplicationMainWindowChanged(pid_t, Option<WindowId>),
+    WindowsDiscovered {
+        pid: pid_t,
+        new: Vec<(WindowId, WindowInfo)>,
+        known_visible: Vec<WindowId>,
+    },
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
     WindowFrameChanged(WindowId, CGRect, TransactionId, Requested),
@@ -53,6 +58,7 @@ pub struct Reactor {
     layout: LayoutManager,
     windows: HashMap<WindowId, WindowState>,
     main_screen: Option<Screen>,
+    // TODO: Remove this to support multiple spaces.
     space: Option<SpaceId>,
     frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
@@ -88,6 +94,7 @@ pub struct WindowState {
     /// This value only updates monotonically with respect to writes; in other
     /// words, we only accept reads when we know they come after the last write.
     frame_monotonic: CGRect,
+    is_standard: bool,
     last_sent_txid: TransactionId,
 }
 
@@ -104,6 +111,7 @@ impl From<WindowInfo> for WindowState {
         WindowState {
             title: info.title,
             frame_monotonic: info.frame,
+            is_standard: info.is_standard,
             last_sent_txid: TransactionId::default(),
         }
     }
@@ -147,14 +155,9 @@ impl Reactor {
         let mut animation_focus_wid = None;
         let mut is_resize = false;
         match event {
-            Event::ApplicationLaunched(pid, state, windows) => {
+            Event::ApplicationLaunched(pid, state) => {
                 let is_frontmost = state.is_frontmost;
                 self.apps.insert(pid, state);
-                self.layout.add_windows(
-                    self.space.unwrap(),
-                    windows.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
-                );
-                self.windows.extend(windows.into_iter().map(|(wid, info)| (wid, info.into())));
                 // See comment for ApplicationActivated below.
                 if is_frontmost && self.global_frontmost_app_pid == Some(pid) {
                     self.frontmost_app = Some(pid);
@@ -250,34 +253,59 @@ impl Reactor {
                 if old_frame == new_frame {
                     return;
                 }
-                let Some(space) = self.space else { return };
                 let Some(screen) = self.main_screen else { return };
+                // This event is ignored if the window is not in the layout.
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
-                    space,
+                    space: screen.space,
+                    screen: screen.frame,
                     wid,
                     old_frame,
                     new_frame,
-                    screen: screen.frame,
                 });
                 self.handle_response(response);
                 is_resize = true;
             }
-            Event::ScreenParametersChanged(frame, spaces) => {
+            Event::ScreenParametersChanged(frames, spaces) => {
                 if self.space.is_none() {
                     self.space = spaces.first().copied();
                 }
-                self.main_screen = frame
+                self.main_screen = frames
                     .into_iter()
                     .zip(spaces)
                     .map(|(frame, space)| Screen { frame, space })
                     .next();
             }
             Event::SpaceChanged(spaces) => {
-                if let Some(screen) = self.main_screen.as_mut() {
-                    screen.space = *spaces
-                        .first()
-                        .expect("Spaces should be non-empty if there is a main screen");
+                let Some(screen) = self.main_screen.as_mut() else {
+                    return;
+                };
+                screen.space =
+                    *spaces.first().expect("Spaces should be non-empty if there is a main screen");
+                if self.space == Some(screen.space) {
+                    // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
+                    // (see notes for WindowsDiscovered above).
+                    for app in self.apps.values_mut() {
+                        // Errors mean the app terminated; ignore.
+                        _ = app.handle.send(Request::GetVisibleWindows);
+                    }
                 }
+            }
+            Event::WindowsDiscovered { pid, new, mut known_visible } => {
+                // FIXME: There is no synchronization ensuring that these windows
+                // are for the current space. The only way I've found to do that
+                // is to take a "snapshot" using CGWindowListCopyWindowInfo.
+                // FIXME: We assume all windows are on the main screen.
+                let Some(space) = self.main_screen.map(|screen| screen.space) else {
+                    warn!("Received WindowsDiscovered event, but there was no main screen");
+                    return;
+                };
+                known_visible.retain(|wid| self.windows[wid].is_standard);
+                self.layout.set_windows_for_app(space, pid, known_visible);
+                self.layout.add_windows(
+                    space,
+                    new.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
+                );
+                self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
             }
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
@@ -369,6 +397,14 @@ mod tests {
     use super::*;
     use crate::{actor::app::Request, sys::window_server::WindowServerId};
 
+    impl Reactor {
+        fn handle_events(&mut self, events: Vec<Event>) {
+            for event in events {
+                self.handle_event(event);
+            }
+        }
+    }
+
     struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
     impl Apps {
         fn new() -> Apps {
@@ -376,7 +412,7 @@ mod tests {
             Apps(tx, rx)
         }
 
-        fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Event {
+        fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Vec<Event> {
             self.make_app_with_opts(pid, windows, None, false)
         }
 
@@ -386,21 +422,27 @@ mod tests {
             windows: Vec<WindowInfo>,
             main_window: Option<WindowId>,
             is_frontmost: bool,
-        ) -> Event {
+        ) -> Vec<Event> {
             let handle = AppThreadHandle::new_for_test(self.0.clone());
-            Event::ApplicationLaunched(
-                pid,
-                AppState {
-                    info: AppInfo {
-                        bundle_id: Some(format!("com.testapp{pid}")),
-                        localized_name: Some(format!("TestApp{pid}")),
+            vec![
+                Event::ApplicationLaunched(
+                    pid,
+                    AppState {
+                        info: AppInfo {
+                            bundle_id: Some(format!("com.testapp{pid}")),
+                            localized_name: Some(format!("TestApp{pid}")),
+                        },
+                        handle,
+                        main_window,
+                        is_frontmost,
                     },
-                    handle,
-                    main_window,
-                    is_frontmost,
+                ),
+                Event::WindowsDiscovered {
+                    pid,
+                    new: (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
+                    known_visible: vec![],
                 },
-                (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
-            )
+            ]
         }
 
         fn requests(&mut self) -> Vec<Request> {
@@ -432,8 +474,8 @@ mod tests {
             vec![SpaceId::new(1)],
         ));
 
-        reactor.handle_event(apps.make_app(1, make_windows(2)));
-        reactor.handle_event(apps.make_app(2, make_windows(2)));
+        reactor.handle_events(apps.make_app(1, make_windows(2)));
+        reactor.handle_events(apps.make_app(2, make_windows(2)));
         assert_eq!(None, reactor.frontmost_app);
         reactor.handle_event(ApplicationGloballyActivated(1));
         reactor.handle_event(ApplicationActivated(1, Some(WindowId::new(1, 1))));
@@ -461,7 +503,7 @@ mod tests {
         assert_eq!(None, reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
 
-        reactor.handle_event(apps.make_app_with_opts(
+        reactor.handle_events(apps.make_app_with_opts(
             3,
             make_windows(2),
             Some(WindowId::new(3, 1)),
@@ -486,6 +528,7 @@ mod tests {
 
         for request in requests {
             match request {
+                Request::GetVisibleWindows => {}
                 Request::SetWindowFrame(wid, frame, txid) => {
                     let window = windows.entry(wid).or_default();
                     window.last_seen_txid = txid;
@@ -538,12 +581,12 @@ mod tests {
             vec![SpaceId::new(1)],
         ));
 
-        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        reactor.handle_events(apps.make_app(1, make_windows(2)));
         let requests = apps.requests();
         assert!(!requests.is_empty());
         let (events_1, _) = simulate_events_for_requests(requests);
 
-        reactor.handle_event(apps.make_app(2, make_windows(2)));
+        reactor.handle_events(apps.make_app(2, make_windows(2)));
         assert!(!apps.requests().is_empty());
 
         for event in dbg!(events_1) {
@@ -565,7 +608,7 @@ mod tests {
             vec![SpaceId::new(1)],
         ));
 
-        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        reactor.handle_events(apps.make_app(1, make_windows(2)));
         let (events_1, state_1) = simulate_events_for_requests(apps.requests());
         assert!(!state_1.is_empty());
 
@@ -574,8 +617,9 @@ mod tests {
         }
         assert!(apps.requests().is_empty());
 
-        reactor.handle_event(apps.make_app(2, make_windows(1)));
+        reactor.handle_events(apps.make_app(2, make_windows(1)));
         let (_events_2, _state_2) = simulate_events_for_requests(apps.requests());
+        dbg!(_state_2);
 
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(2, 1)));
         let (_events_3, state_3) = simulate_events_for_requests(apps.requests());
@@ -583,7 +627,7 @@ mod tests {
         // These should be the same, because we should have resized the first
         // two windows both at the beginning, and at the end when the third
         // window was destroyed.
-        for (wid, state) in state_1 {
+        for (wid, state) in dbg!(state_1) {
             assert!(state_3.contains_key(&wid), "{wid:?} not in {state_3:#?}");
             assert_eq!(state.frame, state_3[&wid].frame);
         }
@@ -598,7 +642,7 @@ mod tests {
             vec![SpaceId::new(1)],
         ));
 
-        reactor.handle_event(apps.make_app(1, make_windows(2)));
+        reactor.handle_events(apps.make_app(1, make_windows(2)));
         let (events_1, state_1) = simulate_events_for_requests(apps.requests());
         assert!(!state_1.is_empty());
 
@@ -635,7 +679,7 @@ mod tests {
             vec![SpaceId::new(1)],
         ));
 
-        reactor.handle_event(apps.make_app(1, make_windows(3)));
+        reactor.handle_events(apps.make_app(1, make_windows(3)));
 
         let (events, windows) = simulate_events_for_requests(apps.requests());
         for event in events {

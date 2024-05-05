@@ -9,7 +9,7 @@ use super::{
     tree::{self, Tree},
 };
 use crate::{
-    actor::app::WindowId,
+    actor::app::{pid_t, WindowId},
     model::tree::{NodeId, NodeMap, OwnedNode},
     sys::screen::SpaceId,
 };
@@ -91,6 +91,45 @@ impl LayoutTree {
             }
             true
         })
+    }
+
+    /// Adds and removes windows so that the set of windows in a space is exactly `wids`.
+    pub fn set_windows_for_app(&mut self, space: SpaceId, app: pid_t, mut desired: Vec<WindowId>) {
+        let root = self.space(space);
+        let mut current = root
+            .traverse_postorder(self.map())
+            .filter_map(|node| self.window_at(node).map(|wid| (wid, node)))
+            .filter(|(wid, _)| wid.pid == app)
+            .collect::<Vec<_>>();
+        desired.sort_unstable();
+        current.sort_unstable();
+        debug_assert!(desired.iter().all(|wid| wid.pid == app));
+
+        let mut desired = desired.into_iter().peekable();
+        let mut current = current.into_iter().peekable();
+        loop {
+            match (desired.peek(), current.peek()) {
+                (Some(des), Some((cur, _))) if des == cur => {
+                    desired.next();
+                    current.next();
+                }
+                (Some(des), None) => {
+                    self.add_window(root, *des);
+                    desired.next();
+                }
+                (Some(des), Some((cur, _))) if des < cur => {
+                    self.add_window(root, *des);
+                    desired.next();
+                }
+                (_, Some((cur, node))) => {
+                    node.detach(&mut self.tree).remove();
+                    self.windows.remove(*node);
+                    self.window_nodes.get_mut(cur).unwrap().retain(|info| info.space != space);
+                    current.next();
+                }
+                (None, None) => break,
+            }
+        }
     }
 
     pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
@@ -507,7 +546,56 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::LayoutTree, sys::screen::SpaceId};
+    use crate::{actor::app::pid_t, model::LayoutTree, sys::screen::SpaceId};
+
+    fn w(pid: pid_t, idx: i32) -> WindowId {
+        WindowId::new(pid, idx)
+    }
+
+    #[test]
+    fn set_windows_for_app() {
+        let mut tree = LayoutTree::new();
+        let space = SpaceId::new(1);
+        let root = tree.space(space);
+        let a1 = tree.add_window(root, w(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let b1 = tree.add_window(a2, w(2, 1));
+        let b2 = tree.add_window(a2, w(2, 2));
+        let b3 = tree.add_window(a2, w(2, 3));
+        let a3 = tree.add_window(root, w(1, 3));
+
+        let get_windows = |tree: &LayoutTree| {
+            root.traverse_postorder(tree.map())
+                .filter_map(|node| tree.window_at(node))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            [w(1, 1), w(2, 1), w(2, 2), w(2, 3), w(1, 3)],
+            *get_windows(&tree)
+        );
+
+        tree.set_windows_for_app(space, 2, vec![w(2, 1), w(2, 3)]);
+        assert_eq!([w(1, 1), w(2, 1), w(2, 3), w(1, 3)], *get_windows(&tree));
+        assert_eq!(Some(w(1, 1)), tree.window_at(a1));
+        assert_eq!(Some(w(2, 1)), tree.window_at(b1));
+        assert_eq!(None, tree.window_at(b2));
+        assert_eq!(Some(w(2, 3)), tree.window_at(b3));
+        assert_eq!(Some(w(1, 3)), tree.window_at(a3));
+
+        tree.set_windows_for_app(space, 2, vec![]);
+        assert_eq!([w(1, 1), w(1, 3)], *get_windows(&tree));
+        tree.set_windows_for_app(space, 1, vec![]);
+        assert!(get_windows(&tree).is_empty());
+
+        tree.set_windows_for_app(space, 2, vec![w(2, 1), w(2, 3)]);
+        assert_eq!([w(2, 1), w(2, 3)], *get_windows(&tree));
+        assert_eq!(None, tree.window_at(a1));
+        assert_eq!(None, tree.window_at(b1));
+        assert_eq!(None, tree.window_at(b2));
+        assert_eq!(None, tree.window_at(b3));
+        assert_eq!(None, tree.window_at(a3));
+        assert_eq!(2, root.children(tree.map()).count());
+    }
 
     #[test]
     fn traverse() {

@@ -1,5 +1,7 @@
+use super::geometry::ToICrate;
+
 use accessibility::AXUIElement;
-use accessibility_sys::{kAXErrorSuccess, AXError, AXUIElementRef};
+use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
 use core_foundation::{
     array::CFArray,
     base::{CFType, TCFType},
@@ -11,8 +13,12 @@ use core_graphics::{
     display::{
         kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
     },
-    window::{kCGWindowLayer, kCGWindowListOptionExcludeDesktopElements, kCGWindowNumber},
+    window::{
+        kCGWindowBounds, kCGWindowLayer, kCGWindowListOptionExcludeDesktopElements,
+        kCGWindowNumber, kCGWindowOwnerPID,
+    },
 };
+use icrate::Foundation::CGRect;
 
 /// The window ID used by the window server.
 ///
@@ -41,10 +47,17 @@ impl TryFrom<&AXUIElement> for WindowServerId {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct WindowServerInfo {
+    pub id: WindowServerId,
+    pub pid: pid_t,
+    pub frame: CGRect,
+}
+
 /// Returns a list of windows visible on the screen, in order starting with the
 /// frontmost.
 #[allow(dead_code)]
-pub fn get_visible_windows() -> Vec<WindowServerId> {
+pub fn get_visible_windows() -> Vec<WindowServerInfo> {
     // Note that the ordering is not documented. But
     // NSWindow::windowNumbersWithOptions *is* documented to return the windows
     // in order, so we could always combine their information if the behavior
@@ -66,7 +79,14 @@ pub fn get_visible_windows() -> Vec<WindowServerId> {
         })
         .filter_map(|win| {
             let id = get_num(&win, unsafe { kCGWindowNumber })?;
-            Some(WindowServerId(id.try_into().ok()?))
+            let pid = get_num(&win, unsafe { kCGWindowOwnerPID })?;
+            let frame: CFDictionary = win.find(unsafe { kCGWindowBounds })?.downcast()?;
+            let frame = core_graphics_types::geometry::CGRect::from_dict_representation(&frame)?;
+            Some(WindowServerInfo {
+                id: WindowServerId(id.try_into().ok()?),
+                pid: pid.try_into().ok()?,
+                frame: frame.to_icrate(),
+            })
         })
         .collect::<Vec<_>>()
 }

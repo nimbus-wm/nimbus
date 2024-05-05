@@ -149,7 +149,7 @@ impl NodeId {
 
     #[track_caller]
     pub fn children(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
-        NodeIterator {
+        ChildIterator {
             cur: map[self].first_child,
             map,
         }
@@ -157,7 +157,12 @@ impl NodeId {
 
     #[track_caller]
     pub fn children_rev(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
-        NodeRevIterator { cur: map[self].last_child, map }
+        ChildRevIterator { cur: map[self].last_child, map }
+    }
+
+    #[track_caller]
+    pub fn traverse_postorder(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
+        PostorderTraversal::new(map, self)
     }
 
     /// Returns an iterator over all ancestors of the current node, including itself.
@@ -412,12 +417,12 @@ impl Node {
     }
 }
 
-struct NodeIterator<'a> {
+struct ChildIterator<'a> {
     cur: Option<NodeId>,
     map: &'a NodeMap,
 }
 
-impl<'a> Iterator for NodeIterator<'a> {
+impl<'a> Iterator for ChildIterator<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         let Some(id) = self.cur else { return None };
@@ -426,17 +431,54 @@ impl<'a> Iterator for NodeIterator<'a> {
     }
 }
 
-struct NodeRevIterator<'a> {
+struct ChildRevIterator<'a> {
     cur: Option<NodeId>,
     map: &'a NodeMap,
 }
 
-impl<'a> Iterator for NodeRevIterator<'a> {
+impl<'a> Iterator for ChildRevIterator<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         let Some(id) = self.cur else { return None };
         self.cur = self.map[id].prev_sibling;
         Some(id)
+    }
+}
+
+struct PostorderTraversal<'a> {
+    stack: Vec<NodeId>,
+    map: &'a NodeMap,
+}
+
+impl<'a> PostorderTraversal<'a> {
+    fn new(map: &'a NodeMap, root: NodeId) -> Self {
+        let mut this = Self { stack: vec![root], map };
+        this.descend_left(root);
+        this
+    }
+
+    fn descend_left(&mut self, mut parent: NodeId) {
+        while let Some(child) = parent.first_child(self.map) {
+            self.stack.push(child);
+            parent = child;
+        }
+    }
+}
+
+impl<'a> Iterator for PostorderTraversal<'a> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(node) = self.stack.pop() else {
+            return None;
+        };
+        // Don't traverse right if this is the root node.
+        if !self.stack.is_empty() {
+            if let Some(next) = node.next_sibling(self.map) {
+                self.stack.push(next);
+                self.descend_left(next);
+            }
+        }
+        Some(node)
     }
 }
 
@@ -610,6 +652,17 @@ mod tests {
         assert_eq!([t.child2, t.root], *ancestors(t.child2));
         assert_eq!([t.root], *ancestors(t.root));
         assert_eq!([t.other_root], *ancestors(t.other_root));
+    }
+
+    #[test]
+    fn traverse_preorder() {
+        let t = TestTree::new();
+        let traverse = |node: NodeId| node.traverse_postorder(&t.tree.map).collect::<Vec<_>>();
+        assert_eq!(
+            [t.child1, t.gc1, t.child2, t.child3, t.root],
+            *traverse(t.root)
+        );
+        assert_eq!([t.child1], *traverse(t.child1));
     }
 
     #[test]
