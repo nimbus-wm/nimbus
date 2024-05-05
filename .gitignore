@@ -1,2 +1,8 @@
+# Cargo
 /target/
 .cargo
+
+# Vim
+*~
+*.swp
+*.swo
