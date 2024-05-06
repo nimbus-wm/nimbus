@@ -16,7 +16,7 @@ use icrate::{
     AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications},
     Foundation::MainThreadMarker,
 };
-use nimbus::{
+use nimbus_wm::{
     sys::app,
     sys::screen::{self, ScreenCache},
     sys::window_server,

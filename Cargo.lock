@@ -688,7 +688,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nimbus"
+name = "nimbus-wm"
 version = "0.1.0"
 dependencies = [
  "accessibility",
