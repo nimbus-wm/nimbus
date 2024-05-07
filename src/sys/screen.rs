@@ -1,4 +1,4 @@
-use std::{ffi::c_int, mem::MaybeUninit};
+use std::{ffi::c_int, mem::MaybeUninit, num::NonZeroU64};
 
 use bitflags::bitflags;
 use core_foundation::{
@@ -19,12 +19,12 @@ use crate::sys::geometry::ToICrate;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct SpaceId(u64);
+pub struct SpaceId(NonZeroU64);
 
 #[cfg(test)]
 impl SpaceId {
     pub fn new(id: u64) -> SpaceId {
-        SpaceId(id)
+        SpaceId(NonZeroU64::new(id).unwrap())
     }
 }
 
@@ -106,7 +106,7 @@ impl<S: System> ScreenCache<S> {
 
     /// Returns a list of the active spaces on each screen. The order
     /// corresponds to the screens returned by `screen_frames`.
-    pub fn get_screen_spaces(&self) -> Vec<SpaceId> {
+    pub fn get_screen_spaces(&self) -> Vec<Option<SpaceId>> {
         self.uuids
             .iter()
             .map(|screen| unsafe {
@@ -115,7 +115,8 @@ impl<S: System> ScreenCache<S> {
                     screen.as_concrete_TypeRef(),
                 )
             })
-            .map(SpaceId)
+            .map(|id| SpaceId(NonZeroU64::new(id).unwrap()))
+            .map(Some)
             .collect()
     }
 }
@@ -216,7 +217,7 @@ pub mod diagnostic {
     use super::*;
 
     pub fn cur_space() -> SpaceId {
-        SpaceId(unsafe { CGSGetActiveSpace(CGSMainConnectionID()) })
+        SpaceId(NonZeroU64::new(unsafe { CGSGetActiveSpace(CGSMainConnectionID()) }).unwrap())
     }
 
     pub fn visible_spaces() -> CFArray<SpaceId> {

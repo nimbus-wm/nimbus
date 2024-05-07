@@ -30,6 +30,7 @@ pub enum Event {
     ApplicationGloballyDeactivated(pid_t),
     ApplicationDeactivated(pid_t),
     ApplicationMainWindowChanged(pid_t, Option<WindowId>),
+
     WindowsDiscovered {
         pid: pid_t,
         new: Vec<(WindowId, WindowInfo)>,
@@ -38,8 +39,11 @@ pub enum Event {
     WindowCreated(WindowId, WindowInfo),
     WindowDestroyed(WindowId),
     WindowFrameChanged(WindowId, CGRect, TransactionId, Requested),
-    ScreenParametersChanged(Vec<CGRect>, Vec<SpaceId>),
-    SpaceChanged(Vec<SpaceId>),
+
+    // None in the SpaceId vec disables managing windows on that screen until the next space change.
+    ScreenParametersChanged(Vec<CGRect>, Vec<Option<SpaceId>>),
+    SpaceChanged(Vec<Option<SpaceId>>),
+
     Command(Command),
 }
 
@@ -58,8 +62,6 @@ pub struct Reactor {
     layout: LayoutManager,
     windows: HashMap<WindowId, WindowState>,
     main_screen: Option<Screen>,
-    // TODO: Remove this to support multiple spaces.
-    space: Option<SpaceId>,
     frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
     raise_token: RaiseToken,
@@ -77,7 +79,7 @@ pub struct AppState {
 #[derive(Copy, Clone, Debug)]
 struct Screen {
     frame: CGRect,
-    space: SpaceId,
+    space: Option<SpaceId>,
 }
 
 /// A per-window counter that tracks the last time the reactor sent a request to
@@ -136,7 +138,6 @@ impl Reactor {
             layout: LayoutManager::new(),
             windows: HashMap::new(),
             main_screen: None,
-            space: None,
             frontmost_app: None,
             global_frontmost_app_pid: None,
             raise_token: RaiseToken::default(),
@@ -147,6 +148,10 @@ impl Reactor {
     fn main_window(&self) -> Option<WindowId> {
         let Some(pid) = self.frontmost_app else { return None };
         self.apps[&pid].main_window
+    }
+
+    fn main_screen_space(&self) -> Option<SpaceId> {
+        self.main_screen?.space
     }
 
     fn handle_event(&mut self, event: Event) {
@@ -219,12 +224,31 @@ impl Reactor {
             Event::ApplicationMainWindowChanged(pid, main_window) => {
                 self.apps.get_mut(&pid).unwrap().main_window = main_window;
             }
+            Event::WindowsDiscovered { pid, new, mut known_visible } => {
+                // FIXME: There is no synchronization ensuring that these windows
+                // are for the current space. The only way I've found to do that
+                // is to take a "snapshot" using CGWindowListCopyWindowInfo.
+                // FIXME: We assume all windows are on the main screen.
+                let Some(space) = self.main_screen_space() else {
+                    warn!("Received WindowsDiscovered event, but there was no main screen space");
+                    return;
+                };
+                known_visible.retain(|wid| self.windows[wid].is_standard);
+                self.layout.set_windows_for_app(space, pid, known_visible);
+                self.layout.add_windows(
+                    space,
+                    new.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
+                );
+                self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
+            }
             Event::WindowCreated(wid, window) => {
                 // Don't manage windows on other spaces.
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
-                if self.main_screen.map(|s| s.space) == self.space && window.is_standard {
-                    self.layout.add_window(self.space.unwrap(), wid);
+                // FIXME: We assume all windows are on the main screen.
+                let Some(space) = self.main_screen_space() else { return };
+                if window.is_standard {
+                    self.layout.add_window(space, wid);
                 }
                 self.windows.insert(wid, window.into());
                 animation_focus_wid = Some(wid);
@@ -254,9 +278,10 @@ impl Reactor {
                     return;
                 }
                 let Some(screen) = self.main_screen else { return };
+                let Some(space) = screen.space else { return };
                 // This event is ignored if the window is not in the layout.
                 let response = self.layout.handle_event(LayoutEvent::WindowResized {
-                    space: screen.space,
+                    space,
                     screen: screen.frame,
                     wid,
                     old_frame,
@@ -266,9 +291,6 @@ impl Reactor {
                 is_resize = true;
             }
             Event::ScreenParametersChanged(frames, spaces) => {
-                if self.space.is_none() {
-                    self.space = spaces.first().copied();
-                }
                 self.main_screen = frames
                     .into_iter()
                     .zip(spaces)
@@ -281,7 +303,7 @@ impl Reactor {
                 };
                 screen.space =
                     *spaces.first().expect("Spaces should be non-empty if there is a main screen");
-                if self.space == Some(screen.space) {
+                if self.main_screen_space().is_some() {
                     // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                     // (see notes for WindowsDiscovered above).
                     for app in self.apps.values_mut() {
@@ -290,39 +312,23 @@ impl Reactor {
                     }
                 }
             }
-            Event::WindowsDiscovered { pid, new, mut known_visible } => {
-                // FIXME: There is no synchronization ensuring that these windows
-                // are for the current space. The only way I've found to do that
-                // is to take a "snapshot" using CGWindowListCopyWindowInfo.
-                // FIXME: We assume all windows are on the main screen.
-                let Some(space) = self.main_screen.map(|screen| screen.space) else {
-                    warn!("Received WindowsDiscovered event, but there was no main screen");
-                    return;
-                };
-                known_visible.retain(|wid| self.windows[wid].is_standard);
-                self.layout.set_windows_for_app(space, pid, known_visible);
-                self.layout.add_windows(
-                    space,
-                    new.iter().filter(|(_, info)| info.is_standard).map(|(wid, _)| *wid),
-                );
-                self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-            }
             Event::Command(Command::Hello) => {
                 println!("Hello, world!");
             }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
-                let response = self.layout.handle_command(self.space.unwrap(), cmd);
+                let Some(space) = self.main_screen_space() else { return };
+                let response = self.layout.handle_command(space, cmd);
                 self.handle_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if self.main_window() != main_window_orig {
-            let response = self.layout.handle_event(LayoutEvent::WindowRaised(
-                self.space.unwrap(),
-                self.main_window(),
-            ));
-            self.handle_response(response);
+            if let Some(space) = self.main_screen_space() {
+                let response =
+                    self.layout.handle_event(LayoutEvent::WindowRaised(space, self.main_window()));
+                self.handle_response(response);
+            }
         }
         self.update_layout(animation_focus_wid, is_resize);
     }
@@ -344,17 +350,15 @@ impl Reactor {
             .unwrap();
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self), fields(?self.main_screen))]
     pub fn update_layout(&mut self, new_wid: Option<WindowId>, is_resize: bool) {
         let Some(main_screen) = self.main_screen else { return };
-        if Some(main_screen.space) != self.space {
-            return;
-        };
+        let Some(space) = main_screen.space else { return };
 
         trace!(?main_screen);
         let main_window = self.main_window();
         trace!(?main_window);
-        let layout = self.layout.calculate(self.space.unwrap(), main_screen.frame.clone());
+        let layout = self.layout.calculate(space, main_screen.frame.clone());
         trace!(?layout, "Layout");
 
         let mut anim = Animation::new();
@@ -471,7 +475,7 @@ mod tests {
         let mut reactor = Reactor::new();
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
-            vec![SpaceId::new(1)],
+            vec![Some(SpaceId::new(1))],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -578,7 +582,7 @@ mod tests {
         let mut reactor = Reactor::new();
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
-            vec![SpaceId::new(1)],
+            vec![Some(SpaceId::new(1))],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -605,7 +609,7 @@ mod tests {
         let mut reactor = Reactor::new();
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
-            vec![SpaceId::new(1)],
+            vec![Some(SpaceId::new(1))],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -639,7 +643,7 @@ mod tests {
         let mut reactor = Reactor::new();
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
-            vec![SpaceId::new(1)],
+            vec![Some(SpaceId::new(1))],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -676,7 +680,7 @@ mod tests {
         let mut reactor = Reactor::new();
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
-            vec![SpaceId::new(1)],
+            vec![Some(SpaceId::new(1))],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(3)));
@@ -711,5 +715,43 @@ mod tests {
         assert!(!requests.is_empty());
         let (_events, windows) = simulate_events_for_requests(requests);
         assert_ne!(old_frame, windows[&next].frame);
+    }
+
+    #[test]
+    fn it_manages_windows_on_enabled_spaces() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![Some(SpaceId::new(1))],
+        ));
+
+        reactor.handle_events(apps.make_app(1, make_windows(1)));
+
+        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        assert_eq!(
+            full_screen,
+            windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+        );
+    }
+
+    #[test]
+    fn it_ignores_windows_on_disabled_spaces() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new();
+        let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![None],
+        ));
+
+        reactor.handle_events(apps.make_app(1, make_windows(1)));
+
+        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        assert!(
+            windows.get(&WindowId::new(1, 1)).is_none(),
+            "Window should not have been moved",
+        );
     }
 }

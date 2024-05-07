@@ -41,22 +41,57 @@ fn main() {
         .init();
     install_panic_hook();
 
+    // TODO: This should probably go in another actor.
     let events_tx = Reactor::spawn();
-    let mut starting_space = None;
-    let mut _manager = None;
-    actor::notification_center::watch_for_notifications(
-        events_tx.clone(),
-        Box::new(move |space| {
-            if starting_space.is_none() {
-                starting_space = Some(space);
+    let app_spawn_cb = {
+        let events_tx = events_tx.clone();
+        move |pid, app_info| actor::app::spawn_app_thread(pid, app_info, events_tx.clone())
+    };
+    let event_cb = {
+        let send_event = {
+            let events_tx = events_tx.clone();
+            move |event| {
+                _ = events_tx.send((Span::current().clone(), event));
             }
-            if Some(space) == starting_space {
-                _manager = Some(register_hotkeys(events_tx.clone()));
-            } else if opt.one {
-                _manager = None;
+        };
+        let events_tx = events_tx.clone();
+        let mut starting_space = None;
+        let mut _manager = None;
+        if !opt.one {
+            _manager = Some(register_hotkeys(events_tx.clone()));
+        }
+        move |mut event| {
+            match &mut event {
+                Event::SpaceChanged(spaces) | Event::ScreenParametersChanged(_, spaces)
+                    if opt.one =>
+                {
+                    if let Some(&Some(space)) = spaces.first() {
+                        if starting_space.is_none() {
+                            starting_space = Some(space);
+                        }
+                        if Some(space) == starting_space {
+                            _manager = Some(register_hotkeys(events_tx.clone()));
+                        } else {
+                            _manager = None;
+                        }
+                    }
+                    for space in spaces {
+                        if *space != starting_space {
+                            *space = None;
+                        }
+                    }
+                }
+                _ => (),
             }
-        }),
-    )
+            send_event(event);
+        }
+    };
+    let handler = actor::notification_center::NotificationHandler::new(
+        Box::new(app_spawn_cb),
+        Box::new(event_cb),
+    );
+    actor::app::spawn_initial_app_threads(events_tx);
+    handler.watch_for_notifications()
 }
 
 fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
