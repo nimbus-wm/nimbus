@@ -33,6 +33,16 @@ impl WindowServerId {
     pub fn new(id: CGWindowID) -> Self {
         WindowServerId(id)
     }
+
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+impl Into<u32> for WindowServerId {
+    fn into(self) -> u32 {
+        self.0
+    }
 }
 
 impl TryFrom<&AXUIElement> for WindowServerId {

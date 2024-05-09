@@ -1,6 +1,7 @@
 use std::{collections::HashMap, iter, mem};
 
 use icrate::Foundation::CGRect;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use super::{
@@ -18,6 +19,7 @@ use crate::{
 ///
 /// All interactions with the data model happen through the public APIs on this
 /// type.
+#[derive(Serialize, Deserialize)]
 pub struct LayoutTree {
     tree: Tree<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
@@ -28,12 +30,13 @@ pub struct LayoutTree {
 
 pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
 
+#[derive(Serialize, Deserialize)]
 struct WindowNodeInfo {
     space: SpaceId,
     node: NodeId,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct Components {
     selection: Selection,
     layout: Layout,
@@ -548,7 +551,7 @@ mod tests {
     use super::*;
     use crate::{actor::app::pid_t, model::LayoutTree, sys::screen::SpaceId};
 
-    fn w(pid: pid_t, idx: i32) -> WindowId {
+    fn w(pid: pid_t, idx: u32) -> WindowId {
         WindowId::new(pid, idx)
     }
 

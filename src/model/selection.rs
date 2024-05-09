@@ -1,13 +1,16 @@
+use serde::{Deserialize, Serialize};
+
 use super::{
     layout_tree::TreeEvent,
     tree::{NodeId, NodeMap},
 };
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Selection {
     nodes: slotmap::SecondaryMap<NodeId, SelectionInfo>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct SelectionInfo {
     selected_child: NodeId,
     stop_here: bool,

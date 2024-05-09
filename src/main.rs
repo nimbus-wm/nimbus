@@ -127,6 +127,8 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     mgr.register(ALT, KeyE, Command::Layout(Ungroup));
     mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
     mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));
+    mgr.register(ALT | SHIFT, KeyS, Command::Layout(Serialize));
+    mgr.register(ALT | SHIFT, KeyE, Command::Layout(SaveAndExit));
     mgr
 }
 

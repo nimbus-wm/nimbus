@@ -7,8 +7,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
-    hash::Hash,
-    num::NonZeroI32,
+    num::NonZeroU32,
     rc::{Rc, Weak},
     sync::{
         atomic::{AtomicI32, Ordering},
@@ -33,7 +32,8 @@ use icrate::{
     AppKit::{NSApplicationActivationOptions, NSRunningApplication},
     Foundation::{CGPoint, CGRect},
 };
-use tracing::{debug, error, instrument, trace, warn, Span};
+use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::reactor::{AppState, Event, Requested, TransactionId},
@@ -42,6 +42,7 @@ use crate::{
         geometry::{ToCGType, ToICrate},
         observer::Observer,
         run_loop::WakeupHandle,
+        window_server::WindowServerId,
     },
 };
 
@@ -51,18 +52,18 @@ pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 ///
 /// This identifier is only valid for the lifetime of the process that owns it.
 /// It is not stable across restarts of the window manager.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct WindowId {
     pub pid: pid_t,
-    idx: NonZeroI32,
+    idx: NonZeroU32,
 }
 
 impl WindowId {
     #[cfg(test)]
-    pub(crate) fn new(pid: pid_t, idx: i32) -> WindowId {
+    pub(crate) fn new(pid: pid_t, idx: u32) -> WindowId {
         WindowId {
             pid,
-            idx: NonZeroI32::new(idx).unwrap(),
+            idx: NonZeroU32::new(idx).unwrap(),
         }
     }
 }
@@ -160,7 +161,7 @@ struct State {
     pid: pid_t,
     running_app: Id<NSRunningApplication>,
     bundle_id: Option<String>,
-    last_window_idx: i32,
+    last_window_idx: u32,
     observer: Observer,
 }
 
@@ -464,18 +465,26 @@ impl State {
         if !register_notifs(&elem, self) {
             return None;
         }
-        self.last_window_idx += 1;
-        let wid = WindowId {
-            pid: self.pid,
-            idx: NonZeroI32::new(self.last_window_idx).unwrap(),
-        };
-        self.windows.insert(
+        let idx = WindowServerId::try_from(&elem)
+            .or_else(|e| {
+                info!("Could not get window server id for {elem:?}: {e}");
+                Err(e)
+            })
+            .ok()
+            .map(|id| NonZeroU32::new(id.as_u32()).expect("Window server id was 0"))
+            .unwrap_or_else(|| {
+                self.last_window_idx += 1;
+                NonZeroU32::new(self.last_window_idx).unwrap()
+            });
+        let wid = WindowId { pid: self.pid, idx };
+        let old = self.windows.insert(
             wid,
             WindowState {
                 elem,
                 last_seen_txid: TransactionId::default(),
             },
         );
+        assert!(old.is_none(), "Duplicate window id {wid:?}");
         return Some(wid);
 
         fn register_notifs(win: &AXUIElement, state: &State) -> bool {

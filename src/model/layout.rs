@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::mem;
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use serde::{Deserialize, Serialize};
 
 use super::{
     layout_tree::{TreeEvent, Windows},
@@ -9,13 +10,13 @@ use super::{
 };
 use crate::{actor::app::WindowId, sys::geometry::Round};
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Layout {
     info: slotmap::SecondaryMap<NodeId, LayoutInfo>,
 }
 
 #[allow(unused)]
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutKind {
     #[default]
     Horizontal,
@@ -40,7 +41,7 @@ impl LayoutKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
     Horizontal,
     Vertical,
@@ -65,7 +66,7 @@ impl LayoutKind {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Left,
     Right,
@@ -109,7 +110,7 @@ impl Direction {
 // for the proportionate case, but it feels more like we are distributing the
 // complexity rather than reducing it.
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 struct LayoutInfo {
     /// The share of the parent's size taken up by this node; 1.0 by default.
     size: f32,

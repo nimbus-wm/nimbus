@@ -1,5 +1,7 @@
+use std::io::Write;
+
 use icrate::Foundation::CGRect;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{
     actor::app::{pid_t, WindowId},
@@ -25,6 +27,8 @@ pub enum LayoutCommand {
     Group(Orientation),
     Ungroup,
     Debug,
+    Serialize,
+    SaveAndExit,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +174,17 @@ impl LayoutManager {
                 self.tree.print_tree(root);
                 EventResponse::default()
             }
+            LayoutCommand::Serialize => {
+                println!("{}", ron::ser::to_string(&self.tree).unwrap());
+                EventResponse::default()
+            }
+            LayoutCommand::SaveAndExit => match self.save() {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    error!("Could not save layout: {e}");
+                    std::process::exit(3);
+                }
+            },
         }
     }
 
@@ -177,5 +192,13 @@ impl LayoutManager {
         let space = self.tree.space(space);
         //debug!("{}", self.tree.draw_tree(space));
         self.tree.calculate_layout(space, screen)
+    }
+
+    fn save(&self) -> std::io::Result<()> {
+        let config_dir = &dirs::home_dir().unwrap().join(".nimbus");
+        std::fs::create_dir_all(config_dir)?;
+        std::fs::File::create(config_dir.join("layout.ron"))?
+            .write_all(ron::ser::to_string(&self.tree).unwrap().as_bytes())?;
+        Ok(())
     }
 }

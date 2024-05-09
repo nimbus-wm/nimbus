@@ -13,11 +13,12 @@ use icrate::{
     AppKit::NSScreen,
     Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber},
 };
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::sys::geometry::ToICrate;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SpaceId(NonZeroU64);
 

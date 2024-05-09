@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 
+use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
 /// N-ary tree.
+#[derive(Serialize, Deserialize)]
 pub struct Tree<O> {
     pub map: NodeMap,
     pub data: O,
@@ -31,6 +33,7 @@ impl<O: Observer> Tree<O> {
 ///
 /// Multiple trees can be contained within a map. This also makes it easier
 /// to move branches between trees.
+#[derive(Serialize, Deserialize)]
 pub struct NodeMap {
     map: SlotMap<NodeId, Node>,
 }
@@ -71,8 +74,8 @@ impl IndexMut<NodeId> for NodeMap {
 ///
 /// Every `OwnedNode` has a name which will be used in the panic message.
 #[must_use]
-#[derive(Debug)]
-pub struct OwnedNode(Option<NodeId>, &'static str);
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OwnedNode(Option<NodeId>, String);
 
 impl OwnedNode {
     /// Creates a new root node.
@@ -83,7 +86,7 @@ impl OwnedNode {
 
     /// Marks a non-root node as owned.
     pub fn own(node: NodeId, name: &'static str) -> Self {
-        OwnedNode(Some(node), name)
+        OwnedNode(Some(node), name.to_owned())
     }
 
     pub fn id(&self) -> NodeId {
@@ -309,7 +312,7 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
     }
 }
 
-#[derive(Default, PartialEq, Debug)]
+#[derive(Default, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Node {
     parent: Option<NodeId>,
     prev_sibling: Option<NodeId>,
