@@ -38,6 +38,7 @@ enum Commands {
     Ax,
     Cg,
     Ns,
+    Spaces,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -67,7 +68,8 @@ async fn main() {
                 get_windows_with_ax(&opt, false, false)
             })
             .await;
-
+        }
+        Commands::Spaces => {
             println!("Current space: {:?}", screen::diagnostic::cur_space());
             println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
             println!("All spaces: {:?}", screen::diagnostic::all_spaces());
