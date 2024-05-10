@@ -17,6 +17,7 @@ release.panic = "abort"
 [dependencies]
 accessibility = "0.1.6"
 accessibility-sys = "0.1.3"
+anyhow = "1.0.83"
 ascii_tree = "0.1.1"
 bitflags = "2.4.1"
 clap = { version = "4.5.4", features = ["derive"] }

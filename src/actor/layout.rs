@@ -1,4 +1,8 @@
-use std::io::Write;
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use icrate::Foundation::CGRect;
 use tracing::{debug, error};
@@ -9,6 +13,11 @@ use crate::{
     sys::screen::SpaceId,
 };
 
+/// Actor that manages the layout tree.
+///
+/// This actor receives commands and (cleaned up) events from the Reactor,
+/// converts them into layout operations, and calculates the desired position
+/// and size of each window.
 pub struct LayoutManager {
     tree: LayoutTree,
 }
@@ -28,7 +37,7 @@ pub enum LayoutCommand {
     Ungroup,
     Debug,
     Serialize,
-    SaveAndExit,
+    SaveAndExit(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +50,7 @@ pub enum LayoutEvent {
         new_frame: CGRect,
         screen: CGRect,
     },
+    WindowsOnScreenUpdated(SpaceId, pid_t, Vec<WindowId>),
 }
 
 #[must_use]
@@ -59,17 +69,8 @@ impl LayoutManager {
         self.tree.add_window(space, wid);
     }
 
-    pub fn add_windows(&mut self, space: SpaceId, wids: impl Iterator<Item = WindowId>) {
-        let space = self.tree.space(space);
-        self.tree.add_windows(space, wids);
-    }
-
     pub fn retain_windows(&mut self, f: impl FnMut(&WindowId) -> bool) {
         self.tree.retain_windows(f)
-    }
-
-    pub fn set_windows_for_app(&mut self, space: SpaceId, app: pid_t, wids: Vec<WindowId>) {
-        self.tree.set_windows_for_app(space, app, wids);
     }
 
     #[allow(dead_code)]
@@ -80,6 +81,11 @@ impl LayoutManager {
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
         debug!(?event);
         match event {
+            LayoutEvent::WindowsOnScreenUpdated(space, pid, windows) => {
+                // The windows may already be in the layout if we restored a saved state, so
+                // make sure not to duplicate or erase them here.
+                self.tree.set_windows_for_app(space, pid, windows);
+            }
             LayoutEvent::WindowRaised(space, wid) => {
                 if let Some(wid) = wid {
                     if let Some(node) = self.tree.window_node(space, wid) {
@@ -178,7 +184,7 @@ impl LayoutManager {
                 println!("{}", ron::ser::to_string(&self.tree).unwrap());
                 EventResponse::default()
             }
-            LayoutCommand::SaveAndExit => match self.save() {
+            LayoutCommand::SaveAndExit(path) => match self.save(path) {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     error!("Could not save layout: {e}");
@@ -194,11 +200,17 @@ impl LayoutManager {
         self.tree.calculate_layout(space, screen)
     }
 
-    fn save(&self) -> std::io::Result<()> {
-        let config_dir = &dirs::home_dir().unwrap().join(".nimbus");
-        std::fs::create_dir_all(config_dir)?;
-        std::fs::File::create(config_dir.join("layout.ron"))?
-            .write_all(ron::ser::to_string(&self.tree).unwrap().as_bytes())?;
+    pub fn load(path: PathBuf) -> anyhow::Result<Self> {
+        let mut buf = String::new();
+        File::open(path)?.read_to_string(&mut buf)?;
+        Ok(Self { tree: ron::from_str(&buf)? })
+    }
+
+    fn save(&self, path: PathBuf) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        File::create(path)?.write_all(ron::ser::to_string(&self.tree).unwrap().as_bytes())?;
         Ok(())
     }
 }

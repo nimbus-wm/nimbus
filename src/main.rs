@@ -3,7 +3,9 @@ mod metrics;
 mod model;
 mod sys;
 
-use actor::layout::LayoutCommand;
+use std::path::PathBuf;
+
+use actor::layout::{LayoutCommand, LayoutManager};
 use actor::reactor::{Command, Event, Reactor, Sender};
 use clap::Parser;
 use metrics::MetricsCommand;
@@ -21,6 +23,12 @@ struct Cli {
     /// Only run the window manager on the current space.
     #[arg(long)]
     one: bool,
+
+    #[arg(long)]
+    validate: bool,
+
+    #[arg(long)]
+    restore: bool,
 }
 
 fn main() {
@@ -41,8 +49,19 @@ fn main() {
         .init();
     install_panic_hook();
 
+    if opt.validate {
+        LayoutManager::load(restore_file()).unwrap();
+        return;
+    }
+
+    let layout = if opt.restore {
+        LayoutManager::load(restore_file()).unwrap()
+    } else {
+        LayoutManager::new()
+    };
+    let events_tx = Reactor::spawn(layout);
+
     // TODO: This should probably go in another actor.
-    let events_tx = Reactor::spawn();
     let app_spawn_cb = {
         let events_tx = events_tx.clone();
         move |pid, app_info| actor::app::spawn_app_thread(pid, app_info, events_tx.clone())
@@ -128,8 +147,20 @@ fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
     mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
     mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));
     mgr.register(ALT | SHIFT, KeyS, Command::Layout(Serialize));
-    mgr.register(ALT | SHIFT, KeyE, Command::Layout(SaveAndExit));
+    mgr.register(
+        ALT | SHIFT,
+        KeyE,
+        Command::Layout(SaveAndExit(restore_file())),
+    );
     mgr
+}
+
+fn config_dir() -> PathBuf {
+    dirs::home_dir().unwrap().join(".nimbus")
+}
+
+fn restore_file() -> PathBuf {
+    config_dir().join("layout.ron")
 }
 
 #[cfg(panic = "unwind")]

@@ -75,11 +75,19 @@ impl LayoutTree {
         node
     }
 
-    pub fn add_windows(&mut self, parent: NodeId, wids: impl Iterator<Item = WindowId>) {
+    #[allow(dead_code)]
+    pub fn add_windows_if_missing(
+        &mut self,
+        space: SpaceId,
+        parent: NodeId,
+        wids: impl Iterator<Item = WindowId>,
+    ) {
         self.tree.map.reserve(wids.size_hint().1.unwrap_or(0));
         self.windows.set_capacity(self.tree.map.capacity());
         for wid in wids {
-            self.add_window(parent, wid);
+            if self.window_node(space, wid).is_none() {
+                self.add_window(parent, wid);
+            }
         }
     }
 
