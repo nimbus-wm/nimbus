@@ -42,6 +42,10 @@ pub enum LayoutCommand {
 
 #[derive(Debug, Clone)]
 pub enum LayoutEvent {
+    WindowsOnScreenUpdated(SpaceId, pid_t, Vec<WindowId>),
+    AppClosed(pid_t),
+    WindowAdded(SpaceId, WindowId),
+    WindowRemoved(WindowId),
     WindowRaised(SpaceId, Option<WindowId>),
     WindowResized {
         space: SpaceId,
@@ -50,7 +54,6 @@ pub enum LayoutEvent {
         new_frame: CGRect,
         screen: CGRect,
     },
-    WindowsOnScreenUpdated(SpaceId, pid_t, Vec<WindowId>),
 }
 
 #[must_use]
@@ -64,20 +67,6 @@ impl LayoutManager {
         LayoutManager { tree: LayoutTree::new() }
     }
 
-    pub fn add_window(&mut self, space: SpaceId, wid: WindowId) {
-        let space = self.tree.space(space);
-        self.tree.add_window(space, wid);
-    }
-
-    pub fn retain_windows(&mut self, f: impl FnMut(&WindowId) -> bool) {
-        self.tree.retain_windows(f)
-    }
-
-    #[allow(dead_code)]
-    pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.tree.windows()
-    }
-
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
         debug!(?event);
         match event {
@@ -85,6 +74,16 @@ impl LayoutManager {
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
                 self.tree.set_windows_for_app(space, pid, windows);
+            }
+            LayoutEvent::AppClosed(pid) => {
+                self.tree.retain_windows(|w| w.pid != pid);
+            }
+            LayoutEvent::WindowAdded(space, wid) => {
+                let space = self.tree.space(space);
+                self.tree.add_window(space, wid);
+            }
+            LayoutEvent::WindowRemoved(wid) => {
+                self.tree.retain_windows(|&w| w != wid);
             }
             LayoutEvent::WindowRaised(space, wid) => {
                 if let Some(wid) = wid {
@@ -194,7 +193,7 @@ impl LayoutManager {
         }
     }
 
-    pub fn calculate(&mut self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
+    pub fn calculate_layout(&mut self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
         let space = self.tree.space(space);
         //debug!("{}", self.tree.draw_tree(space));
         self.tree.calculate_layout(space, screen)

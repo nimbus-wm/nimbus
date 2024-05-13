@@ -143,10 +143,6 @@ impl LayoutTree {
         }
     }
 
-    pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
-        self.window_nodes.keys().copied()
-    }
-
     pub fn window_node(&self, space: SpaceId, wid: WindowId) -> Option<NodeId> {
         self.window_nodes
             .get(&wid)

@@ -174,10 +174,10 @@ impl Reactor {
                 // reroute the event through the app thread so it's the last
                 // event for this app.
                 self.apps.remove(&pid).unwrap();
-                self.layout.retain_windows(|wid| wid.pid != pid);
                 if Some(pid) == self.frontmost_app {
                     self.frontmost_app = None;
                 }
+                self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
             Event::ApplicationActivated(pid, main_window) => {
                 let state = self.apps.get_mut(&pid).unwrap();
@@ -239,12 +239,11 @@ impl Reactor {
                 app_windows
                     .extend(new.iter().filter_map(|(wid, info)| info.is_standard.then_some(wid)));
                 self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-                let response = self.layout.handle_event(LayoutEvent::WindowsOnScreenUpdated(
+                self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
                     space,
                     pid,
                     app_windows,
                 ));
-                self.handle_response(response);
             }
             Event::WindowCreated(wid, window) => {
                 // Don't manage windows on other spaces.
@@ -253,15 +252,15 @@ impl Reactor {
                 // FIXME: We assume all windows are on the main screen.
                 let Some(space) = self.main_screen_space() else { return };
                 if window.is_standard {
-                    self.layout.add_window(space, wid);
+                    animation_focus_wid = Some(wid);
+                    self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
                 }
                 self.windows.insert(wid, window.into());
-                animation_focus_wid = Some(wid);
             }
             Event::WindowDestroyed(wid) => {
-                self.layout.retain_windows(|&id| wid != id);
                 self.windows.remove(&wid).unwrap();
                 //animation_focus_wid = self.window_order.last().cloned();
+                self.send_layout_event(LayoutEvent::WindowRemoved(wid));
             }
             Event::WindowFrameChanged(wid, new_frame, last_seen, requested) => {
                 let window = self.windows.get_mut(&wid).unwrap();
@@ -285,14 +284,13 @@ impl Reactor {
                 let Some(screen) = self.main_screen else { return };
                 let Some(space) = screen.space else { return };
                 // This event is ignored if the window is not in the layout.
-                let response = self.layout.handle_event(LayoutEvent::WindowResized {
+                self.send_layout_event(LayoutEvent::WindowResized {
                     space,
                     screen: screen.frame,
                     wid,
                     old_frame,
                     new_frame,
                 });
-                self.handle_response(response);
                 is_resize = true;
             }
             Event::ScreenParametersChanged(frames, spaces) => {
@@ -324,21 +322,24 @@ impl Reactor {
                 info!(?cmd);
                 let Some(space) = self.main_screen_space() else { return };
                 let response = self.layout.handle_command(space, cmd);
-                self.handle_response(response);
+                self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if self.main_window() != main_window_orig {
             if let Some(space) = self.main_screen_space() {
-                let response =
-                    self.layout.handle_event(LayoutEvent::WindowRaised(space, self.main_window()));
-                self.handle_response(response);
+                self.send_layout_event(LayoutEvent::WindowRaised(space, self.main_window()));
             }
         }
         self.update_layout(animation_focus_wid, is_resize);
     }
 
-    fn handle_response(&mut self, response: layout::EventResponse) {
+    fn send_layout_event(&mut self, event: LayoutEvent) {
+        let response = self.layout.handle_event(event);
+        self.handle_layout_response(response)
+    }
+
+    fn handle_layout_response(&mut self, response: layout::EventResponse) {
         if let Some(wid) = response.raise_window {
             info!(raise_window = ?wid);
             self.raise_window(wid);
@@ -363,7 +364,7 @@ impl Reactor {
         trace!(?main_screen);
         let main_window = self.main_window();
         trace!(?main_window);
-        let layout = self.layout.calculate(space, main_screen.frame.clone());
+        let layout = self.layout.calculate_layout(space, main_screen.frame.clone());
         trace!(?layout, "Layout");
 
         let mut anim = Animation::new();
