@@ -136,8 +136,8 @@ mod tests {
             let wakeup = WakeupHandle::for_current_thread(0, move || {
                 println!("handler");
                 let _signaler = &drop_signaler;
-                handler_tx.send(None).unwrap();
                 handler_wakeups.fetch_add(1, Ordering::SeqCst);
+                handler_tx.send(None).unwrap();
                 if handler_shutdown.load(Ordering::SeqCst) {
                     CFRunLoop::get_current().stop();
                 }
