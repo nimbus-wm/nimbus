@@ -62,7 +62,6 @@ pub struct Reactor {
     layout: LayoutManager,
     windows: HashMap<WindowId, WindowState>,
     main_screen: Option<Screen>,
-    frontmost_app: Option<pid_t>,
     global_frontmost_app_pid: Option<pid_t>,
     raise_token: RaiseToken,
 }
@@ -139,20 +138,9 @@ impl Reactor {
             layout,
             windows: HashMap::new(),
             main_screen: None,
-            frontmost_app: None,
             global_frontmost_app_pid: None,
             raise_token: RaiseToken::default(),
         }
-    }
-
-    /// The main window of the active app, if any.
-    fn main_window(&self) -> Option<WindowId> {
-        let Some(pid) = self.frontmost_app else { return None };
-        self.apps[&pid].main_window
-    }
-
-    fn main_screen_space(&self) -> Option<SpaceId> {
-        self.main_screen?.space
     }
 
     fn handle_event(&mut self, event: Event) {
@@ -162,64 +150,31 @@ impl Reactor {
         let mut is_resize = false;
         match event {
             Event::ApplicationLaunched(pid, state) => {
-                let is_frontmost = state.is_frontmost;
                 self.apps.insert(pid, state);
-                // See comment for ApplicationActivated below.
-                if is_frontmost && self.global_frontmost_app_pid == Some(pid) {
-                    self.frontmost_app = Some(pid);
-                }
             }
             Event::ApplicationTerminated(pid) => {
                 // FIXME: This isn't ordered wrt other events from the app;
                 // reroute the event through the app thread so it's the last
                 // event for this app.
                 self.apps.remove(&pid).unwrap();
-                if Some(pid) == self.frontmost_app {
-                    self.frontmost_app = None;
-                }
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
             Event::ApplicationActivated(pid, main_window) => {
                 let state = self.apps.get_mut(&pid).unwrap();
                 state.is_frontmost = true;
                 state.main_window = main_window;
-                // Because apps self-report this event from their respective
-                // threads, they can appear out of order. To mitigate this, we
-                // require that the "global" view from NSNotificationCenter
-                // agrees with the app about which is frontmost. This guarantees
-                // eventual consistency.
-                //
-                // Since the global events provide an authoritative ordering, why
-                // care about this event at all? The reason is that we want to
-                // know what the main window of the app is upon activation. This
-                // is important when the user clicks on a window of the app
-                // that was not previously the main window: The frontmost app
-                // and its main window can switch at the same time. In that case
-                // we don't want to record the old main window as having focus,
-                // since it never did. So we wait until both events are received.
-                if self.global_frontmost_app_pid == Some(pid) {
-                    self.frontmost_app = Some(pid);
-                }
             }
             Event::ApplicationGloballyActivated(pid) => {
-                // See above comment.
+                // See the comment in main_window() for the difference between
+                // this and the ApplicationActivated event.
                 self.global_frontmost_app_pid = Some(pid);
-                if self.apps.get(&pid).map(|a| a.is_frontmost).unwrap_or(false) {
-                    self.frontmost_app = Some(pid);
-                }
             }
             Event::ApplicationDeactivated(pid) => {
                 self.apps.get_mut(&pid).unwrap().is_frontmost = false;
-                if self.frontmost_app == Some(pid) {
-                    self.frontmost_app = None;
-                }
             }
             Event::ApplicationGloballyDeactivated(pid) => {
                 if self.global_frontmost_app_pid == Some(pid) {
                     self.global_frontmost_app_pid = None;
-                }
-                if self.frontmost_app == Some(pid) {
-                    self.frontmost_app = None;
                 }
             }
             Event::ApplicationMainWindowChanged(pid, main_window) => {
@@ -244,6 +199,7 @@ impl Reactor {
                     pid,
                     app_windows,
                 ));
+                // TODO: If we added the main window, send a layout event for it.
             }
             Event::WindowCreated(wid, window) => {
                 // Don't manage windows on other spaces.
@@ -356,6 +312,39 @@ impl Reactor {
             .unwrap();
     }
 
+    /// The main window of the active app, if any.
+    fn main_window(&self) -> Option<WindowId> {
+        // Because apps self-report this event from their respective
+        // threads, they can appear out of order. To mitigate this, we
+        // require that the "global" view from NSNotificationCenter
+        // agrees with the app about which is frontmost. This guarantees
+        // eventual consistency.
+        //
+        // Since the global events provide an authoritative ordering, why
+        // care about this event at all? The reason is that we want to
+        // know what the main window of the app is upon activation. This
+        // is important when the user clicks on a window of the app
+        // that was not previously the main window: The frontmost app
+        // and its main window can switch at the same time. In that case
+        // we don't want to record the old main window as having focus,
+        // since it never did. So we wait until both events are received.
+        let Some(pid) = self.global_frontmost_app_pid else {
+            return None;
+        };
+        match self.apps.get(&pid) {
+            Some(AppState {
+                is_frontmost: true,
+                main_window: Some(window),
+                ..
+            }) if self.windows.contains_key(window) => Some(*window),
+            _ => None,
+        }
+    }
+
+    fn main_screen_space(&self) -> Option<SpaceId> {
+        self.main_screen?.space
+    }
+
     #[instrument(skip(self), fields(?self.main_screen))]
     pub fn update_layout(&mut self, new_wid: Option<WindowId>, is_resize: bool) {
         let Some(main_screen) = self.main_screen else { return };
@@ -405,7 +394,10 @@ mod tests {
     use icrate::Foundation::{CGPoint, CGSize};
 
     use super::*;
-    use crate::{actor::app::Request, sys::window_server::WindowServerId};
+    use crate::{
+        actor::{app::Request, layout::LayoutManager},
+        sys::window_server::WindowServerId,
+    };
 
     impl Reactor {
         fn handle_events(&mut self, events: Vec<Event>) {
@@ -479,38 +471,45 @@ mod tests {
         use Event::*;
         let mut apps = Apps::new();
         let mut reactor = Reactor::new(LayoutManager::new());
+        let space = SpaceId::new(1);
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
-            vec![Some(SpaceId::new(1))],
+            vec![Some(space)],
         ));
+        assert_eq!(None, reactor.main_window());
 
-        reactor.handle_events(apps.make_app(1, make_windows(2)));
-        reactor.handle_events(apps.make_app(2, make_windows(2)));
-        assert_eq!(None, reactor.frontmost_app);
         reactor.handle_event(ApplicationGloballyActivated(1));
-        reactor.handle_event(ApplicationActivated(1, Some(WindowId::new(1, 1))));
-        assert_eq!(Some(1), reactor.frontmost_app);
+        reactor.handle_events(apps.make_app_with_opts(
+            1,
+            make_windows(2),
+            Some(WindowId::new(1, 1)),
+            true,
+        ));
+        reactor.handle_events(apps.make_app(2, make_windows(2)));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
+        assert_eq!(
+            reactor.layout.selected_window(space),
+            Some(WindowId::new(1, 1))
+        );
         reactor.handle_event(ApplicationGloballyDeactivated(1));
-        assert_eq!(None, reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
         reactor.handle_event(ApplicationActivated(2, None));
         reactor.handle_event(ApplicationGloballyActivated(2));
-        assert_eq!(Some(2), reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
         reactor.handle_event(ApplicationMainWindowChanged(2, Some(WindowId::new(2, 2))));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
+        assert_eq!(
+            reactor.layout.selected_window(space),
+            Some(WindowId::new(2, 2))
+        );
         reactor.handle_event(ApplicationMainWindowChanged(1, Some(WindowId::new(1, 2))));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
         reactor.handle_event(ApplicationDeactivated(1));
-        assert_eq!(Some(2), reactor.frontmost_app);
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
         reactor.handle_event(ApplicationDeactivated(2));
-        assert_eq!(None, reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
 
         reactor.handle_event(ApplicationGloballyActivated(3));
-        assert_eq!(None, reactor.frontmost_app);
         assert_eq!(None, reactor.main_window());
 
         reactor.handle_events(apps.make_app_with_opts(
@@ -519,8 +518,11 @@ mod tests {
             Some(WindowId::new(3, 1)),
             true,
         ));
-        assert_eq!(Some(3), reactor.frontmost_app);
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
+        assert_eq!(
+            reactor.layout.selected_window(space),
+            Some(WindowId::new(3, 1))
+        );
     }
 
     #[derive(Default, PartialEq, Debug)]

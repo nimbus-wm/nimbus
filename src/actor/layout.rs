@@ -40,7 +40,7 @@ pub enum LayoutCommand {
     SaveAndExit(PathBuf),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LayoutEvent {
     WindowsOnScreenUpdated(SpaceId, pid_t, Vec<WindowId>),
     AppClosed(pid_t),
@@ -211,5 +211,13 @@ impl LayoutManager {
         }
         File::create(path)?.write_all(ron::ser::to_string(&self.tree).unwrap().as_bytes())?;
         Ok(())
+    }
+
+    // This seems a bit messy, but it's simpler and more robust to write some
+    // reactor tests as integration tests with this actor.
+    #[cfg(test)]
+    pub(super) fn selected_window(&mut self, space: SpaceId) -> Option<WindowId> {
+        let root = self.tree.space(space);
+        self.tree.selection(root).and_then(|node| self.tree.window_at(node))
     }
 }
