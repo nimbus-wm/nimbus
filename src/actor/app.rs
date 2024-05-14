@@ -413,6 +413,11 @@ impl State {
             }
             kAXMainWindowChangedNotification => {
                 let main = self.id(&elem).ok();
+                if main.is_none() {
+                    // I suspect we may hit this at some point (before receiving the
+                    // window created notification); it isn't handled correctly today.
+                    error!("Got MainWindowChanged on unknown window {elem:?}");
+                }
                 self.send_event(Event::ApplicationMainWindowChanged(self.pid, main));
             }
             kAXWindowCreatedNotification => {
