@@ -156,7 +156,7 @@ impl Reactor {
                 // FIXME: This isn't ordered wrt other events from the app;
                 // reroute the event through the app thread so it's the last
                 // event for this app.
-                self.apps.remove(&pid).unwrap();
+                self.apps.remove(&pid);
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
             Event::ApplicationActivated(pid, main_window) => {
