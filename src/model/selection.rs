@@ -96,71 +96,74 @@ mod tests {
     use crate::{
         actor::app::WindowId,
         model::{layout::LayoutKind, layout_tree::LayoutTree, Direction},
-        sys::screen::SpaceId,
     };
 
     #[test]
     fn it_moves_as_nodes_are_added_and_removed() {
         let mut tree = LayoutTree::new();
-        let root = tree.space(SpaceId::new(1));
-        let n1 = tree.add_window(root, WindowId::new(1, 1));
-        let n2 = tree.add_window(root, WindowId::new(1, 2));
-        let n3 = tree.add_window(root, WindowId::new(1, 3));
-        assert_eq!(tree.selection(root), Some(root));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let n1 = tree.add_window(layout, root, WindowId::new(1, 1));
+        let n2 = tree.add_window(layout, root, WindowId::new(1, 2));
+        let n3 = tree.add_window(layout, root, WindowId::new(1, 3));
+        assert_eq!(tree.selection(layout), Some(root));
         tree.select(n2);
-        assert_eq!(tree.selection(root), Some(n2));
+        assert_eq!(tree.selection(layout), Some(n2));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 2));
-        assert_eq!(tree.selection(root), Some(n3));
+        assert_eq!(tree.selection(layout), Some(n3));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 3));
-        assert_eq!(tree.selection(root), Some(n1));
+        assert_eq!(tree.selection(layout), Some(n1));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 1));
-        assert_eq!(tree.selection(root), Some(root));
+        assert_eq!(tree.selection(layout), Some(root));
     }
 
     #[test]
     fn remembers_nested_paths() {
         let mut tree = LayoutTree::new();
-        let root = tree.space(SpaceId::new(1));
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Horizontal);
-        let _b1 = tree.add_window(a2, WindowId::new(1, 2));
-        let b2 = tree.add_window(a2, WindowId::new(1, 3));
-        let _b3 = tree.add_window(a2, WindowId::new(1, 4));
-        let a3 = tree.add_window(root, WindowId::new(1, 5));
+        let _b1 = tree.add_window(layout, a2, WindowId::new(1, 2));
+        let b2 = tree.add_window(layout, a2, WindowId::new(1, 3));
+        let _b3 = tree.add_window(layout, a2, WindowId::new(1, 4));
+        let a3 = tree.add_window(layout, root, WindowId::new(1, 5));
 
         tree.select(b2);
-        assert_eq!(tree.selection(root), Some(b2));
+        assert_eq!(tree.selection(layout), Some(b2));
         tree.select(a1);
-        assert_eq!(tree.selection(root), Some(a1));
+        assert_eq!(tree.selection(layout), Some(a1));
         tree.select(a3);
-        assert_eq!(tree.selection(root), Some(a3));
+        assert_eq!(tree.selection(layout), Some(a3));
         tree.retain_windows(|&wid| wid != WindowId::new(1, 5));
-        assert_eq!(tree.selection(root), Some(b2));
+        assert_eq!(tree.selection(layout), Some(b2));
     }
 
     #[test]
     fn preserves_selection_after_move_within_parent() {
         let mut tree = LayoutTree::new();
-        let root = tree.space(SpaceId::new(1));
-        let _n1 = tree.add_window(root, WindowId::new(1, 1));
-        let n2 = tree.add_window(root, WindowId::new(1, 2));
-        let _n3 = tree.add_window(root, WindowId::new(1, 3));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let _n1 = tree.add_window(layout, root, WindowId::new(1, 1));
+        let n2 = tree.add_window(layout, root, WindowId::new(1, 2));
+        let _n3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(n2);
-        assert_eq!(tree.selection(root), Some(n2));
-        tree.move_node(n2, Direction::Left);
-        assert_eq!(tree.selection(root), Some(n2));
+        assert_eq!(tree.selection(layout), Some(n2));
+        tree.move_node(layout, n2, Direction::Left);
+        assert_eq!(tree.selection(layout), Some(n2));
     }
 
     #[test]
     fn allows_parent_selection() {
         let mut tree = LayoutTree::new();
-        let root = tree.space(SpaceId::new(1));
-        let _a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let _a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Horizontal);
-        let b1 = tree.add_window(a2, WindowId::new(1, 2));
+        let b1 = tree.add_window(layout, a2, WindowId::new(1, 2));
         tree.select(b1);
-        assert_eq!(tree.selection(root), Some(b1));
+        assert_eq!(tree.selection(layout), Some(b1));
         tree.select(a2);
-        assert_eq!(tree.selection(root), Some(a2));
+        assert_eq!(tree.selection(layout), Some(a2));
     }
 }

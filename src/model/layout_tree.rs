@@ -12,7 +12,6 @@ use super::{
 use crate::{
     actor::app::{pid_t, WindowId},
     model::tree::{NodeId, NodeMap, OwnedNode},
-    sys::screen::SpaceId,
 };
 
 /// The layout tree.
@@ -24,15 +23,14 @@ pub struct LayoutTree {
     tree: Tree<Components>,
     windows: slotmap::SecondaryMap<NodeId, WindowId>,
     window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
-    space_roots: HashMap<SpaceId, OwnedNode>,
-    root_spaces: HashMap<NodeId, SpaceId>,
+    layout_roots: slotmap::SlotMap<LayoutId, OwnedNode>,
 }
 
 pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
 
 #[derive(Serialize, Deserialize)]
 struct WindowNodeInfo {
-    space: SpaceId,
+    layout: LayoutId,
     node: NodeId,
 }
 
@@ -55,38 +53,39 @@ pub(super) enum TreeEvent {
     RemovedFromForest(NodeId),
 }
 
+slotmap::new_key_type! {
+    pub struct LayoutId;
+}
+
 impl LayoutTree {
     pub fn new() -> LayoutTree {
         LayoutTree {
             tree: Tree::with_observer(Components::default()),
             windows: Default::default(),
             window_nodes: Default::default(),
-            space_roots: Default::default(),
-            root_spaces: Default::default(),
+            layout_roots: Default::default(),
         }
     }
 
-    pub fn add_window(&mut self, parent: NodeId, wid: WindowId) -> NodeId {
-        let root = parent.ancestors(&self.tree.map).last().unwrap();
+    pub fn add_window(&mut self, layout: LayoutId, parent: NodeId, wid: WindowId) -> NodeId {
         let node = self.tree.mk_node().push_back(parent);
         self.windows.insert(node, wid);
-        let space = self.root_spaces[&root];
-        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { space, node });
+        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { layout, node });
         node
     }
 
     #[allow(dead_code)]
     pub fn add_windows_if_missing(
         &mut self,
-        space: SpaceId,
+        layout: LayoutId,
         parent: NodeId,
         wids: impl Iterator<Item = WindowId>,
     ) {
         self.tree.map.reserve(wids.size_hint().1.unwrap_or(0));
         self.windows.set_capacity(self.tree.map.capacity());
         for wid in wids {
-            if self.window_node(space, wid).is_none() {
-                self.add_window(parent, wid);
+            if self.window_node(layout, wid).is_none() {
+                self.add_window(layout, parent, wid);
             }
         }
     }
@@ -105,8 +104,15 @@ impl LayoutTree {
     }
 
     /// Adds and removes windows so that the set of windows in a space is exactly `wids`.
-    pub fn set_windows_for_app(&mut self, space: SpaceId, app: pid_t, mut desired: Vec<WindowId>) {
-        let root = self.space(space);
+    ///
+    /// For now, new windows are added directly to the root node.
+    pub fn set_windows_for_app(
+        &mut self,
+        layout: LayoutId,
+        app: pid_t,
+        mut desired: Vec<WindowId>,
+    ) {
+        let root = self.root(layout);
         let mut current = root
             .traverse_postorder(self.map())
             .filter_map(|node| self.window_at(node).map(|wid| (wid, node)))
@@ -125,17 +131,18 @@ impl LayoutTree {
                     current.next();
                 }
                 (Some(des), None) => {
-                    self.add_window(root, *des);
+                    self.add_window(layout, root, *des);
                     desired.next();
                 }
                 (Some(des), Some((cur, _))) if des < cur => {
-                    self.add_window(root, *des);
+                    self.add_window(layout, root, *des);
                     desired.next();
                 }
                 (_, Some((cur, node))) => {
                     node.detach(&mut self.tree).remove();
                     self.windows.remove(*node);
-                    self.window_nodes.get_mut(cur).unwrap().retain(|info| info.space != space);
+                    self.window_nodes.get_mut(cur).unwrap().retain(|info| info.layout != layout);
+                    // TODO: Remove from window_nodes if the window is not in any more layouts.
                     current.next();
                 }
                 (None, None) => break,
@@ -143,11 +150,11 @@ impl LayoutTree {
         }
     }
 
-    pub fn window_node(&self, space: SpaceId, wid: WindowId) -> Option<NodeId> {
+    pub fn window_node(&self, layout: LayoutId, wid: WindowId) -> Option<NodeId> {
         self.window_nodes
             .get(&wid)
             .into_iter()
-            .flat_map(|nodes| nodes.iter().filter(|info| info.space == space))
+            .flat_map(|nodes| nodes.iter().filter(|info| info.layout == layout))
             .next()
             .map(|info| info.node)
     }
@@ -168,21 +175,21 @@ impl LayoutTree {
     }
 
     // TODO: Remove Option
-    pub fn selection(&self, root: NodeId) -> Option<NodeId> {
-        Some(self.tree.data.selection.current_selection(root))
+    pub fn selection(&self, layout: LayoutId) -> Option<NodeId> {
+        Some(self.tree.data.selection.current_selection(self.root(layout)))
     }
 
-    pub fn ascend_selection(&mut self, root: NodeId) -> bool {
-        if let Some(parent) = self.selection(root).and_then(|n| n.parent(self.map())) {
+    pub fn ascend_selection(&mut self, layout: LayoutId) -> bool {
+        if let Some(parent) = self.selection(layout).and_then(|n| n.parent(self.map())) {
             self.select(parent);
             return true;
         }
         false
     }
 
-    pub fn descend_selection(&mut self, root: NodeId) -> bool {
+    pub fn descend_selection(&mut self, layout: LayoutId) -> bool {
         if let Some(child) = self
-            .selection(root)
+            .selection(layout)
             .and_then(|n| self.tree.data.selection.last_selection(self.map(), n))
         {
             self.select(child);
@@ -191,19 +198,20 @@ impl LayoutTree {
         false
     }
 
-    pub fn space(&mut self, space: SpaceId) -> NodeId {
-        self.space_roots
-            .entry(space)
-            .or_insert_with(|| {
-                let node = OwnedNode::new_root_in(&mut self.tree, "space_root");
-                self.root_spaces.insert(node.id(), space);
-                node
-            })
-            .id()
+    pub fn create_layout(&mut self) -> LayoutId {
+        let root = OwnedNode::new_root_in(&mut self.tree, "layout_root");
+        self.layout_roots.insert(root)
     }
 
-    pub fn calculate_layout(&self, root: NodeId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.tree.data.layout.get_sizes(&self.tree.map, &self.windows, root, frame)
+    pub fn root(&self, layout: LayoutId) -> NodeId {
+        self.layout_roots[layout].id()
+    }
+
+    pub fn calculate_layout(&self, layout: LayoutId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
+        self.tree
+            .data
+            .layout
+            .get_sizes(&self.tree.map, &self.windows, self.root(layout), frame)
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
@@ -242,14 +250,19 @@ impl LayoutTree {
         }
     }
 
-    pub fn move_node(&mut self, moving_node: NodeId, direction: Direction) -> bool {
+    pub fn move_node(
+        &mut self,
+        layout: LayoutId,
+        moving_node: NodeId,
+        direction: Direction,
+    ) -> bool {
         let map = &self.tree.map;
         let Some(old_parent) = moving_node.parent(map) else {
             return false;
         };
         let is_selection =
             self.tree.data.selection.local_selection(map, old_parent) == Some(moving_node);
-        self.move_node_inner(moving_node, direction);
+        self.move_node_inner(layout, moving_node, direction);
         if is_selection {
             for node in moving_node.ancestors(&self.tree.map).take_while(|&a| a != old_parent) {
                 self.tree.data.selection.select_locally(&self.tree.map, node);
@@ -258,7 +271,7 @@ impl LayoutTree {
         true
     }
 
-    fn move_node_inner(&mut self, moving_node: NodeId, direction: Direction) {
+    fn move_node_inner(&mut self, layout: LayoutId, moving_node: NodeId, direction: Direction) {
         /// Where to insert the node, along the direction we're moving.
         enum Destination {
             Ahead(NodeId),
@@ -308,7 +321,7 @@ impl LayoutTree {
                 // We went all the way to the root and couldn't move in the
                 // desired direction, so we'll make a new container level above it.
                 let old_root = moving_node.ancestors(map).last().unwrap();
-                self.nest_in_container(old_root, LayoutKind::from(direction.orientation()));
+                self.nest_in_container(layout, old_root, LayoutKind::from(direction.orientation()));
                 destination = Destination::Ahead(old_root);
             }
         }
@@ -344,7 +357,12 @@ impl LayoutTree {
         self.tree.data.layout.set_kind(node, kind);
     }
 
-    pub fn nest_in_container(&mut self, node: NodeId, kind: LayoutKind) -> NodeId {
+    pub fn nest_in_container(
+        &mut self,
+        layout: LayoutId,
+        node: NodeId,
+        kind: LayoutKind,
+    ) -> NodeId {
         let old_parent = node.parent(&self.tree.map);
         let parent = if node.prev_sibling(&self.tree.map).is_none()
             && node.next_sibling(&self.tree.map).is_none()
@@ -364,12 +382,9 @@ impl LayoutTree {
                 new_parent
             } else {
                 // New root.
-                let space = self.root_spaces[&node];
-                let space_root = self.space_roots.get_mut(&space).unwrap();
-                self.root_spaces.remove(&space_root.id());
-                space_root.replace(self.tree.mk_node()).push_back(space_root.id());
-                self.root_spaces.insert(space_root.id(), space);
-                space_root.id()
+                let layout_root = self.layout_roots.get_mut(layout).unwrap();
+                layout_root.replace(self.tree.mk_node()).push_back(layout_root.id());
+                layout_root.id()
             };
             self.tree.data.selection.select_locally(&self.tree.map, node);
             new_parent
@@ -464,12 +479,12 @@ impl LayoutTree {
         }
     }
 
-    pub fn print_tree(&self, root: NodeId) {
-        print!("{}", self.draw_tree(root))
+    pub fn print_tree(&self, layout: LayoutId) {
+        print!("{}", self.draw_tree(layout))
     }
 
-    pub fn draw_tree(&self, root: NodeId) -> String {
-        let tree = self.get_ascii_tree(root);
+    pub fn draw_tree(&self, layout: LayoutId) -> String {
+        let tree = self.get_ascii_tree(self.root(layout));
         let mut out = String::new();
         ascii_tree::write_tree(&mut out, &tree).unwrap();
         out
@@ -506,8 +521,10 @@ impl LayoutTree {
 
 impl Drop for LayoutTree {
     fn drop(&mut self) {
-        // It's okay to skip removing these, since we're dropping the map too.
-        mem::forget(self.space_roots.drain());
+        for (_, node) in self.layout_roots.drain() {
+            // It's okay to skip removing these, since we're dropping the map too.
+            mem::forget(node);
+        }
     }
 }
 
@@ -553,7 +570,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{actor::app::pid_t, model::LayoutTree, sys::screen::SpaceId};
+    use crate::{actor::app::pid_t, model::LayoutTree};
 
     fn w(pid: pid_t, idx: u32) -> WindowId {
         WindowId::new(pid, idx)
@@ -562,14 +579,14 @@ mod tests {
     #[test]
     fn set_windows_for_app() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, w(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, w(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let b1 = tree.add_window(a2, w(2, 1));
-        let b2 = tree.add_window(a2, w(2, 2));
-        let b3 = tree.add_window(a2, w(2, 3));
-        let a3 = tree.add_window(root, w(1, 3));
+        let b1 = tree.add_window(layout, a2, w(2, 1));
+        let b2 = tree.add_window(layout, a2, w(2, 2));
+        let b3 = tree.add_window(layout, a2, w(2, 3));
+        let a3 = tree.add_window(layout, root, w(1, 3));
 
         let get_windows = |tree: &LayoutTree| {
             root.traverse_postorder(tree.map())
@@ -581,7 +598,7 @@ mod tests {
             *get_windows(&tree)
         );
 
-        tree.set_windows_for_app(space, 2, vec![w(2, 1), w(2, 3)]);
+        tree.set_windows_for_app(layout, 2, vec![w(2, 1), w(2, 3)]);
         assert_eq!([w(1, 1), w(2, 1), w(2, 3), w(1, 3)], *get_windows(&tree));
         assert_eq!(Some(w(1, 1)), tree.window_at(a1));
         assert_eq!(Some(w(2, 1)), tree.window_at(b1));
@@ -589,12 +606,12 @@ mod tests {
         assert_eq!(Some(w(2, 3)), tree.window_at(b3));
         assert_eq!(Some(w(1, 3)), tree.window_at(a3));
 
-        tree.set_windows_for_app(space, 2, vec![]);
+        tree.set_windows_for_app(layout, 2, vec![]);
         assert_eq!([w(1, 1), w(1, 3)], *get_windows(&tree));
-        tree.set_windows_for_app(space, 1, vec![]);
+        tree.set_windows_for_app(layout, 1, vec![]);
         assert!(get_windows(&tree).is_empty());
 
-        tree.set_windows_for_app(space, 2, vec![w(2, 1), w(2, 3)]);
+        tree.set_windows_for_app(layout, 2, vec![w(2, 1), w(2, 3)]);
         assert_eq!([w(2, 1), w(2, 3)], *get_windows(&tree));
         assert_eq!(None, tree.window_at(a1));
         assert_eq!(None, tree.window_at(b1));
@@ -607,14 +624,14 @@ mod tests {
     #[test]
     fn traverse() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let b1 = tree.add_window(a2, WindowId::new(2, 1));
-        let b2 = tree.add_window(a2, WindowId::new(2, 2));
-        let b3 = tree.add_window(a2, WindowId::new(2, 3));
-        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        let b1 = tree.add_window(layout, a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(layout, a2, WindowId::new(2, 2));
+        let b3 = tree.add_window(layout, a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(b2);
 
         use Direction::*;
@@ -647,14 +664,14 @@ mod tests {
     #[test]
     fn traverse_nested_same_orientation() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Horizontal);
-        let b1 = tree.add_window(a2, WindowId::new(2, 1));
-        let b2 = tree.add_window(a2, WindowId::new(2, 2));
-        let b3 = tree.add_window(a2, WindowId::new(2, 3));
-        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        let b1 = tree.add_window(layout, a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(layout, a2, WindowId::new(2, 2));
+        let b3 = tree.add_window(layout, a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(b2);
 
         use Direction::*;
@@ -684,66 +701,66 @@ mod tests {
     #[test]
     fn move_node() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let b1 = tree.add_window(a2, WindowId::new(2, 1));
-        let b2 = tree.add_window(a2, WindowId::new(2, 2));
-        let b3 = tree.add_window(a2, WindowId::new(2, 3));
-        let a3 = tree.add_window(root, WindowId::new(1, 3));
+        let b1 = tree.add_window(layout, a2, WindowId::new(2, 1));
+        let b2 = tree.add_window(layout, a2, WindowId::new(2, 2));
+        let b3 = tree.add_window(layout, a2, WindowId::new(2, 3));
+        let a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(b2);
         tree.assert_children_are([a1, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
-        tree.move_node(b2, Direction::Left);
+        tree.move_node(layout, b2, Direction::Left);
         tree.assert_children_are([a1, b2, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
-        tree.move_node(b2, Direction::Left);
+        tree.move_node(layout, b2, Direction::Left);
         tree.assert_children_are([b2, a1, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
-        tree.move_node(a2, Direction::Left);
+        tree.move_node(layout, a2, Direction::Left);
         tree.assert_children_are([b2, a2, a1, a3], root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
         tree.select(a3);
-        tree.move_node(a3, Direction::Left);
+        tree.move_node(layout, a3, Direction::Left);
         tree.assert_children_are([b2, a2, a3, a1], root);
-        assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(layout));
 
-        tree.move_node(a3, Direction::Left);
+        tree.move_node(layout, a3, Direction::Left);
         tree.assert_children_are([b2, a2, a1], root);
         tree.assert_children_are([b1, b3, a3], a2);
-        assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(layout));
 
-        tree.move_node(a3, Direction::Right);
+        tree.move_node(layout, a3, Direction::Right);
         tree.assert_children_are([b2, a2, a3, a1], root);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(layout));
 
-        tree.move_node(b1, Direction::Down);
+        tree.move_node(layout, b1, Direction::Down);
         tree.assert_children_are([b3, b1], a2);
-        assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(layout));
 
-        tree.move_node(b1, Direction::Up);
+        tree.move_node(layout, b1, Direction::Up);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a3), tree.selection(root));
+        assert_eq!(Some(a3), tree.selection(layout));
 
-        tree.move_node(b1, Direction::Up);
-        let (old_root, root) = (root, tree.space(space));
+        tree.move_node(layout, b1, Direction::Up);
+        let (old_root, root) = (root, tree.root(layout));
         tree.assert_children_are([b1, old_root], root);
         tree.assert_children_are([b2, a2, a3, a1], old_root);
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
-        assert_eq!(Some(a3), tree.selection(root));
-        assert_eq!(Some(b1), tree.window_node(space, WindowId::new(2, 1)));
+        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(Some(b1), tree.window_node(layout, WindowId::new(2, 1)));
 
         // a2 is culled when its last child moves out of it.
-        tree.move_node(b3, Direction::Right);
+        tree.move_node(layout, b3, Direction::Right);
         tree.assert_children_are([b2, b3, a3, a1], old_root);
 
-        assert!(!tree.move_node(root, Direction::Right));
+        assert!(!tree.move_node(layout, root, Direction::Right));
     }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
@@ -767,53 +784,68 @@ mod tests {
     #[test]
     fn nest_in_container() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
 
         // Calling on only child updates the (root) parent.
-        assert_eq!(root, tree.nest_in_container(a1, LayoutKind::Vertical));
+        assert_eq!(
+            root,
+            tree.nest_in_container(layout, a1, LayoutKind::Vertical)
+        );
         assert_eq!(LayoutKind::Vertical, tree.tree.data.layout.kind(root));
 
-        let a2 = tree.add_window(root, WindowId::new(1, 2));
+        let a2 = tree.add_window(layout, root, WindowId::new(1, 2));
         tree.resize(a2, 0.10, Direction::Up);
-        let orig_frames = tree.calculate_layout(root, rect(0, 0, 1000, 1000));
+        let orig_frames = tree.calculate_layout(layout, rect(0, 0, 1000, 1000));
 
         // Calling on child with siblings creates a new parent.
         // To keep the naming scheme consistent, rename the node a1 to b1
         // once it's nested a level deeper.
         tree.select(a1);
-        let (b1, a1) = (a1, tree.nest_in_container(a1, LayoutKind::Horizontal));
+        let (b1, a1) = (
+            a1,
+            tree.nest_in_container(layout, a1, LayoutKind::Horizontal),
+        );
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a1);
-        assert_eq!(Some(b1), tree.selection(root));
+        assert_eq!(Some(b1), tree.selection(layout));
 
         tree.select(a2);
-        let (b2, a2) = (a2, tree.nest_in_container(a2, LayoutKind::Horizontal));
-        assert_eq!(Some(b2), tree.selection(root));
+        let (b2, a2) = (
+            a2,
+            tree.nest_in_container(layout, a2, LayoutKind::Horizontal),
+        );
+        assert_eq!(Some(b2), tree.selection(layout));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
         assert_frames_are(
             orig_frames,
-            tree.calculate_layout(root, rect(0, 0, 1000, 1000)),
+            tree.calculate_layout(layout, rect(0, 0, 1000, 1000)),
         );
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
         // Calling on only child updates the (non-root) parent.
-        assert_eq!(a2, tree.nest_in_container(b2, LayoutKind::Horizontal));
+        assert_eq!(
+            a2,
+            tree.nest_in_container(layout, b2, LayoutKind::Horizontal)
+        );
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
         // Calling on root works too.
-        let (old_root, root) = (root, tree.nest_in_container(root, LayoutKind::Vertical));
+        let (old_root, root) = (
+            root,
+            tree.nest_in_container(layout, root, LayoutKind::Vertical),
+        );
         tree.assert_children_are([old_root], root);
         tree.assert_children_are([a1, a2], old_root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
 
-        let a3 = tree.add_window(old_root, WindowId::new(1, 3));
+        let a3 = tree.add_window(layout, old_root, WindowId::new(1, 3));
         tree.assert_children_are([a1, a2, a3], old_root);
-        assert_eq!(Some(b2), tree.selection(root));
+        assert_eq!(Some(b2), tree.selection(layout));
     }
 
     #[test]
@@ -826,16 +858,16 @@ mod tests {
         // │     │ b3  │     │
         // └─────┴─────┴─────┘
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let _b1 = tree.add_window(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_container(a2, LayoutKind::Horizontal);
-        let _c1 = tree.add_window(b2, WindowId::new(3, 1));
-        let c2 = tree.add_window(b2, WindowId::new(3, 2));
-        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
-        let _a3 = tree.add_window(root, WindowId::new(1, 3));
+        let _c1 = tree.add_window(layout, b2, WindowId::new(3, 1));
+        let c2 = tree.add_window(layout, b2, WindowId::new(3, 2));
+        let _b3 = tree.add_window(layout, a2, WindowId::new(2, 3));
+        let _a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         let screen = rect(0, 0, 3000, 3000);
 
         let orig = vec![
@@ -846,14 +878,14 @@ mod tests {
             (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
             (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
         ];
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         // We may want to have a mode that adjusts sizes so that only the
         // requested edge is resized. Notice that the width is redistributed
         // between c1 and c2 here.
         tree.resize(c2, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
@@ -865,11 +897,11 @@ mod tests {
         );
 
         tree.resize(c2, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.resize(c2, 0.01, Direction::Left);
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1000, 1000)),
@@ -881,11 +913,11 @@ mod tests {
         );
 
         tree.resize(c2, -0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.resize(b2, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
                 (WindowId::new(2, 1), rect(1000, 0, 1030, 1000)),
@@ -897,11 +929,11 @@ mod tests {
         );
 
         tree.resize(b2, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.resize(a1, 0.01, Direction::Right);
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1030, 3000)),
                 (WindowId::new(2, 1), rect(1030, 0, 970, 1000)),
@@ -913,12 +945,12 @@ mod tests {
         );
 
         tree.resize(a1, -0.01, Direction::Right);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.resize(a1, 0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
         tree.resize(a1, -0.01, Direction::Left);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
     }
 
     #[test]
@@ -931,18 +963,18 @@ mod tests {
         // │     │ b3  │     │
         // └─────┴─────┴─────┘
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let _b1 = tree.add_window(a2, WindowId::new(2, 1));
+        let _b1 = tree.add_window(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_container(a2, LayoutKind::Horizontal);
-        let c1 = tree.add_window(b2, WindowId::new(3, 1));
-        let _c2 = tree.add_window(b2, WindowId::new(3, 2));
-        let _b3 = tree.add_window(a2, WindowId::new(2, 3));
-        let _a3 = tree.add_window(root, WindowId::new(1, 3));
+        let c1 = tree.add_window(layout, b2, WindowId::new(3, 1));
+        let _c2 = tree.add_window(layout, b2, WindowId::new(3, 2));
+        let _b3 = tree.add_window(layout, a2, WindowId::new(2, 3));
+        let _a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         let screen = rect(0, 0, 3000, 3000);
-        println!("{}", tree.draw_tree(root));
+        println!("{}", tree.draw_tree(layout));
 
         let orig = vec![
             (WindowId::new(1, 1), rect(0, 0, 1000, 3000)),
@@ -952,11 +984,11 @@ mod tests {
             (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
             (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
         ];
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.set_frame_from_resize(a1, rect(0, 0, 1000, 3000), rect(0, 0, 1010, 3000), screen);
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 1010, 3000)),
                 (WindowId::new(2, 1), rect(1010, 0, 990, 1000)),
@@ -968,7 +1000,7 @@ mod tests {
         );
 
         tree.set_frame_from_resize(a1, rect(0, 0, 1010, 3000), rect(0, 0, 1000, 3000), screen);
-        assert_frames_are(tree.calculate_layout(root, screen), orig.clone());
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.set_frame_from_resize(
             c1,
@@ -977,7 +1009,7 @@ mod tests {
             screen,
         );
         assert_frames_are(
-            tree.calculate_layout(root, screen),
+            tree.calculate_layout(layout, screen),
             [
                 (WindowId::new(1, 1), rect(0, 0, 900, 3000)),
                 (WindowId::new(2, 1), rect(900, 0, 1100, 900)),

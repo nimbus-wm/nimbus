@@ -269,7 +269,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{model::LayoutTree, sys::screen::SpaceId};
+    use crate::model::LayoutTree;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
         CGRect::new(
@@ -281,16 +281,16 @@ mod tests {
     #[test]
     fn it_lays_out_windows_proportionally() {
         let mut tree = LayoutTree::new();
-        let space = SpaceId::new(1);
-        let root = tree.space(space);
-        let _a1 = tree.add_window(root, WindowId::new(1, 1));
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let _a1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let _b1 = tree.add_window(a2, WindowId::new(1, 2));
-        let _b2 = tree.add_window(a2, WindowId::new(1, 3));
-        let _a3 = tree.add_window(root, WindowId::new(1, 4));
+        let _b1 = tree.add_window(layout, a2, WindowId::new(1, 2));
+        let _b2 = tree.add_window(layout, a2, WindowId::new(1, 3));
+        let _a3 = tree.add_window(layout, root, WindowId::new(1, 4));
 
         let screen = rect(0, 0, 3000, 1000);
-        let mut frames = tree.calculate_layout(root, screen);
+        let mut frames = tree.calculate_layout(layout, screen);
         frames.sort_by_key(|&(wid, _)| wid);
         assert_eq!(
             frames,
