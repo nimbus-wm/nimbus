@@ -8,4 +8,4 @@ mod tree;
 
 #[allow(unused_imports)]
 pub use layout::{Direction, LayoutKind, Orientation};
-pub use layout_tree::LayoutTree;
+pub use layout_tree::{LayoutId, LayoutTree};

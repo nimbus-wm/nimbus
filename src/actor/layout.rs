@@ -1,15 +1,17 @@
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
 };
 
 use icrate::Foundation::CGRect;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
 use crate::{
     actor::app::{pid_t, WindowId},
-    model::{Direction, LayoutKind, LayoutTree, Orientation},
+    model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation},
     sys::screen::SpaceId,
 };
 
@@ -18,8 +20,10 @@ use crate::{
 /// This actor receives commands and (cleaned up) events from the Reactor,
 /// converts them into layout operations, and calculates the desired position
 /// and size of each window.
+#[derive(Serialize, Deserialize)]
 pub struct LayoutManager {
     tree: LayoutTree,
+    spaces: HashMap<SpaceId, LayoutId>,
 }
 
 #[allow(dead_code)]
@@ -64,7 +68,10 @@ pub struct EventResponse {
 
 impl LayoutManager {
     pub fn new() -> Self {
-        LayoutManager { tree: LayoutTree::new() }
+        LayoutManager {
+            tree: LayoutTree::new(),
+            spaces: Default::default(),
+        }
     }
 
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
@@ -73,21 +80,23 @@ impl LayoutManager {
             LayoutEvent::WindowsOnScreenUpdated(space, pid, windows) => {
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
-                self.tree.set_windows_for_app(space, pid, windows);
+                let layout = self.layout(space);
+                self.tree.set_windows_for_app(layout, pid, windows);
             }
             LayoutEvent::AppClosed(pid) => {
                 self.tree.retain_windows(|w| w.pid != pid);
             }
             LayoutEvent::WindowAdded(space, wid) => {
-                let space = self.tree.space(space);
-                self.tree.add_window(space, wid);
+                let layout = self.layout(space);
+                self.tree.add_window(layout, self.tree.root(layout), wid);
             }
             LayoutEvent::WindowRemoved(wid) => {
                 self.tree.retain_windows(|&w| w != wid);
             }
             LayoutEvent::WindowRaised(space, wid) => {
                 if let Some(wid) = wid {
-                    if let Some(node) = self.tree.window_node(space, wid) {
+                    let layout = self.layout(space);
+                    if let Some(node) = self.tree.window_node(layout, wid) {
                         self.tree.select(node);
                     }
                 }
@@ -99,7 +108,8 @@ impl LayoutManager {
                 new_frame,
                 screen,
             } => {
-                if let Some(node) = self.tree.window_node(space, wid) {
+                let layout = self.layout(space);
+                if let Some(node) = self.tree.window_node(layout, wid) {
                     self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
                 }
             }
@@ -108,9 +118,9 @@ impl LayoutManager {
     }
 
     pub fn handle_command(&mut self, space: SpaceId, command: LayoutCommand) -> EventResponse {
-        let root = self.tree.space(space);
-        debug!("Tree:\n{}", self.tree.draw_tree(root).trim());
-        debug!(selection = ?self.tree.selection(root));
+        let layout = self.layout(space);
+        debug!("Tree:\n{}", self.tree.draw_tree(layout).trim());
+        debug!(selection = ?self.tree.selection(layout));
         match command {
             LayoutCommand::Shuffle => {
                 // TODO
@@ -128,7 +138,7 @@ impl LayoutManager {
             LayoutCommand::MoveFocus(direction) => {
                 let new = self
                     .tree
-                    .selection(root)
+                    .selection(layout)
                     .and_then(|cur| self.tree.traverse(cur, direction))
                     .and_then(|new| self.tree.window_at(new));
                 let Some(new) = new else {
@@ -137,28 +147,28 @@ impl LayoutManager {
                 EventResponse { raise_window: Some(new) }
             }
             LayoutCommand::Ascend => {
-                self.tree.ascend_selection(root);
+                self.tree.ascend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::Descend => {
-                self.tree.descend_selection(root);
+                self.tree.descend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
-                if let Some(selection) = self.tree.selection(root) {
-                    self.tree.move_node(selection, direction);
+                if let Some(selection) = self.tree.selection(layout) {
+                    self.tree.move_node(layout, selection, direction);
                 }
                 EventResponse::default()
             }
             LayoutCommand::Split(orientation) => {
-                if let Some(selection) = self.tree.selection(root) {
-                    self.tree.nest_in_container(selection, LayoutKind::from(orientation));
+                if let Some(selection) = self.tree.selection(layout) {
+                    self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
                 if let Some(parent) =
-                    self.tree.selection(root).and_then(|s| s.parent(self.tree.map()))
+                    self.tree.selection(layout).and_then(|s| s.parent(self.tree.map()))
                 {
                     self.tree.set_layout(parent, LayoutKind::group(orientation));
                 }
@@ -166,7 +176,7 @@ impl LayoutManager {
             }
             LayoutCommand::Ungroup => {
                 if let Some(parent) =
-                    self.tree.selection(root).and_then(|s| s.parent(self.tree.map()))
+                    self.tree.selection(layout).and_then(|s| s.parent(self.tree.map()))
                 {
                     if self.tree.layout(parent).is_group() {
                         self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
@@ -175,12 +185,11 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::Debug => {
-                let root = self.tree.space(space);
-                self.tree.print_tree(root);
+                self.tree.print_tree(layout);
                 EventResponse::default()
             }
             LayoutCommand::Serialize => {
-                println!("{}", ron::ser::to_string(&self.tree).unwrap());
+                println!("{}", self.serialize_to_string());
                 EventResponse::default()
             }
             LayoutCommand::SaveAndExit(path) => match self.save(path) {
@@ -194,30 +203,38 @@ impl LayoutManager {
     }
 
     pub fn calculate_layout(&mut self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
-        let space = self.tree.space(space);
+        let layout = self.layout(space);
         //debug!("{}", self.tree.draw_tree(space));
-        self.tree.calculate_layout(space, screen)
+        self.tree.calculate_layout(layout, screen)
+    }
+
+    fn layout(&mut self, space: SpaceId) -> LayoutId {
+        self.spaces.entry(space).or_insert_with(|| self.tree.create_layout()).clone()
     }
 
     pub fn load(path: PathBuf) -> anyhow::Result<Self> {
         let mut buf = String::new();
         File::open(path)?.read_to_string(&mut buf)?;
-        Ok(Self { tree: ron::from_str(&buf)? })
+        Ok(ron::from_str(&buf)?)
     }
 
     fn save(&self, path: PathBuf) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        File::create(path)?.write_all(ron::ser::to_string(&self.tree).unwrap().as_bytes())?;
+        File::create(path)?.write_all(self.serialize_to_string().as_bytes())?;
         Ok(())
+    }
+
+    fn serialize_to_string(&self) -> String {
+        ron::ser::to_string(&self).unwrap()
     }
 
     // This seems a bit messy, but it's simpler and more robust to write some
     // reactor tests as integration tests with this actor.
     #[cfg(test)]
     pub(super) fn selected_window(&mut self, space: SpaceId) -> Option<WindowId> {
-        let root = self.tree.space(space);
-        self.tree.selection(root).and_then(|node| self.tree.window_at(node))
+        let layout = self.layout(space);
+        self.tree.selection(layout).and_then(|node| self.tree.window_at(node))
     }
 }
