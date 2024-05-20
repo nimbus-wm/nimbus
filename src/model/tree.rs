@@ -454,36 +454,40 @@ impl<'a> Iterator for ChildRevIterator<'a> {
 }
 
 struct PostorderTraversal<'a> {
-    stack: Vec<NodeId>,
+    cur: Option<NodeId>,
+    top: NodeId,
     map: &'a NodeMap,
 }
 
 impl<'a> PostorderTraversal<'a> {
     fn new(map: &'a NodeMap, root: NodeId) -> Self {
-        let mut this = Self { stack: vec![root], map };
-        this.descend_left(root);
-        this
+        Self {
+            top: root,
+            cur: Some(Self::descend_left(root, map)),
+            map,
+        }
     }
 
-    fn descend_left(&mut self, mut parent: NodeId) {
-        while let Some(child) = parent.first_child(self.map) {
-            self.stack.push(child);
-            parent = child;
+    fn descend_left(mut node: NodeId, map: &'a NodeMap) -> NodeId {
+        while let Some(child) = node.first_child(map) {
+            node = child;
         }
+        node
     }
 }
 
 impl<'a> Iterator for PostorderTraversal<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(node) = self.stack.pop() else {
+        let Some(node) = self.cur else {
             return None;
         };
-        // Don't traverse right if this is the root node.
-        if !self.stack.is_empty() {
+        self.cur = None;
+        if node != self.top {
             if let Some(next) = node.next_sibling(self.map) {
-                self.stack.push(next);
-                self.descend_left(next);
+                self.cur = Some(Self::descend_left(next, self.map));
+            } else {
+                self.cur = node.parent(self.map);
             }
         }
         Some(node)
