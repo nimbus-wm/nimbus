@@ -138,8 +138,7 @@ impl LayoutManager {
             LayoutCommand::MoveFocus(direction) => {
                 let new = self
                     .tree
-                    .selection(layout)
-                    .and_then(|cur| self.tree.traverse(cur, direction))
+                    .traverse(self.tree.selection(layout), direction)
                     .and_then(|new| self.tree.window_at(new));
                 let Some(new) = new else {
                     return EventResponse::default();
@@ -155,29 +154,23 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
-                if let Some(selection) = self.tree.selection(layout) {
-                    self.tree.move_node(layout, selection, direction);
-                }
+                let selection = self.tree.selection(layout);
+                self.tree.move_node(layout, selection, direction);
                 EventResponse::default()
             }
             LayoutCommand::Split(orientation) => {
-                if let Some(selection) = self.tree.selection(layout) {
-                    self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
-                }
+                let selection = self.tree.selection(layout);
+                self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
-                if let Some(parent) =
-                    self.tree.selection(layout).and_then(|s| s.parent(self.tree.map()))
-                {
+                if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     self.tree.set_layout(parent, LayoutKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
-                if let Some(parent) =
-                    self.tree.selection(layout).and_then(|s| s.parent(self.tree.map()))
-                {
+                if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     if self.tree.layout(parent).is_group() {
                         self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
                     }
@@ -235,6 +228,6 @@ impl LayoutManager {
     #[cfg(test)]
     pub(super) fn selected_window(&mut self, space: SpaceId) -> Option<WindowId> {
         let layout = self.layout(space);
-        self.tree.selection(layout).and_then(|node| self.tree.window_at(node))
+        self.tree.window_at(self.tree.selection(layout))
     }
 }

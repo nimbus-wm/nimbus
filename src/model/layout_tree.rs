@@ -174,13 +174,12 @@ impl LayoutTree {
         self.tree.data.selection.select(&self.tree.map, selection)
     }
 
-    // TODO: Remove Option
-    pub fn selection(&self, layout: LayoutId) -> Option<NodeId> {
-        Some(self.tree.data.selection.current_selection(self.root(layout)))
+    pub fn selection(&self, layout: LayoutId) -> NodeId {
+        self.tree.data.selection.current_selection(self.root(layout))
     }
 
     pub fn ascend_selection(&mut self, layout: LayoutId) -> bool {
-        if let Some(parent) = self.selection(layout).and_then(|n| n.parent(self.map())) {
+        if let Some(parent) = self.selection(layout).parent(self.map()) {
             self.select(parent);
             return true;
         }
@@ -188,9 +187,8 @@ impl LayoutTree {
     }
 
     pub fn descend_selection(&mut self, layout: LayoutId) -> bool {
-        if let Some(child) = self
-            .selection(layout)
-            .and_then(|n| self.tree.data.selection.last_selection(self.map(), n))
+        if let Some(child) =
+            self.tree.data.selection.last_selection(self.map(), self.selection(layout))
         {
             self.select(child);
             return true;
@@ -711,49 +709,49 @@ mod tests {
         let a3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(b2);
         tree.assert_children_are([a1, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         tree.move_node(layout, b2, Direction::Left);
         tree.assert_children_are([a1, b2, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         tree.move_node(layout, b2, Direction::Left);
         tree.assert_children_are([b2, a1, a2, a3], root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         tree.move_node(layout, a2, Direction::Left);
         tree.assert_children_are([b2, a2, a1, a3], root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         tree.select(a3);
         tree.move_node(layout, a3, Direction::Left);
         tree.assert_children_are([b2, a2, a3, a1], root);
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
 
         tree.move_node(layout, a3, Direction::Left);
         tree.assert_children_are([b2, a2, a1], root);
         tree.assert_children_are([b1, b3, a3], a2);
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
 
         tree.move_node(layout, a3, Direction::Right);
         tree.assert_children_are([b2, a2, a3, a1], root);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
 
         tree.move_node(layout, b1, Direction::Down);
         tree.assert_children_are([b3, b1], a2);
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
 
         tree.move_node(layout, b1, Direction::Up);
         tree.assert_children_are([b1, b3], a2);
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
 
         tree.move_node(layout, b1, Direction::Up);
         let (old_root, root) = (root, tree.root(layout));
         tree.assert_children_are([b1, old_root], root);
         tree.assert_children_are([b2, a2, a3, a1], old_root);
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
-        assert_eq!(Some(a3), tree.selection(layout));
+        assert_eq!(a3, tree.selection(layout));
         assert_eq!(Some(b1), tree.window_node(layout, WindowId::new(2, 1)));
 
         // a2 is culled when its last child moves out of it.
@@ -809,21 +807,21 @@ mod tests {
         );
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a1);
-        assert_eq!(Some(b1), tree.selection(layout));
+        assert_eq!(b1, tree.selection(layout));
 
         tree.select(a2);
         let (b2, a2) = (
             a2,
             tree.nest_in_container(layout, a2, LayoutKind::Horizontal),
         );
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
         assert_frames_are(
             orig_frames,
             tree.calculate_layout(layout, rect(0, 0, 1000, 1000)),
         );
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         // Calling on only child updates the (non-root) parent.
         assert_eq!(
@@ -832,7 +830,7 @@ mod tests {
         );
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         // Calling on root works too.
         let (old_root, root) = (
@@ -841,11 +839,11 @@ mod tests {
         );
         tree.assert_children_are([old_root], root);
         tree.assert_children_are([a1, a2], old_root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
 
         let a3 = tree.add_window(layout, old_root, WindowId::new(1, 3));
         tree.assert_children_are([a1, a2, a3], old_root);
-        assert_eq!(Some(b2), tree.selection(layout));
+        assert_eq!(b2, tree.selection(layout));
     }
 
     #[test]

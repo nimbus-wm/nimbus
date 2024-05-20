@@ -106,15 +106,15 @@ mod tests {
         let n1 = tree.add_window(layout, root, WindowId::new(1, 1));
         let n2 = tree.add_window(layout, root, WindowId::new(1, 2));
         let n3 = tree.add_window(layout, root, WindowId::new(1, 3));
-        assert_eq!(tree.selection(layout), Some(root));
+        assert_eq!(tree.selection(layout), root);
         tree.select(n2);
-        assert_eq!(tree.selection(layout), Some(n2));
+        assert_eq!(tree.selection(layout), n2);
         tree.retain_windows(|&wid| wid != WindowId::new(1, 2));
-        assert_eq!(tree.selection(layout), Some(n3));
+        assert_eq!(tree.selection(layout), n3);
         tree.retain_windows(|&wid| wid != WindowId::new(1, 3));
-        assert_eq!(tree.selection(layout), Some(n1));
+        assert_eq!(tree.selection(layout), n1);
         tree.retain_windows(|&wid| wid != WindowId::new(1, 1));
-        assert_eq!(tree.selection(layout), Some(root));
+        assert_eq!(tree.selection(layout), root);
     }
 
     #[test]
@@ -130,13 +130,13 @@ mod tests {
         let a3 = tree.add_window(layout, root, WindowId::new(1, 5));
 
         tree.select(b2);
-        assert_eq!(tree.selection(layout), Some(b2));
+        assert_eq!(tree.selection(layout), b2);
         tree.select(a1);
-        assert_eq!(tree.selection(layout), Some(a1));
+        assert_eq!(tree.selection(layout), a1);
         tree.select(a3);
-        assert_eq!(tree.selection(layout), Some(a3));
+        assert_eq!(tree.selection(layout), a3);
         tree.retain_windows(|&wid| wid != WindowId::new(1, 5));
-        assert_eq!(tree.selection(layout), Some(b2));
+        assert_eq!(tree.selection(layout), b2);
     }
 
     #[test]
@@ -148,9 +148,9 @@ mod tests {
         let n2 = tree.add_window(layout, root, WindowId::new(1, 2));
         let _n3 = tree.add_window(layout, root, WindowId::new(1, 3));
         tree.select(n2);
-        assert_eq!(tree.selection(layout), Some(n2));
+        assert_eq!(tree.selection(layout), n2);
         tree.move_node(layout, n2, Direction::Left);
-        assert_eq!(tree.selection(layout), Some(n2));
+        assert_eq!(tree.selection(layout), n2);
     }
 
     #[test]
@@ -162,8 +162,8 @@ mod tests {
         let a2 = tree.add_container(root, LayoutKind::Horizontal);
         let b1 = tree.add_window(layout, a2, WindowId::new(1, 2));
         tree.select(b1);
-        assert_eq!(tree.selection(layout), Some(b1));
+        assert_eq!(tree.selection(layout), b1);
         tree.select(a2);
-        assert_eq!(tree.selection(layout), Some(a2));
+        assert_eq!(tree.selection(layout), a2);
     }
 }
