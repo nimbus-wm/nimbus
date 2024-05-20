@@ -198,6 +198,25 @@ impl NodeId {
         })
     }
 
+    /// Creates a deep copy of the subtree rooted at this node.
+    ///
+    /// This method does not call observer events on the created nodes.
+    #[track_caller]
+    pub fn deep_copy<O: Observer>(self, tree: &mut Tree<O>) -> DetachedNode<O> {
+        let new_root = tree.mk_node().id;
+        let mut stack = vec![(self, new_root)];
+        let preorder = self.traverse_preorder(&tree.map).skip(1).collect::<Vec<_>>();
+        for old in preorder {
+            while old.parent(&tree.map) != stack.last().map(|(oldp, _newp)| *oldp) {
+                stack.pop();
+            }
+            let parent = stack.last().unwrap().1;
+            let new = tree.mk_node().push_back(parent);
+            stack.push((old, new));
+        }
+        DetachedNode { id: new_root, tree }
+    }
+
     #[track_caller]
     pub fn next_sibling(self, map: &NodeMap) -> Option<NodeId> {
         map[self].next_sibling
@@ -251,6 +270,10 @@ pub struct DetachedNode<'a, O> {
 }
 
 impl<'a, O: Observer> DetachedNode<'a, O> {
+    pub(super) fn make_root(self, name: &'static str) -> OwnedNode {
+        OwnedNode::own(self.id, name)
+    }
+
     #[track_caller]
     pub(super) fn push_back(mut self, parent: NodeId) -> NodeId {
         self.attach_with(parent, |this| {
@@ -536,6 +559,8 @@ impl<'a> Iterator for PreorderTraversal<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
     use super::*;
 
     /// A tree with the following structure:
@@ -726,6 +751,36 @@ mod tests {
             *traverse(t.root)
         );
         assert_eq!([t.child1], *traverse(t.child1));
+    }
+
+    #[test]
+    fn deep_copy() {
+        let mut t = TestTree::new();
+        {
+            let copied_root = t.root.deep_copy(&mut t.tree).id;
+            let orig_ids = t.root.traverse_preorder(&t.tree.map).collect::<Vec<_>>();
+            let copied_ids = copied_root.traverse_preorder(&t.tree.map).collect::<Vec<_>>();
+            assert_eq!(orig_ids.len(), copied_ids.len());
+            for (orig, copied) in iter::zip(orig_ids, copied_ids) {
+                assert_ne!(orig, copied, "deep_copy reused id {orig:?}");
+                assert_eq!(
+                    orig.parent(&t.tree.map).is_some(),
+                    copied.parent(&t.tree.map).is_some()
+                );
+                assert_eq!(
+                    orig.children(&t.tree.map).count(),
+                    copied.children(&t.tree.map).count()
+                );
+                assert_eq!(
+                    orig.ancestors(&t.tree.map).count(),
+                    copied.ancestors(&t.tree.map).count()
+                );
+            }
+        }
+        {
+            let copied = t.child1.deep_copy(&mut t.tree).id;
+            assert_eq!(0, copied.children(&t.tree.map).count());
+        }
     }
 
     #[test]
