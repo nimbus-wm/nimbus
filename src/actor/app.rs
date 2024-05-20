@@ -259,7 +259,19 @@ impl State {
     fn handle_request(&mut self, request: Request) -> Result<(), accessibility::Error> {
         match request {
             Request::GetVisibleWindows => {
-                let window_elems = self.app.windows()?;
+                let window_elems = match self.app.windows() {
+                    Ok(elems) => elems,
+                    Err(e) => {
+                        // Send an empty event so that any previously known
+                        // windows for this app are cleared.
+                        self.send_event(Event::WindowsDiscovered {
+                            pid: self.pid,
+                            new: Default::default(),
+                            known_visible: Default::default(),
+                        });
+                        return Err(e);
+                    }
+                };
                 let mut new = Vec::with_capacity(window_elems.len() as usize);
                 let mut known_visible = Vec::with_capacity(window_elems.len() as usize);
                 for elem in window_elems.iter() {
