@@ -168,6 +168,11 @@ impl NodeId {
         PostorderTraversal::new(map, self)
     }
 
+    #[track_caller]
+    pub fn traverse_preorder(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
+        PreorderTraversal::new(map, self)
+    }
+
     /// Returns an iterator over all ancestors of the current node, including itself.
     #[track_caller]
     pub fn ancestors(self, map: &NodeMap) -> impl Iterator<Item = NodeId> + '_ {
@@ -485,6 +490,46 @@ impl<'a> Iterator for PostorderTraversal<'a> {
     }
 }
 
+struct PreorderTraversal<'a> {
+    top: NodeId,
+    cur: Option<NodeId>,
+    map: &'a NodeMap,
+}
+
+impl<'a> PreorderTraversal<'a> {
+    fn new(map: &'a NodeMap, root: NodeId) -> Self {
+        Self {
+            top: root,
+            cur: Some(root),
+            map,
+        }
+    }
+}
+
+impl<'a> Iterator for PreorderTraversal<'a> {
+    type Item = NodeId;
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(node) = self.cur else {
+            return None;
+        };
+        if let Some(child) = node.first_child(self.map) {
+            self.cur = Some(child);
+        } else {
+            self.cur = None;
+            for ancestor in node.ancestors(self.map) {
+                if ancestor == self.top {
+                    break;
+                }
+                if let Some(sibling) = ancestor.next_sibling(self.map) {
+                    self.cur = Some(sibling);
+                    break;
+                }
+            }
+        }
+        Some(node)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,11 +703,22 @@ mod tests {
     }
 
     #[test]
-    fn traverse_preorder() {
+    fn traverse_postorder() {
         let t = TestTree::new();
         let traverse = |node: NodeId| node.traverse_postorder(&t.tree.map).collect::<Vec<_>>();
         assert_eq!(
             [t.child1, t.gc1, t.child2, t.child3, t.root],
+            *traverse(t.root)
+        );
+        assert_eq!([t.child1], *traverse(t.child1));
+    }
+
+    #[test]
+    fn traverse_preorder() {
+        let t = TestTree::new();
+        let traverse = |node: NodeId| node.traverse_preorder(&t.tree.map).collect::<Vec<_>>();
+        assert_eq!(
+            [t.root, t.child1, t.child2, t.gc1, t.child3],
             *traverse(t.root)
         );
         assert_eq!([t.child1], *traverse(t.child1));
