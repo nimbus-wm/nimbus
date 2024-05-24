@@ -6,7 +6,6 @@
 
 mod animation;
 
-pub use std::sync::mpsc::Sender;
 use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
@@ -20,6 +19,8 @@ use crate::{
     sys::screen::SpaceId,
 };
 use animation::Animation;
+
+pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 
 #[derive(Debug)]
 pub enum Event {
@@ -119,7 +120,7 @@ impl From<WindowInfo> for WindowState {
 }
 
 impl Reactor {
-    pub fn spawn(layout: LayoutManager) -> Sender<(Span, Event)> {
+    pub fn spawn(layout: LayoutManager) -> Sender {
         let (events_tx, events) = sync::mpsc::channel::<(Span, Event)>();
         thread::spawn(move || {
             let mut this = Reactor::new(layout);

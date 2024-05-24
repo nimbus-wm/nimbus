@@ -8,3 +8,4 @@ pub mod app;
 pub mod layout;
 pub mod notification_center;
 pub mod reactor;
+pub mod wm_controller;

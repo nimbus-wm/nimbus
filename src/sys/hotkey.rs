@@ -1,16 +1,16 @@
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
-use tracing::{info_span, Span};
+use tracing::info_span;
 
 use crate::actor::reactor::{Command, Event, Sender};
 
 pub struct HotkeyManager {
     hook: Hook,
-    events_tx: Sender<(Span, Event)>,
+    events_tx: Sender,
 }
 
 impl HotkeyManager {
-    pub fn new(events_tx: Sender<(Span, Event)>) -> Self {
+    pub fn new(events_tx: Sender) -> Self {
         let hook = Hook::with_consume_preference(ConsumePreference::MustConsume).unwrap();
         HotkeyManager { hook, events_tx }
     }

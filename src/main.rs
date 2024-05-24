@@ -3,20 +3,17 @@ mod metrics;
 mod model;
 mod sys;
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use actor::layout::{LayoutCommand, LayoutManager};
-use actor::reactor::{Command, Event, Reactor, Sender};
+use actor::layout::LayoutManager;
+use actor::reactor::Reactor;
+use actor::wm_controller::{self, WmController, WmEvent};
 use clap::Parser;
-use metrics::MetricsCommand;
-use model::Direction;
-use sys::hotkey::{HotkeyManager, KeyCode, Modifiers};
 
-use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_tree::time::UtcDateTime;
-
-use crate::model::Orientation;
 
 #[derive(Parser)]
 struct Cli {
@@ -61,98 +58,27 @@ fn main() {
     };
     let events_tx = Reactor::spawn(layout);
 
-    // TODO: This should probably go in another actor.
+    let config = wm_controller::Config {
+        one_space: opt.one,
+        restore_file: restore_file(),
+    };
+    let wm_controller = WmController::new(config, events_tx);
+    let wm_controller = Rc::new(RefCell::new(wm_controller));
+
     let app_spawn_cb = {
-        let events_tx = events_tx.clone();
-        move |pid, app_info| actor::app::spawn_app_thread(pid, app_info, events_tx.clone())
+        let wm_controller = wm_controller.clone();
+        move |pid, info| wm_controller.borrow_mut().handle_event(WmEvent::AppLaunch(pid, info))
     };
     let event_cb = {
-        let send_event = {
-            let events_tx = events_tx.clone();
-            move |event| {
-                _ = events_tx.send((Span::current().clone(), event));
-            }
-        };
-        let events_tx = events_tx.clone();
-        let mut starting_space = None;
-        let mut _manager = None;
-        if !opt.one {
-            _manager = Some(register_hotkeys(events_tx.clone()));
-        }
-        move |mut event| {
-            match &mut event {
-                Event::SpaceChanged(spaces) | Event::ScreenParametersChanged(_, spaces)
-                    if opt.one =>
-                {
-                    if let Some(&Some(space)) = spaces.first() {
-                        if starting_space.is_none() {
-                            starting_space = Some(space);
-                        }
-                        if Some(space) == starting_space {
-                            _manager = Some(register_hotkeys(events_tx.clone()));
-                        } else {
-                            _manager = None;
-                        }
-                    }
-                    for space in spaces {
-                        if *space != starting_space {
-                            *space = None;
-                        }
-                    }
-                }
-                _ => (),
-            }
-            send_event(event);
-        }
+        let wm_controller = wm_controller.clone();
+        move |event| wm_controller.borrow_mut().handle_event(WmEvent::ReactorEvent(event))
     };
     let handler = actor::notification_center::NotificationHandler::new(
         Box::new(app_spawn_cb),
         Box::new(event_cb),
     );
-    actor::app::spawn_initial_app_threads(events_tx);
+    wm_controller.borrow_mut().handle_event(WmEvent::AppEventsRegistered);
     handler.watch_for_notifications()
-}
-
-fn register_hotkeys(events_tx: Sender<(Span, Event)>) -> HotkeyManager {
-    const ALT: Modifiers = Modifiers::ALT;
-    const SHIFT: Modifiers = Modifiers::SHIFT;
-    use KeyCode::*;
-
-    use Direction::*;
-    use LayoutCommand::*;
-    use MetricsCommand::*;
-
-    let mgr = HotkeyManager::new(events_tx);
-    mgr.register(ALT, KeyW, Command::Hello);
-    //mgr.register(ALT, KeyS, Command::Layout(Shuffle));
-    mgr.register(ALT, KeyA, Command::Layout(Ascend));
-    mgr.register(ALT, KeyD, Command::Layout(Descend));
-    mgr.register(ALT, KeyH, Command::Layout(MoveFocus(Left)));
-    mgr.register(ALT, KeyJ, Command::Layout(MoveFocus(Down)));
-    mgr.register(ALT, KeyK, Command::Layout(MoveFocus(Up)));
-    mgr.register(ALT, KeyL, Command::Layout(MoveFocus(Right)));
-    mgr.register(ALT | SHIFT, KeyH, Command::Layout(MoveNode(Left)));
-    mgr.register(ALT | SHIFT, KeyJ, Command::Layout(MoveNode(Down)));
-    mgr.register(ALT | SHIFT, KeyK, Command::Layout(MoveNode(Up)));
-    mgr.register(ALT | SHIFT, KeyL, Command::Layout(MoveNode(Right)));
-    mgr.register(ALT, Equal, Command::Layout(Split(Orientation::Vertical)));
-    mgr.register(
-        ALT,
-        Backslash,
-        Command::Layout(Split(Orientation::Horizontal)),
-    );
-    mgr.register(ALT, KeyS, Command::Layout(Group(Orientation::Vertical)));
-    mgr.register(ALT, KeyT, Command::Layout(Group(Orientation::Horizontal)));
-    mgr.register(ALT, KeyE, Command::Layout(Ungroup));
-    mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
-    mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));
-    mgr.register(ALT | SHIFT, KeyS, Command::Layout(Serialize));
-    mgr.register(
-        ALT | SHIFT,
-        KeyE,
-        Command::Layout(SaveAndExit(restore_file())),
-    );
-    mgr
 }
 
 fn config_dir() -> PathBuf {
