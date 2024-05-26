@@ -1,6 +1,7 @@
 //! Utilities for interfacing with OS-specific APIs.
 
 pub mod app;
+pub mod executor;
 pub mod geometry;
 pub mod hotkey;
 pub mod observer;
