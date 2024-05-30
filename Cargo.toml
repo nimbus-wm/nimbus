@@ -44,6 +44,7 @@ ron = "0.8.1"
 serde = { version = "1.0.201", features = ["derive"] }
 slotmap = { version = "1.0.7", features = ["serde"] }
 static_assertions = "1.1.0"
+tokio = { version = "1.35.1", features = ["macros", "sync"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 tracing-timing = { version = "0.6.0", features = ["layer"] }

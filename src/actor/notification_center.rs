@@ -1,10 +1,8 @@
 //! This actor manages the global notification queue, which tells us when an
 //! application is launched or focused or the screen state changes.
 
-use std::{cell::RefCell, mem};
+use std::{cell::RefCell, future, mem};
 
-use accessibility_sys::pid_t;
-use core_foundation::runloop::CFRunLoop;
 use icrate::{
     objc2::{
         declare_class, msg_send_id, mutability,
@@ -14,18 +12,19 @@ use icrate::{
     AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
     Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
 };
-use tracing::{info_span, trace, warn};
+use tracing::{info_span, trace, warn, Span};
 
 use crate::{
     actor::app::AppInfo, actor::reactor::Event, sys::app::NSRunningApplicationExt,
     sys::screen::ScreenCache,
 };
 
+use super::wm_controller::{self, WmEvent};
+
 #[repr(C)]
 struct Instance {
     screen_cache: RefCell<ScreenCache>,
-    app_launch_cb: RefCell<Box<dyn FnMut(pid_t, AppInfo)>>,
-    event_cb: RefCell<Box<dyn FnMut(Event)>>,
+    events_tx: wm_controller::Sender,
 }
 
 unsafe impl Encode for Instance {
@@ -33,24 +32,24 @@ unsafe impl Encode for Instance {
 }
 
 declare_class! {
-    struct NotificationHandlerInner;
+    struct NotificationCenterInner;
 
     // SAFETY:
     // - The superclass NSObject does not have any subclassing requirements.
     // - Interior mutability is a safe default.
     // - `NotificationHandler` does not implement `Drop`.
-    unsafe impl ClassType for NotificationHandlerInner {
+    unsafe impl ClassType for NotificationCenterInner {
         type Super = NSObject;
         type Mutability = mutability::InteriorMutable;
         const NAME: &'static str = "NotificationHandler";
     }
 
-    impl DeclaredClass for NotificationHandlerInner {
+    impl DeclaredClass for NotificationCenterInner {
         type Ivars = Box<Instance>;
     }
 
     // SAFETY: Each of these method signatures must match their invocations.
-    unsafe impl NotificationHandlerInner {
+    unsafe impl NotificationCenterInner {
         #[method_id(initWith:)]
         fn init(this: Allocated<Self>, instance: Instance) -> Option<Id<Self>> {
             let this = this.set_ivars(Box::new(instance));
@@ -71,15 +70,11 @@ declare_class! {
     }
 }
 
-impl NotificationHandlerInner {
-    fn new(
-        app_launch_cb: Box<dyn FnMut(pid_t, AppInfo)>,
-        event_cb: Box<dyn FnMut(Event)>,
-    ) -> Id<Self> {
+impl NotificationCenterInner {
+    fn new(events_tx: wm_controller::Sender) -> Id<Self> {
         let instance = Instance {
             screen_cache: RefCell::new(ScreenCache::new(MainThreadMarker::new().unwrap())),
-            app_launch_cb: RefCell::new(app_launch_cb),
-            event_cb: RefCell::new(event_cb),
+            events_tx,
         };
         unsafe { msg_send_id![Self::alloc(), initWith: instance] }
     }
@@ -120,7 +115,7 @@ impl NotificationHandlerInner {
         let span = info_span!("notification_center::handle_app_event", ?name);
         let _guard = span.enter();
         if unsafe { NSWorkspaceDidLaunchApplicationNotification } == name {
-            (self.ivars().app_launch_cb.borrow_mut())(pid, AppInfo::from(&*app));
+            self.send_wm_event(WmEvent::AppLaunch(pid, AppInfo::from(&*app)));
         } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
             self.send_event(Event::ApplicationGloballyActivated(pid));
         } else if unsafe { NSWorkspaceDidDeactivateApplicationNotification } == name {
@@ -134,8 +129,13 @@ impl NotificationHandlerInner {
         }
     }
 
+    fn send_wm_event(&self, event: WmEvent) {
+        // Errors only happen during shutdown, so we can ignore them.
+        _ = self.ivars().events_tx.send((Span::current().clone(), event));
+    }
+
     fn send_event(&self, event: Event) {
-        (self.ivars().event_cb.borrow_mut())(event);
+        self.send_wm_event(WmEvent::ReactorEvent(event))
     }
 
     fn running_application(&self, notif: &NSNotification) -> Option<Id<NSRunningApplication>> {
@@ -155,17 +155,14 @@ impl NotificationHandlerInner {
     }
 }
 
-pub struct NotificationHandler {
+pub struct NotificationCenter {
     #[allow(dead_code)]
-    inner: Id<NotificationHandlerInner>,
+    inner: Id<NotificationCenterInner>,
 }
 
-impl NotificationHandler {
-    pub fn new(
-        app_launch_cb: Box<dyn FnMut(pid_t, AppInfo)>,
-        event_cb: Box<dyn FnMut(Event)>,
-    ) -> Self {
-        let handler = NotificationHandlerInner::new(app_launch_cb, event_cb);
+impl NotificationCenter {
+    pub fn new(events_tx: wm_controller::Sender) -> Self {
+        let handler = NotificationCenterInner::new(events_tx);
 
         // SAFETY: Selector must have signature fn(&self, &NSNotification)
         let register_unsafe = |selector, notif_name, center: &Id<NSNotificationCenter>, object| unsafe {
@@ -221,16 +218,20 @@ impl NotificationHandler {
             );
         };
 
-        handler.send_screen_parameters();
-
-        if let Some(app) = unsafe { workspace.frontmostApplication() } {
-            handler.send_event(Event::ApplicationGloballyActivated(app.pid()));
-        }
-
-        NotificationHandler { inner: handler }
+        NotificationCenter { inner: handler }
     }
 
-    pub fn watch_for_notifications(&self) {
-        CFRunLoop::run_current();
+    pub async fn watch_for_notifications(self) {
+        let workspace = &unsafe { NSWorkspace::sharedWorkspace() };
+
+        self.inner.send_screen_parameters();
+        self.inner.send_wm_event(WmEvent::AppEventsRegistered);
+        if let Some(app) = unsafe { workspace.frontmostApplication() } {
+            self.inner.send_event(Event::ApplicationGloballyActivated(app.pid()));
+        }
+
+        // All the work is done in callbacks dispatched by the run loop, which
+        // we assume is running once this function is awaited.
+        future::pending().await
     }
 }

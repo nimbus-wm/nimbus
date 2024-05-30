@@ -2,20 +2,32 @@
 //! window manager on certain spaces and launching app threads. It also
 //! controls hotkey registration.
 
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use accessibility_sys::pid_t;
-use tracing::Span;
+use tracing::{debug, instrument, Span};
+
+pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
+type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
+type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use crate::{
     actor::{self, app::AppInfo, reactor},
     sys::{hotkey::HotkeyManager, screen::SpaceId},
 };
 
+#[derive(Debug)]
 pub enum WmEvent {
     AppEventsRegistered,
     AppLaunch(pid_t, AppInfo),
     ReactorEvent(reactor::Event),
+    Command(WmCommand),
+}
+
+#[derive(Debug, Clone)]
+pub enum WmCommand {
+    ToggleSpaceActivated,
+    ReactorCommand(reactor::Command),
 }
 
 pub struct Config {
@@ -26,42 +38,84 @@ pub struct Config {
 pub struct WmController {
     config: Config,
     events_tx: reactor::Sender,
+    receiver: Receiver,
+    sender: WeakSender,
     starting_space: Option<SpaceId>,
+    cur_space: Vec<Option<SpaceId>>,
+    disabled_spaces: HashSet<SpaceId>,
     hotkeys: Option<HotkeyManager>,
 }
 
 impl WmController {
-    pub fn new(config: Config, events_tx: reactor::Sender) -> Self {
-        Self {
+    pub fn new(config: Config, events_tx: reactor::Sender) -> (Self, Sender) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let this = Self {
             config,
             events_tx,
+            receiver,
+            sender: sender.downgrade(),
             starting_space: None,
+            cur_space: Vec::new(),
+            disabled_spaces: HashSet::new(),
             hotkeys: None,
+        };
+        (this, sender)
+    }
+
+    pub async fn run(mut self) {
+        while let Some((span, event)) = self.receiver.recv().await {
+            let _guard = span.enter();
+            self.handle_event(event);
         }
     }
 
+    #[instrument(skip(self))]
     pub fn handle_event(&mut self, event: WmEvent) {
-        use reactor::Event::*;
-        use WmEvent::*;
+        debug!("handle_event");
+        use self::WmCommand::*;
+        use self::WmEvent::*;
+        use reactor::Event;
         match event {
-            AppEventsRegistered => actor::app::spawn_initial_app_threads(self.events_tx.clone()),
-            AppLaunch(pid, info) => actor::app::spawn_app_thread(pid, info, self.events_tx.clone()),
+            AppEventsRegistered => {
+                actor::app::spawn_initial_app_threads(self.events_tx.clone());
+            }
+            AppLaunch(pid, info) => {
+                actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
+            }
             ReactorEvent(mut event) => {
-                if let SpaceChanged(spaces) | ScreenParametersChanged(_, spaces) = &mut event {
+                if let Event::SpaceChanged(spaces) | Event::ScreenParametersChanged(_, spaces) =
+                    &mut event
+                {
                     self.handle_space_changed(spaces);
                     self.apply_space_activation(spaces);
                 }
                 self.send_event(event);
             }
+            Command(ToggleSpaceActivated) => {
+                for space in &self.cur_space {
+                    let Some(space) = space else { return };
+                    if !self.disabled_spaces.remove(space) {
+                        self.disabled_spaces.insert(*space);
+                    }
+                }
+                let mut spaces = self.cur_space.clone();
+                self.apply_space_activation(&mut spaces);
+                self.send_event(Event::SpaceChanged(spaces));
+            }
+            Command(ReactorCommand(cmd)) => {
+                self.send_event(Event::Command(cmd));
+            }
         }
     }
 
     fn handle_space_changed(&mut self, spaces: &[Option<SpaceId>]) {
-        if self.config.one_space {
+        self.cur_space = spaces.iter().copied().collect();
+        let Some(&Some(space)) = spaces.first() else { return };
+        if self.starting_space.is_none() {
+            self.starting_space = Some(space);
+            self.register_hotkeys();
+        } else if self.config.one_space {
             let Some(&Some(space)) = spaces.first() else { return };
-            if self.starting_space.is_none() {
-                self.starting_space = Some(space);
-            }
             if Some(space) == self.starting_space {
                 self.register_hotkeys();
             } else {
@@ -71,11 +125,11 @@ impl WmController {
     }
 
     fn apply_space_activation(&self, spaces: &mut [Option<SpaceId>]) {
-        if self.config.one_space {
-            for space in spaces {
-                if *space != self.starting_space {
-                    *space = None;
-                }
+        for space in spaces {
+            match space {
+                Some(_) if self.config.one_space && *space != self.starting_space => *space = None,
+                Some(sp) if self.disabled_spaces.contains(sp) => *space = None,
+                _ => (),
             }
         }
     }
@@ -85,6 +139,7 @@ impl WmController {
     }
 
     fn register_hotkeys(&mut self) {
+        debug!("register_hotkeys");
         use crate::metrics::MetricsCommand::*;
         use crate::model::Direction::*;
         use crate::model::Orientation;
@@ -96,7 +151,7 @@ impl WmController {
         const ALT: Modifiers = Modifiers::ALT;
         const SHIFT: Modifiers = Modifiers::SHIFT;
 
-        let mgr = HotkeyManager::new(self.events_tx.clone());
+        let mgr = HotkeyManager::new(self.sender.upgrade().unwrap());
         mgr.register(ALT, KeyW, Command::Hello);
         //mgr.register(ALT, KeyS, Command::Layout(Shuffle));
         mgr.register(ALT, KeyA, Command::Layout(Ascend));
@@ -126,11 +181,13 @@ impl WmController {
             KeyE,
             Command::Layout(SaveAndExit(self.config.restore_file.clone())),
         );
+        mgr.register_wm(ALT, KeyZ, WmCommand::ToggleSpaceActivated);
 
         self.hotkeys = Some(mgr);
     }
 
     fn unregister_hotkeys(&mut self) {
+        debug!("unregister_hotkeys");
         self.hotkeys = None;
     }
 }

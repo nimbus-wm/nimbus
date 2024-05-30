@@ -3,15 +3,16 @@ mod metrics;
 mod model;
 mod sys;
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use actor::layout::LayoutManager;
+use actor::notification_center::NotificationCenter;
 use actor::reactor::Reactor;
-use actor::wm_controller::{self, WmController, WmEvent};
+use actor::wm_controller::{self, WmController};
 use clap::Parser;
 
+use sys::executor::Executor;
+use tokio::join;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_tree::time::UtcDateTime;
 
@@ -62,23 +63,15 @@ fn main() {
         one_space: opt.one,
         restore_file: restore_file(),
     };
-    let wm_controller = WmController::new(config, events_tx);
-    let wm_controller = Rc::new(RefCell::new(wm_controller));
+    let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx);
+    let notification_center = NotificationCenter::new(wm_controller_sender);
 
-    let app_spawn_cb = {
-        let wm_controller = wm_controller.clone();
-        move |pid, info| wm_controller.borrow_mut().handle_event(WmEvent::AppLaunch(pid, info))
-    };
-    let event_cb = {
-        let wm_controller = wm_controller.clone();
-        move |event| wm_controller.borrow_mut().handle_event(WmEvent::ReactorEvent(event))
-    };
-    let handler = actor::notification_center::NotificationHandler::new(
-        Box::new(app_spawn_cb),
-        Box::new(event_cb),
-    );
-    wm_controller.borrow_mut().handle_event(WmEvent::AppEventsRegistered);
-    handler.watch_for_notifications()
+    Executor::run(async move {
+        join!(
+            wm_controller.run(),
+            notification_center.watch_for_notifications()
+        );
+    });
 }
 
 fn config_dir() -> PathBuf {
