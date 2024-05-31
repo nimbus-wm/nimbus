@@ -110,7 +110,7 @@ impl Direction {
 // for the proportionate case, but it feels more like we are distributing the
 // complexity rather than reducing it.
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 struct LayoutInfo {
     /// The share of the parent's size taken up by this node; 1.0 by default.
     size: f32,
@@ -132,6 +132,9 @@ impl Layout {
                 let parent = node.parent(map).unwrap();
                 self.info[node].size = 1.0;
                 self.info[parent].total += 1.0;
+            }
+            TreeEvent::Copied { src, dest } => {
+                self.info.insert(dest, self.info[src].clone());
             }
             TreeEvent::RemovingFromParent(node) => {
                 self.info[node.parent(map).unwrap()].total -= self.info[node].size;

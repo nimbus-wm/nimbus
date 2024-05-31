@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use icrate::Foundation::CGRect;
+use icrate::Foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
@@ -23,7 +23,23 @@ use crate::{
 #[derive(Serialize, Deserialize)]
 pub struct LayoutManager {
     tree: LayoutTree,
-    spaces: HashMap<SpaceId, LayoutId>,
+    active_layouts: HashMap<SpaceId, LayoutId>,
+    space_configurations: HashMap<(SpaceId, Size), LayoutId>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+struct Size {
+    width: i32,
+    height: i32,
+}
+
+impl From<CGSize> for Size {
+    fn from(value: CGSize) -> Self {
+        Self {
+            width: value.width.round() as i32,
+            height: value.height.round() as i32,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -58,6 +74,7 @@ pub enum LayoutEvent {
         new_frame: CGRect,
         screen: CGRect,
     },
+    SpaceExposed(SpaceId, CGSize),
 }
 
 #[must_use]
@@ -70,13 +87,25 @@ impl LayoutManager {
     pub fn new() -> Self {
         LayoutManager {
             tree: LayoutTree::new(),
-            spaces: Default::default(),
+            active_layouts: Default::default(),
+            space_configurations: Default::default(),
         }
     }
 
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
         debug!(?event);
         match event {
+            LayoutEvent::SpaceExposed(space, size) => {
+                let layout =
+                    self.space_configurations.entry((space, size.into())).or_insert_with(|| {
+                        if let Some(&active) = self.active_layouts.get(&space) {
+                            self.tree.clone_layout(active)
+                        } else {
+                            self.tree.create_layout()
+                        }
+                    });
+                self.active_layouts.insert(space, *layout);
+            }
             LayoutEvent::WindowsOnScreenUpdated(space, pid, windows) => {
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
@@ -195,14 +224,14 @@ impl LayoutManager {
         }
     }
 
-    pub fn calculate_layout(&mut self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
+    pub fn calculate_layout(&self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
         let layout = self.layout(space);
         //debug!("{}", self.tree.draw_tree(space));
         self.tree.calculate_layout(layout, screen)
     }
 
-    fn layout(&mut self, space: SpaceId) -> LayoutId {
-        self.spaces.entry(space).or_insert_with(|| self.tree.create_layout()).clone()
+    fn layout(&self, space: SpaceId) -> LayoutId {
+        self.active_layouts[&space]
     }
 
     pub fn load(path: PathBuf) -> anyhow::Result<Self> {
@@ -229,5 +258,100 @@ impl LayoutManager {
     pub(super) fn selected_window(&mut self, space: SpaceId) -> Option<WindowId> {
         let layout = self.layout(space);
         self.tree.window_at(self.tree.selection(layout))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use icrate::Foundation::CGPoint;
+
+    use super::*;
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
+        CGRect::new(
+            CGPoint::new(x as f64, y as f64),
+            CGSize::new(w as f64, h as f64),
+        )
+    }
+
+    fn make_windows(pid: pid_t, num: u32) -> Vec<WindowId> {
+        (1..=num).map(|idx| WindowId::new(pid, idx)).collect()
+    }
+
+    impl LayoutManager {
+        fn layout_sorted(&self, space: SpaceId, screen: CGRect) -> Vec<(WindowId, CGRect)> {
+            let mut layout = self.calculate_layout(space, screen);
+            layout.sort_by_key(|(wid, _)| *wid);
+            layout
+        }
+    }
+
+    #[test]
+    fn it_maintains_separate_layouts_for_each_screen_size() {
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+
+        // Set up the starting layout.
+        let screen1 = rect(0, 0, 120, 120);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
+        _ = mgr.handle_event(WindowRaised(space, Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_command(space, LayoutCommand::MoveNode(Direction::Up));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 120, 60)),
+                (WindowId::new(pid, 2), rect(0, 60, 60, 60)),
+                (WindowId::new(pid, 3), rect(60, 60, 60, 60)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        // Introduce new screen size.
+        let screen2 = rect(0, 0, 1200, 1200);
+        _ = mgr.handle_event(SpaceExposed(space, screen2.size));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 1200, 600)),
+                (WindowId::new(pid, 2), rect(0, 600, 600, 600)),
+                (WindowId::new(pid, 3), rect(600, 600, 600, 600)),
+            ],
+            mgr.layout_sorted(space, screen2),
+            "layout was not correctly scaled to new screen size"
+        );
+
+        // Change tha layout for the second screen size.
+        _ = mgr.handle_command(space, LayoutCommand::MoveNode(Direction::Down));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 400, 1200)),
+                (WindowId::new(pid, 2), rect(400, 0, 400, 1200)),
+                (WindowId::new(pid, 3), rect(800, 0, 400, 1200)),
+            ],
+            mgr.layout_sorted(space, screen2),
+        );
+
+        // Switch back to the first size; the layout should be the same as before.
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 120, 60)),
+                (WindowId::new(pid, 2), rect(0, 60, 60, 60)),
+                (WindowId::new(pid, 3), rect(60, 60, 60, 60)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        // Switch back to the second size.
+        _ = mgr.handle_event(SpaceExposed(space, screen2.size));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 400, 1200)),
+                (WindowId::new(pid, 2), rect(400, 0, 400, 1200)),
+                (WindowId::new(pid, 3), rect(800, 0, 400, 1200)),
+            ],
+            mgr.layout_sorted(space, screen2),
+        );
     }
 }

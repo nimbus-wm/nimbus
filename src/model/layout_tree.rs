@@ -47,6 +47,12 @@ pub(super) enum TreeEvent {
     /// A node was added to its parent. Note that the node may have existed in
     /// the tree previously under a different parent.
     AddedToParent(NodeId),
+    /// A node has been copied from one tree to another.
+    ///
+    /// The destination node will have the same number of parents, siblings,
+    /// and children as the source. No other events will fire on this node
+    /// until the tree structure changes.
+    Copied { src: NodeId, dest: NodeId },
     /// A node will be removed from its parent.
     RemovingFromParent(NodeId),
     /// A node was removed from the forest.
@@ -65,6 +71,37 @@ impl LayoutTree {
             window_nodes: Default::default(),
             layout_roots: Default::default(),
         }
+    }
+
+    pub fn create_layout(&mut self) -> LayoutId {
+        let root = OwnedNode::new_root_in(&mut self.tree, "layout_root");
+        self.layout_roots.insert(root)
+    }
+
+    pub fn root(&self, layout: LayoutId) -> NodeId {
+        self.layout_roots[layout].id()
+    }
+
+    pub fn clone_layout(&mut self, layout: LayoutId) -> LayoutId {
+        let source = self.layout_roots[layout].id();
+        let cloned = source.deep_copy(&mut self.tree).make_root("layout_root");
+        let cloned_node = cloned.id();
+        let cloned_layout = self.layout_roots.insert(cloned);
+        self.print_tree(layout);
+        for (src, dest) in iter::zip(
+            source.traverse_preorder(&self.tree.map),
+            cloned_node.traverse_preorder(&self.tree.map),
+        ) {
+            self.tree.data.dispatch_event(&self.tree.map, TreeEvent::Copied { src, dest });
+            if let Some(&wid) = self.windows.get(src) {
+                self.windows.insert(dest, wid);
+                self.window_nodes.get_mut(&wid).unwrap().push(WindowNodeInfo {
+                    layout: cloned_layout,
+                    node: dest,
+                });
+            }
+        }
+        cloned_layout
     }
 
     pub fn add_window(&mut self, layout: LayoutId, parent: NodeId, wid: WindowId) -> NodeId {
@@ -194,15 +231,6 @@ impl LayoutTree {
             return true;
         }
         false
-    }
-
-    pub fn create_layout(&mut self) -> LayoutId {
-        let root = OwnedNode::new_root_in(&mut self.tree, "layout_root");
-        self.layout_roots.insert(root)
-    }
-
-    pub fn root(&self, layout: LayoutId) -> NodeId {
-        self.layout_roots[layout].id()
     }
 
     pub fn calculate_layout(&self, layout: LayoutId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
