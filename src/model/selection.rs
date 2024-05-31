@@ -1,3 +1,5 @@
+use std::iter;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -74,6 +76,28 @@ impl Selection {
         match event {
             AddedToForest(_node) => {}
             AddedToParent(_node) => {}
+            Copied { src, dest } => {
+                let Some(info) = self.nodes.get(src) else {
+                    return;
+                };
+                let selected_child = iter::zip(src.children(map), dest.children(map))
+                    .filter(|(src_child, _)| *src_child == info.selected_child)
+                    .map(|(_, dest_child)| dest_child)
+                    .next()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Dest tree had different structure, or source node \
+                            had nonexistent selection: {src:?}, {dest:?}"
+                        )
+                    });
+                self.nodes.insert(
+                    dest,
+                    SelectionInfo {
+                        selected_child,
+                        stop_here: self.nodes[src].stop_here,
+                    },
+                );
+            }
             RemovingFromParent(node) => {
                 let parent = node.parent(map).unwrap();
                 if self.nodes.get(parent).map(|n| n.selected_child) == Some(node) {

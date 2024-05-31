@@ -256,6 +256,13 @@ impl Reactor {
                     .zip(spaces)
                     .map(|(frame, space)| Screen { frame, space })
                     .next();
+                if let Some(space) = self.main_screen_space() {
+                    self.send_layout_event(LayoutEvent::SpaceExposed(
+                        space,
+                        self.main_screen.unwrap().frame.size,
+                    ));
+                }
+                // FIXME: Update visible windows if space changed
             }
             Event::SpaceChanged(spaces) => {
                 let Some(screen) = self.main_screen.as_mut() else {
@@ -263,11 +270,18 @@ impl Reactor {
                 };
                 screen.space =
                     *spaces.first().expect("Spaces should be non-empty if there is a main screen");
+                if let Some(space) = self.main_screen_space() {
+                    self.send_layout_event(LayoutEvent::SpaceExposed(
+                        space,
+                        self.main_screen.unwrap().frame.size,
+                    ));
+                }
                 if self.main_screen_space().is_some() {
                     // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                     // (see notes for WindowsDiscovered above).
                     for app in self.apps.values_mut() {
-                        // Errors mean the app terminated; ignore.
+                        // Errors mean the app terminated (and a termination event
+                        // is coming); ignore.
                         _ = app.handle.send(Request::GetVisibleWindows);
                     }
                 }
