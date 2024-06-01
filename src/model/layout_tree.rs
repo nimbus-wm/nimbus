@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter, mem};
+use std::{iter, mem};
 
 use icrate::Foundation::CGRect;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,7 @@ use super::{
     layout::{Direction, Layout, LayoutKind},
     selection::Selection,
     tree::{self, Tree},
+    window::Window,
 };
 use crate::{
     actor::app::{pid_t, WindowId},
@@ -21,23 +22,14 @@ use crate::{
 #[derive(Serialize, Deserialize)]
 pub struct LayoutTree {
     tree: Tree<Components>,
-    windows: slotmap::SecondaryMap<NodeId, WindowId>,
-    window_nodes: HashMap<WindowId, Vec<WindowNodeInfo>>,
     layout_roots: slotmap::SlotMap<LayoutId, OwnedNode>,
-}
-
-pub(super) type Windows = slotmap::SecondaryMap<NodeId, WindowId>;
-
-#[derive(Serialize, Deserialize)]
-struct WindowNodeInfo {
-    layout: LayoutId,
-    node: NodeId,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 struct Components {
     selection: Selection,
     layout: Layout,
+    window: Window,
 }
 
 #[derive(Copy, Clone)]
@@ -52,7 +44,11 @@ pub(super) enum TreeEvent {
     /// The destination node will have the same number of parents, siblings,
     /// and children as the source. No other events will fire on this node
     /// until the tree structure changes.
-    Copied { src: NodeId, dest: NodeId },
+    Copied {
+        src: NodeId,
+        dest: NodeId,
+        dest_layout: LayoutId,
+    },
     /// A node will be removed from its parent.
     RemovingFromParent(NodeId),
     /// A node was removed from the forest.
@@ -67,8 +63,6 @@ impl LayoutTree {
     pub fn new() -> LayoutTree {
         LayoutTree {
             tree: Tree::with_observer(Components::default()),
-            windows: Default::default(),
-            window_nodes: Default::default(),
             layout_roots: Default::default(),
         }
     }
@@ -83,31 +77,25 @@ impl LayoutTree {
     }
 
     pub fn clone_layout(&mut self, layout: LayoutId) -> LayoutId {
-        let source = self.layout_roots[layout].id();
-        let cloned = source.deep_copy(&mut self.tree).make_root("layout_root");
-        let cloned_node = cloned.id();
-        let cloned_layout = self.layout_roots.insert(cloned);
+        let source_root = self.layout_roots[layout].id();
+        let cloned = source_root.deep_copy(&mut self.tree).make_root("layout_root");
+        let cloned_root = cloned.id();
+        let dest_layout = self.layout_roots.insert(cloned);
         self.print_tree(layout);
         for (src, dest) in iter::zip(
-            source.traverse_preorder(&self.tree.map),
-            cloned_node.traverse_preorder(&self.tree.map),
+            source_root.traverse_preorder(&self.tree.map),
+            cloned_root.traverse_preorder(&self.tree.map),
         ) {
-            self.tree.data.dispatch_event(&self.tree.map, TreeEvent::Copied { src, dest });
-            if let Some(&wid) = self.windows.get(src) {
-                self.windows.insert(dest, wid);
-                self.window_nodes.get_mut(&wid).unwrap().push(WindowNodeInfo {
-                    layout: cloned_layout,
-                    node: dest,
-                });
-            }
+            self.tree
+                .data
+                .dispatch_event(&self.tree.map, TreeEvent::Copied { src, dest, dest_layout });
         }
-        cloned_layout
+        dest_layout
     }
 
     pub fn add_window(&mut self, layout: LayoutId, parent: NodeId, wid: WindowId) -> NodeId {
         let node = self.tree.mk_node().push_back(parent);
-        self.windows.insert(node, wid);
-        self.window_nodes.entry(wid).or_default().push(WindowNodeInfo { layout, node });
+        self.tree.data.window.set_window(layout, node, wid);
         node
     }
 
@@ -119,7 +107,7 @@ impl LayoutTree {
         wids: impl Iterator<Item = WindowId>,
     ) {
         self.tree.map.reserve(wids.size_hint().1.unwrap_or(0));
-        self.windows.set_capacity(self.tree.map.capacity());
+        self.tree.data.window.set_capacity(self.tree.map.capacity());
         for wid in wids {
             if self.window_node(layout, wid).is_none() {
                 self.add_window(layout, parent, wid);
@@ -127,17 +115,16 @@ impl LayoutTree {
         }
     }
 
-    pub fn retain_windows(&mut self, mut predicate: impl FnMut(&WindowId) -> bool) {
-        self.window_nodes.retain(|wid, nodes| {
-            if !predicate(wid) {
-                for info in nodes {
-                    info.node.detach(&mut self.tree).remove();
-                    self.windows.remove(info.node);
-                }
-                return false;
-            }
-            true
-        })
+    pub fn remove_window(&mut self, wid: WindowId) {
+        for (_, node) in self.tree.data.window.take_nodes_for(wid) {
+            node.detach(&mut self.tree).remove();
+        }
+    }
+
+    pub fn remove_windows_for_app(&mut self, pid: pid_t) {
+        for (_, _, node) in self.tree.data.window.take_nodes_for_app(pid) {
+            node.detach(&mut self.tree).remove();
+        }
     }
 
     /// Adds and removes windows so that the set of windows in a space is exactly `wids`.
@@ -175,11 +162,8 @@ impl LayoutTree {
                     self.add_window(layout, root, *des);
                     desired.next();
                 }
-                (_, Some((cur, node))) => {
+                (_, Some((_, node))) => {
                     node.detach(&mut self.tree).remove();
-                    self.windows.remove(*node);
-                    self.window_nodes.get_mut(cur).unwrap().retain(|info| info.layout != layout);
-                    // TODO: Remove from window_nodes if the window is not in any more layouts.
                     current.next();
                 }
                 (None, None) => break,
@@ -188,16 +172,11 @@ impl LayoutTree {
     }
 
     pub fn window_node(&self, layout: LayoutId, wid: WindowId) -> Option<NodeId> {
-        self.window_nodes
-            .get(&wid)
-            .into_iter()
-            .flat_map(|nodes| nodes.iter().filter(|info| info.layout == layout))
-            .next()
-            .map(|info| info.node)
+        self.tree.data.window.node_for(layout, wid)
     }
 
     pub fn window_at(&self, node: NodeId) -> Option<WindowId> {
-        self.windows.get(node).copied()
+        self.tree.data.window.at(node)
     }
 
     #[allow(dead_code)]
@@ -234,10 +213,12 @@ impl LayoutTree {
     }
 
     pub fn calculate_layout(&self, layout: LayoutId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.tree
-            .data
-            .layout
-            .get_sizes(&self.tree.map, &self.windows, self.root(layout), frame)
+        self.tree.data.layout.get_sizes(
+            &self.tree.map,
+            &self.tree.data.window,
+            self.root(layout),
+            frame,
+        )
     }
 
     pub fn traverse(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
@@ -528,7 +509,7 @@ impl LayoutTree {
             _ => "☐ ",
         };
         let desc = format!("{status}{node:?}",);
-        let desc = match self.windows.get(node) {
+        let desc = match self.window_at(node) {
             Some(wid) => format!(
                 "{desc} {wid:?} {}",
                 self.tree.data.layout.debug(node, false)
@@ -558,6 +539,7 @@ impl Components {
     fn dispatch_event(&mut self, map: &NodeMap, event: TreeEvent) {
         self.selection.handle_event(map, event);
         self.layout.handle_event(map, event);
+        self.window.handle_event(map, event);
     }
 }
 

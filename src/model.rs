@@ -5,6 +5,7 @@ mod layout;
 mod layout_tree;
 mod selection;
 mod tree;
+mod window;
 
 #[allow(unused_imports)]
 pub use layout::{Direction, LayoutKind, Orientation};

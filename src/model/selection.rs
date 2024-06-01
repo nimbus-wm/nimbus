@@ -76,7 +76,7 @@ impl Selection {
         match event {
             AddedToForest(_node) => {}
             AddedToParent(_node) => {}
-            Copied { src, dest } => {
+            Copied { src, dest, .. } => {
                 let Some(info) = self.nodes.get(src) else {
                     return;
                 };
@@ -133,11 +133,11 @@ mod tests {
         assert_eq!(tree.selection(layout), root);
         tree.select(n2);
         assert_eq!(tree.selection(layout), n2);
-        tree.retain_windows(|&wid| wid != WindowId::new(1, 2));
+        tree.remove_window(WindowId::new(1, 2));
         assert_eq!(tree.selection(layout), n3);
-        tree.retain_windows(|&wid| wid != WindowId::new(1, 3));
+        tree.remove_window(WindowId::new(1, 3));
         assert_eq!(tree.selection(layout), n1);
-        tree.retain_windows(|&wid| wid != WindowId::new(1, 1));
+        tree.remove_window(WindowId::new(1, 1));
         assert_eq!(tree.selection(layout), root);
     }
 
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(tree.selection(layout), a1);
         tree.select(a3);
         assert_eq!(tree.selection(layout), a3);
-        tree.retain_windows(|&wid| wid != WindowId::new(1, 5));
+        tree.remove_window(WindowId::new(1, 5));
         assert_eq!(tree.selection(layout), b2);
     }
 

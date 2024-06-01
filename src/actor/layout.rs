@@ -113,14 +113,14 @@ impl LayoutManager {
                 self.tree.set_windows_for_app(layout, pid, windows);
             }
             LayoutEvent::AppClosed(pid) => {
-                self.tree.retain_windows(|w| w.pid != pid);
+                self.tree.remove_windows_for_app(pid);
             }
             LayoutEvent::WindowAdded(space, wid) => {
                 let layout = self.layout(space);
                 self.tree.add_window(layout, self.tree.root(layout), wid);
             }
             LayoutEvent::WindowRemoved(wid) => {
-                self.tree.retain_windows(|&w| w != wid);
+                self.tree.remove_window(wid);
             }
             LayoutEvent::WindowRaised(space, wid) => {
                 if let Some(wid) = wid {
