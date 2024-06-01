@@ -5,7 +5,7 @@ use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    layout_tree::{TreeEvent, Windows},
+    layout_tree::TreeEvent,
     tree::{NodeId, NodeMap},
 };
 use crate::{actor::app::WindowId, sys::geometry::Round};
@@ -133,7 +133,7 @@ impl Layout {
                 self.info[node].size = 1.0;
                 self.info[parent].total += 1.0;
             }
-            TreeEvent::Copied { src, dest } => {
+            TreeEvent::Copied { src, dest, .. } => {
                 self.info.insert(dest, self.info[src].clone());
             }
             TreeEvent::RemovingFromParent(node) => {
@@ -196,24 +196,24 @@ impl Layout {
     pub(super) fn get_sizes(
         &self,
         map: &NodeMap,
-        windows: &Windows,
+        window: &super::window::Window,
         root: NodeId,
         rect: CGRect,
     ) -> Vec<(WindowId, CGRect)> {
         let mut sizes = vec![];
-        self.apply(map, windows, root, rect, &mut sizes);
+        self.apply(map, window, root, rect, &mut sizes);
         sizes
     }
 
     fn apply(
         &self,
         map: &NodeMap,
-        windows: &Windows,
+        window: &super::window::Window,
         node: NodeId,
         rect: CGRect,
         sizes: &mut Vec<(WindowId, CGRect)>,
     ) {
-        if let Some(&wid) = windows.get(node) {
+        if let Some(wid) = window.at(node) {
             debug_assert!(
                 node.children(map).next().is_none(),
                 "non-leaf node with window id"
@@ -226,7 +226,7 @@ impl Layout {
         match self.info[node].kind {
             Tabbed | Stacked => {
                 for child in node.children(map) {
-                    self.apply(map, windows, child, rect, sizes);
+                    self.apply(map, window, child, rect, sizes);
                 }
             }
             Horizontal => {
@@ -242,7 +242,7 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(map, windows, child, rect, sizes);
+                    self.apply(map, window, child, rect, sizes);
                     x = rect.max().x;
                 }
             }
@@ -259,7 +259,7 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(map, windows, child, rect, sizes);
+                    self.apply(map, window, child, rect, sizes);
                     y = rect.max().y;
                 }
             }
