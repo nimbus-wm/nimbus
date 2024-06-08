@@ -198,11 +198,10 @@ impl Reactor {
                         app_windows,
                     ));
                 }
-                // TODO: If we added the main window, send a layout event for it.
             }
             Event::WindowCreated(wid, window) => {
                 // TODO: It's possible for a window to be on multiple spaces
-                // or move spaces.
+                // or move spaces. (Add a test)
                 // FIXME: We assume all windows are on the main screen.
                 if let Some(space) = self.main_screen_space() {
                     if window.is_standard {
@@ -296,6 +295,9 @@ impl Reactor {
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if self.main_window() != main_window_orig {
+            // TODO: There's an edge case where the space updates and the main
+            // window does not (because it is on multiple spaces). Update the
+            // layout in that case too.
             if let Some(space) = self.main_screen_space() {
                 self.send_layout_event(LayoutEvent::WindowRaised(space, self.main_window()));
             }
