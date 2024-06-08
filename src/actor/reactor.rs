@@ -185,32 +185,30 @@ impl Reactor {
                 // FIXME: There is no synchronization ensuring that these windows
                 // are for the current space. The only way I've found to do that
                 // is to take a "snapshot" using CGWindowListCopyWindowInfo.
-                // FIXME: We assume all windows are on the main screen.
-                let Some(space) = self.main_screen_space() else {
-                    warn!("Received WindowsDiscovered event, but there was no main screen space");
-                    return;
-                };
                 let mut app_windows = known_visible;
                 app_windows.retain(|wid| self.windows[wid].is_standard);
                 app_windows
                     .extend(new.iter().filter_map(|(wid, info)| info.is_standard.then_some(wid)));
                 self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-                self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
-                    space,
-                    pid,
-                    app_windows,
-                ));
+                // FIXME: We assume all windows are on the main screen.
+                if let Some(space) = self.main_screen_space() {
+                    self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
+                        space,
+                        pid,
+                        app_windows,
+                    ));
+                }
                 // TODO: If we added the main window, send a layout event for it.
             }
             Event::WindowCreated(wid, window) => {
-                // Don't manage windows on other spaces.
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces.
                 // FIXME: We assume all windows are on the main screen.
-                let Some(space) = self.main_screen_space() else { return };
-                if window.is_standard {
-                    animation_focus_wid = Some(wid);
-                    self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
+                if let Some(space) = self.main_screen_space() {
+                    if window.is_standard {
+                        animation_focus_wid = Some(wid);
+                        self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
+                    }
                 }
                 self.windows.insert(wid, window.into());
             }
@@ -467,18 +465,20 @@ mod tests {
         }
     }
 
+    fn make_window(idx: usize) -> WindowInfo {
+        WindowInfo {
+            is_standard: true,
+            title: format!("Window{idx}"),
+            frame: CGRect::new(
+                CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
+                CGSize::new(50.0, 50.0),
+            ),
+            sys_id: WindowServerId::new(0),
+        }
+    }
+
     fn make_windows(count: usize) -> Vec<WindowInfo> {
-        (1..=count)
-            .map(|idx| WindowInfo {
-                is_standard: true,
-                title: format!("Window{idx}"),
-                frame: CGRect::new(
-                    CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
-                    CGSize::new(50.0, 50.0),
-                ),
-                sys_id: WindowServerId::new(0),
-            })
-            .collect()
+        (1..=count).map(make_window).collect()
     }
 
     #[test]
@@ -776,5 +776,10 @@ mod tests {
             windows.get(&WindowId::new(1, 1)).is_none(),
             "Window should not have been moved",
         );
+
+        // Make sure it doesn't choke on destroyed events for ignored windows.
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 1)));
+        reactor.handle_event(Event::WindowCreated(WindowId::new(1, 2), make_window(2)));
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
     }
 }
