@@ -39,13 +39,15 @@ struct Opt {
 #[derive(Subcommand, Clone)]
 enum Command {
     #[command(subcommand)]
-    Show(Show),
+    List(List),
     #[command(subcommand)]
     App(App),
+    #[command(subcommand)]
+    WindowServer(WindowServer),
 }
 
 #[derive(Subcommand, Clone)]
-enum Show {
+enum List {
     All,
     Apps,
     Ax,
@@ -71,6 +73,17 @@ enum App {
     },
 }
 
+#[derive(Subcommand, Clone)]
+enum WindowServer {
+    #[command()]
+    List {
+        #[arg(short, long)]
+        all: bool,
+    },
+    #[command()]
+    Get { id: u32 },
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -80,13 +93,13 @@ async fn main() -> anyhow::Result<()> {
     let opt: Opt = Parser::parse();
 
     match opt.command {
-        Command::Show(Show::Ax) => {
+        Command::List(List::Ax) => {
             time("accessibility", || get_windows_with_ax(&opt, false, true)).await
         }
-        Command::Show(Show::Cg) => time("core-graphics", || get_windows_with_cg(&opt, true)).await,
-        Command::Show(Show::Ns) => time("ns-window", || get_windows_with_ns(&opt, true)).await,
-        Command::Show(Show::Apps) => get_apps(&opt),
-        Command::Show(Show::All) => {
+        Command::List(List::Cg) => time("core-graphics", || get_windows_with_cg(&opt, true)).await,
+        Command::List(List::Ns) => time("ns-window", || get_windows_with_ns(&opt, true)).await,
+        Command::List(List::Apps) => get_apps(&opt),
+        Command::List(List::All) => {
             //time("accessibility serial", || get_windows_with_ax(&opt, true)).await;
             time("core-graphics", || get_windows_with_cg(&opt, true)).await;
             time("ns-window", || get_windows_with_ns(&opt, true)).await;
@@ -101,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await;
         }
-        Command::Show(Show::Spaces) => {
+        Command::List(List::Spaces) => {
             println!("Current space: {:?}", screen::diagnostic::cur_space());
             println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
             println!("All spaces: {:?}", screen::diagnostic::all_spaces());
@@ -157,6 +170,16 @@ async fn main() -> anyhow::Result<()> {
             }
             dbg!(main_window.main()?);
         }
+        Command::WindowServer(WindowServer::List { all }) => {
+            let layer = if all { None } else { Some(0) };
+            for window in window_server::get_visible_windows_with_layer(layer) {
+                println!("{window:?}");
+            }
+        }
+        Command::WindowServer(WindowServer::Get { id }) => match window_server::get_window(id) {
+            Some(win) => println!("{win:?}"),
+            None => println!("Could not find window {id}"),
+        },
     }
     Ok(())
 }
@@ -173,7 +196,7 @@ async fn get_windows_with_cg(opt: &Opt, print: bool) {
     }
     if print {
         println!("visible window ids:");
-        for window in window_server::get_visible_windows() {
+        for window in window_server::get_visible_windows_with_layer(None) {
             if opt.verbose {
                 println!("- {window:?}");
             } else {

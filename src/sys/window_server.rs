@@ -4,7 +4,7 @@ use accessibility::AXUIElement;
 use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
 use core_foundation::{
     array::CFArray,
-    base::{CFType, TCFType},
+    base::{CFType, ItemRef, TCFType},
     dictionary::CFDictionary,
     number::CFNumber,
     string::{CFString, CFStringRef},
@@ -15,7 +15,7 @@ use core_graphics::{
     },
     window::{
         kCGWindowBounds, kCGWindowLayer, kCGWindowListOptionExcludeDesktopElements,
-        kCGWindowNumber, kCGWindowOwnerPID,
+        kCGWindowNumber, kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
     },
 };
 use icrate::Foundation::CGRect;
@@ -61,13 +61,14 @@ impl TryFrom<&AXUIElement> for WindowServerId {
 pub struct WindowServerInfo {
     pub id: WindowServerId,
     pub pid: pid_t,
+    pub layer: i32,
     pub frame: CGRect,
 }
 
 /// Returns a list of windows visible on the screen, in order starting with the
 /// frontmost.
 #[allow(dead_code)]
-pub fn get_visible_windows() -> Vec<WindowServerInfo> {
+pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInfo> {
     // Note that the ordering is not documented. But
     // NSWindow::windowNumbersWithOptions *is* documented to return the windows
     // in order, so we could always combine their information if the behavior
@@ -78,27 +79,38 @@ pub fn get_visible_windows() -> Vec<WindowServerInfo> {
             kCGNullWindowID,
         ))
     };
-    windows
-        .iter()
-        .filter(|win| {
-            // We only care about windows on layer zero.
-            let Some(layer) = get_num(&win, unsafe { kCGWindowLayer }) else {
-                return false;
-            };
-            layer == 0
-        })
-        .filter_map(|win| {
-            let id = get_num(&win, unsafe { kCGWindowNumber })?;
-            let pid = get_num(&win, unsafe { kCGWindowOwnerPID })?;
-            let frame: CFDictionary = win.find(unsafe { kCGWindowBounds })?.downcast()?;
-            let frame = core_graphics_types::geometry::CGRect::from_dict_representation(&frame)?;
-            Some(WindowServerInfo {
-                id: WindowServerId(id.try_into().ok()?),
-                pid: pid.try_into().ok()?,
-                frame: frame.to_icrate(),
-            })
-        })
-        .collect::<Vec<_>>()
+    windows.iter().filter_map(|win| make_info(win, layer)).collect::<Vec<_>>()
+}
+
+#[allow(dead_code)]
+pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
+    let array = CFArray::from_copyable(&[id]);
+    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe {
+        CFArray::wrap_under_create_rule(CGWindowListCreateDescriptionFromArray(
+            array.as_concrete_TypeRef(),
+        ))
+    };
+    make_info(windows.iter().next()?, None)
+}
+
+fn make_info(
+    win: ItemRef<CFDictionary<CFString, CFType>>,
+    layer_filter: Option<i32>,
+) -> Option<WindowServerInfo> {
+    let layer = get_num(&win, unsafe { kCGWindowLayer })?.try_into().ok()?;
+    if !(layer_filter.is_none() || layer_filter == Some(layer)) {
+        return None;
+    }
+    let id = get_num(&win, unsafe { kCGWindowNumber })?;
+    let pid = get_num(&win, unsafe { kCGWindowOwnerPID })?;
+    let frame: CFDictionary = win.find(unsafe { kCGWindowBounds })?.downcast()?;
+    let frame = core_graphics_types::geometry::CGRect::from_dict_representation(&frame)?;
+    Some(WindowServerInfo {
+        id: WindowServerId(id.try_into().ok()?),
+        pid: pid.try_into().ok()?,
+        layer,
+        frame: frame.to_icrate(),
+    })
 }
 
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i64> {
