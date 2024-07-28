@@ -22,6 +22,10 @@ struct Cli {
     #[arg(long)]
     one: bool,
 
+    /// Disable new spaces by default.
+    #[arg(long)]
+    default_disable: bool,
+
     #[arg(long)]
     validate: bool,
 
@@ -61,6 +65,7 @@ fn main() {
 
     let config = wm_controller::Config {
         one_space: opt.one,
+        default_disable: opt.default_disable,
         restore_file: restore_file(),
     };
     let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx);

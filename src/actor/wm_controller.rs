@@ -31,7 +31,12 @@ pub enum WmCommand {
 }
 
 pub struct Config {
+    /// Only enables the WM on the starting space. On all other spaces, hotkeys are disabled.
+    ///
+    /// This can be useful for development.
     pub one_space: bool,
+    /// Whether new spaces are disabled by default.
+    pub default_disable: bool,
     pub restore_file: PathBuf,
 }
 
@@ -43,6 +48,7 @@ pub struct WmController {
     starting_space: Option<SpaceId>,
     cur_space: Vec<Option<SpaceId>>,
     disabled_spaces: HashSet<SpaceId>,
+    enabled_spaces: HashSet<SpaceId>,
     hotkeys: Option<HotkeyManager>,
 }
 
@@ -57,6 +63,7 @@ impl WmController {
             starting_space: None,
             cur_space: Vec::new(),
             disabled_spaces: HashSet::new(),
+            enabled_spaces: HashSet::new(),
             hotkeys: None,
         };
         (this, sender)
@@ -92,10 +99,15 @@ impl WmController {
                 self.send_event(event);
             }
             Command(ToggleSpaceActivated) => {
+                let toggle_set = if self.config.default_disable {
+                    &mut self.enabled_spaces
+                } else {
+                    &mut self.disabled_spaces
+                };
                 for space in &self.cur_space {
                     let Some(space) = space else { return };
-                    if !self.disabled_spaces.remove(space) {
-                        self.disabled_spaces.insert(*space);
+                    if !toggle_set.remove(space) {
+                        toggle_set.insert(*space);
                     }
                 }
                 let mut spaces = self.cur_space.clone();
@@ -115,7 +127,6 @@ impl WmController {
             self.starting_space = Some(space);
             self.register_hotkeys();
         } else if self.config.one_space {
-            let Some(&Some(space)) = spaces.first() else { return };
             if Some(space) == self.starting_space {
                 self.register_hotkeys();
             } else {
@@ -126,10 +137,15 @@ impl WmController {
 
     fn apply_space_activation(&self, spaces: &mut [Option<SpaceId>]) {
         for space in spaces {
-            match space {
-                Some(_) if self.config.one_space && *space != self.starting_space => *space = None,
-                Some(sp) if self.disabled_spaces.contains(sp) => *space = None,
-                _ => (),
+            let enabled = match space {
+                Some(_) if self.config.one_space && *space != self.starting_space => false,
+                Some(sp) if self.disabled_spaces.contains(sp) => false,
+                Some(sp) if self.enabled_spaces.contains(sp) => true,
+                _ if self.config.default_disable => false,
+                _ => true,
+            };
+            if !enabled {
+                *space = None;
             }
         }
     }
