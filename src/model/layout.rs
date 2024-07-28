@@ -8,7 +8,10 @@ use super::{
     layout_tree::TreeEvent,
     tree::{NodeId, NodeMap},
 };
-use crate::{actor::app::WindowId, sys::geometry::Round};
+use crate::{
+    actor::app::WindowId,
+    sys::geometry::{CGPointDef, CGSizeDef, Round},
+};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Layout {
@@ -23,6 +26,7 @@ pub enum LayoutKind {
     Vertical,
     Tabbed,
     Stacked,
+    Floating,
 }
 
 impl LayoutKind {
@@ -48,12 +52,13 @@ pub enum Orientation {
 }
 
 impl LayoutKind {
-    pub fn orientation(self) -> Orientation {
+    pub fn orientation(self) -> Option<Orientation> {
         use LayoutKind::*;
-        match self {
+        Some(match self {
             Horizontal | Tabbed => Orientation::Horizontal,
             Vertical | Stacked => Orientation::Vertical,
-        }
+            Floating => return None,
+        })
     }
 
     pub fn is_group(self) -> bool {
@@ -62,6 +67,10 @@ impl LayoutKind {
             Stacked | Tabbed => true,
             _ => false,
         }
+    }
+
+    pub fn is_floating(self) -> bool {
+        self == LayoutKind::Floating
     }
 }
 
@@ -120,6 +129,12 @@ struct LayoutInfo {
     kind: LayoutKind,
     /// The last ungrouped layout of this node.
     last_ungrouped_kind: LayoutKind,
+    /// For floating layouts, the center in relative coordinates [0, 1].
+    #[serde(with = "CGPointDef")]
+    floating_center: CGPoint,
+    /// For floating layouts, the size in pixels.
+    #[serde(with = "CGSizeDef")]
+    floating_size: CGSize,
 }
 
 impl Layout {
@@ -182,6 +197,18 @@ impl Layout {
         let share = share.max(-self.info[node].size);
         self.info[from].size -= share;
         self.info[node].size += share;
+    }
+
+    pub(super) fn set_floating_frame(&mut self, node: NodeId, frame: CGRect, screen: CGRect) {
+        let center = CGPoint::new(
+            frame.min().x + frame.size.width * 0.5,
+            frame.min().y + frame.size.height * 0.5,
+        );
+        self.info[node].floating_center = CGPoint::new(
+            (center.x - screen.min().x) / screen.size.width,
+            (center.y - screen.min().y) / screen.size.height,
+        );
+        self.info[node].floating_size = frame.size;
     }
 
     pub(super) fn debug(&self, node: NodeId, is_container: bool) -> String {
@@ -261,6 +288,20 @@ impl Layout {
                     .round();
                     self.apply(map, window, child, rect, sizes);
                     y = rect.max().y;
+                }
+            }
+            Floating => {
+                for child in node.children(map) {
+                    let center = self.info[child].floating_center;
+                    let size = self.info[child].floating_size;
+                    let center = CGPoint::new(
+                        center.x * rect.size.width + rect.origin.x,
+                        center.y * rect.size.height + rect.origin.y,
+                    );
+                    let origin =
+                        CGPoint::new(center.x - size.width * 0.5, center.y - size.height * 0.5);
+                    let rect = CGRect::new(origin, size).round();
+                    self.apply(map, window, child, rect, sizes);
                 }
             }
         }

@@ -231,7 +231,11 @@ impl LayoutTree {
         // Descend as far down as we can go, keeping close to the direction we're
         // moving from.
         iter::successors(node, |&node| {
-            if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
+            let Some(node_orientation) = self.tree.data.layout.kind(node).orientation() else {
+                // Floating layout.
+                return None;
+            };
+            if node_orientation == direction.orientation() {
                 match direction {
                     Direction::Up | Direction::Left => node.last_child(map),
                     Direction::Down | Direction::Right => node.first_child(map),
@@ -247,7 +251,7 @@ impl LayoutTree {
         let Some(parent) = from.parent(&self.tree.map) else {
             return None;
         };
-        if self.tree.data.layout.kind(parent).orientation() == direction.orientation() {
+        if self.tree.data.layout.kind(parent).orientation() == Some(direction.orientation()) {
             match direction {
                 Direction::Up | Direction::Left => from.prev_sibling(&self.tree.map),
                 Direction::Down | Direction::Right => from.next_sibling(&self.tree.map),
@@ -296,7 +300,7 @@ impl LayoutTree {
                 else {
                     break node;
                 };
-                if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
+                if self.tree.data.layout.kind(node).orientation() == Some(direction.orientation()) {
                     break next;
                 }
                 node = next;
@@ -315,10 +319,12 @@ impl LayoutTree {
                 .ancestors_with_parent(&self.tree.map)
                 .skip(1) // We already tried moving at the current level.
                 .skip_while(|(_node, parent)| {
-                    parent
-                        .map(|p| self.layout(p).orientation() != direction.orientation())
+                    let &Some(parent) = parent else {
                         // If we get all the way to the root, give up and skip it too.
-                        .unwrap_or(true)
+                        return true;
+                    };
+                    // Otherwise it should have an orientation.
+                    self.layout(parent).orientation() != Some(direction.orientation())
                 })
                 .next();
             if let Some((target, _parent)) = target {
@@ -401,6 +407,10 @@ impl LayoutTree {
     }
 
     pub fn resize(&mut self, node: NodeId, screen_ratio: f64, direction: Direction) -> bool {
+        if self.layout(node).is_floating() {
+            return false;
+        }
+
         // Pick an ancestor to resize that has a sibling in the given direction.
         let can_resize = |&node: &NodeId| -> bool {
             let Some(parent) = node.parent(&self.tree.map) else {
@@ -420,7 +430,7 @@ impl LayoutTree {
             match node.parent(&self.tree.map) {
                 Some(parent)
                     if self.tree.data.layout.kind(parent).orientation()
-                        == direction.orientation()
+                        == Some(direction.orientation())
                         && !self.tree.data.layout.kind(parent).is_group() =>
                 {
                     r * self.tree.data.layout.proportion(&self.tree.map, node).unwrap()
@@ -451,6 +461,10 @@ impl LayoutTree {
         new_frame: CGRect,
         screen: CGRect,
     ) {
+        if self.layout(node).is_floating() {
+            self.tree.data.layout.set_floating_frame(node, new_frame, screen);
+            return;
+        }
         let mut count = 0;
         let mut check_and_resize = |direction, delta, whole| {
             if delta != 0.0 {

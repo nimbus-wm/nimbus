@@ -1,5 +1,6 @@
 use core_graphics_types::geometry as cg;
-use icrate::Foundation as ic;
+use icrate::Foundation::{self as ic, CGFloat};
+use serde::{Deserialize, Serialize};
 
 pub trait ToICrate<T> {
     fn to_icrate(&self) -> T;
@@ -131,3 +132,17 @@ pub trait SameAs: IsWithin + Sized {
 impl SameAs for ic::CGRect {}
 impl SameAs for ic::CGPoint {}
 impl SameAs for ic::CGSize {}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGPoint")]
+pub struct CGPointDef {
+    pub x: CGFloat,
+    pub y: CGFloat,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGSize")]
+pub struct CGSizeDef {
+    pub width: CGFloat,
+    pub height: CGFloat,
+}
