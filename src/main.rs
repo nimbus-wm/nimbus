@@ -2,6 +2,7 @@ mod actor;
 mod metrics;
 mod model;
 mod sys;
+mod util;
 
 use std::path::PathBuf;
 

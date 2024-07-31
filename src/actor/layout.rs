@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
@@ -13,6 +13,7 @@ use crate::{
     actor::app::{pid_t, WindowId},
     model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation},
     sys::screen::SpaceId,
+    util::BTreeExt,
 };
 
 /// Actor that manages the layout tree.
@@ -25,6 +26,10 @@ pub struct LayoutManager {
     tree: LayoutTree,
     active_layouts: HashMap<SpaceId, LayoutId>,
     space_configurations: HashMap<(SpaceId, Size), LayoutId>,
+    floating_windows: BTreeSet<WindowId>,
+    #[serde(skip)]
+    focused_window: Option<WindowId>,
+    last_floating_focus: Option<WindowId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -55,6 +60,8 @@ pub enum LayoutCommand {
     Split(Orientation),
     Group(Orientation),
     Ungroup,
+    ToggleFocusFloating,
+    ToggleWindowFloating,
     Debug,
     Serialize,
     SaveAndExit(PathBuf),
@@ -89,6 +96,9 @@ impl LayoutManager {
             tree: LayoutTree::new(),
             active_layouts: Default::default(),
             space_configurations: Default::default(),
+            floating_windows: Default::default(),
+            focused_window: None,
+            last_floating_focus: None,
         }
     }
 
@@ -106,14 +116,16 @@ impl LayoutManager {
                     });
                 self.active_layouts.insert(space, *layout);
             }
-            LayoutEvent::WindowsOnScreenUpdated(space, pid, windows) => {
+            LayoutEvent::WindowsOnScreenUpdated(space, pid, mut windows) => {
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
                 let layout = self.layout(space);
+                windows.retain(|wid| !self.floating_windows.contains(wid));
                 self.tree.set_windows_for_app(layout, pid, windows);
             }
             LayoutEvent::AppClosed(pid) => {
                 self.tree.remove_windows_for_app(pid);
+                self.floating_windows.remove_all_for_pid(pid);
             }
             LayoutEvent::WindowAdded(space, wid) => {
                 let layout = self.layout(space);
@@ -121,12 +133,18 @@ impl LayoutManager {
             }
             LayoutEvent::WindowRemoved(wid) => {
                 self.tree.remove_window(wid);
+                self.floating_windows.remove(&wid);
             }
             LayoutEvent::WindowRaised(space, wid) => {
+                self.focused_window = wid;
                 if let Some(wid) = wid {
-                    let layout = self.layout(space);
-                    if let Some(node) = self.tree.window_node(layout, wid) {
-                        self.tree.select(node);
+                    if self.floating_windows.contains(&wid) {
+                        self.last_floating_focus = Some(wid);
+                    } else {
+                        let layout = self.layout(space);
+                        if let Some(node) = self.tree.window_node(layout, wid) {
+                            self.tree.select(node);
+                        }
                     }
                 }
             }
@@ -148,8 +166,15 @@ impl LayoutManager {
 
     pub fn handle_command(&mut self, space: SpaceId, command: LayoutCommand) -> EventResponse {
         let layout = self.layout(space);
+        let is_floating = if let Some(focus) = self.focused_window {
+            self.floating_windows.contains(&focus)
+        } else {
+            false
+        };
         debug!("Tree:\n{}", self.tree.draw_tree(layout).trim());
         debug!(selection = ?self.tree.selection(layout));
+        debug!(?self.floating_windows);
+        debug!(?self.focused_window, ?self.last_floating_focus, ?is_floating);
         match command {
             LayoutCommand::Shuffle => {
                 // TODO
@@ -165,6 +190,9 @@ impl LayoutManager {
                 self.handle_command(space, LayoutCommand::MoveFocus(Direction::Right))
             }
             LayoutCommand::MoveFocus(direction) => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 let new = self
                     .tree
                     .traverse(self.tree.selection(layout), direction)
@@ -175,36 +203,86 @@ impl LayoutManager {
                 EventResponse { raise_window: Some(new) }
             }
             LayoutCommand::Ascend => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 self.tree.ascend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::Descend => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 self.tree.descend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 let selection = self.tree.selection(layout);
                 self.tree.move_node(layout, selection, direction);
                 EventResponse::default()
             }
             LayoutCommand::Split(orientation) => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 let selection = self.tree.selection(layout);
                 self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     self.tree.set_layout(parent, LayoutKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
+                if is_floating {
+                    return EventResponse::default();
+                }
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     if self.tree.layout(parent).is_group() {
                         self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
                     }
                 }
                 EventResponse::default()
+            }
+            LayoutCommand::ToggleWindowFloating => {
+                let Some(wid) = self.focused_window else {
+                    return EventResponse::default();
+                };
+                if is_floating {
+                    let selection = self.tree.selection(layout);
+                    let node = self.tree.add_window(
+                        layout,
+                        selection.parent(self.tree.map()).unwrap_or(selection),
+                        wid,
+                    );
+                    self.tree.select(node);
+                    self.floating_windows.remove(&wid);
+                    self.last_floating_focus = None;
+                } else {
+                    self.tree.remove_window(wid);
+                    self.floating_windows.insert(wid);
+                    self.last_floating_focus = Some(wid);
+                }
+                EventResponse::default()
+            }
+            LayoutCommand::ToggleFocusFloating => {
+                if is_floating {
+                    EventResponse {
+                        raise_window: self.tree.window_at(self.tree.selection(layout)),
+                    }
+                } else {
+                    EventResponse {
+                        raise_window: self.last_floating_focus,
+                    }
+                }
             }
             LayoutCommand::Debug => {
                 self.tree.print_tree(layout);

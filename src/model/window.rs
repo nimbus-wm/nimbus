@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, collections::BTreeMap};
+use std::collections::BTreeMap;
 
 use accessibility_sys::pid_t;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,7 @@ use super::{
     tree::{NodeId, NodeMap},
     LayoutId,
 };
-use crate::{actor::app::WindowId, model::layout_tree::TreeEvent};
+use crate::{actor::app::WindowId, model::layout_tree::TreeEvent, util::BTreeExt};
 
 /// Maintains a two-way mapping between leaf nodes and window ids.
 #[derive(Default, Serialize, Deserialize)]
@@ -65,26 +65,8 @@ impl Window {
         &mut self,
         pid: pid_t,
     ) -> impl Iterator<Item = (WindowId, LayoutId, NodeId)> {
-        // There's not currently a stable way to remove only a range, so we have
-        // to do this split/extend dance. Is it faster than scanning through all
-        // the keys? Who knows!
-        #[derive(Ord, PartialOrd, Eq, PartialEq)]
-        #[repr(transparent)]
-        struct PidRange(pid_t);
-        // Technically this violates the Borrow requirements by having Ord/Eq
-        // behave differently than the original type, but we are working around
-        // API limitations and it should not matter for a reasonable implementation
-        // of `split_off`.
-        impl Borrow<PidRange> for WindowId {
-            fn borrow(&self) -> &PidRange {
-                // Safety: PidRange is repr(transparent).
-                unsafe { &*std::ptr::addr_of!(self.pid).cast() }
-            }
-        }
-        let mut split = self.window_nodes.split_off(&PidRange(pid));
-        self.window_nodes.extend(split.split_off(&PidRange(pid + 1)));
-
-        split.into_iter().flat_map(|(wid, infos)| {
+        let removed = self.window_nodes.remove_all_for_pid(pid);
+        removed.into_iter().flat_map(|(wid, infos)| {
             infos.into_iter().map(move |info| (wid, info.layout, info.node))
         })
     }
