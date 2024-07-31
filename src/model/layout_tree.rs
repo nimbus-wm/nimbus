@@ -127,7 +127,7 @@ impl LayoutTree {
         }
     }
 
-    /// Adds and removes windows so that the set of windows in a space is exactly `wids`.
+    /// Adds and removes windows so that the set of windows in a space is exactly `desired`.
     ///
     /// For now, new windows are added directly to the root node.
     pub fn set_windows_for_app(
@@ -169,6 +169,17 @@ impl LayoutTree {
                 (None, None) => break,
             }
         }
+    }
+
+    /// Removes windows known to the space that are not in `desired`.
+    /// Removes known windows from `desired`.
+    pub fn intersect_windows_for_app(
+        &mut self,
+        layout: LayoutId,
+        app: pid_t,
+        desired: &mut Vec<WindowId>,
+    ) {
+        todo!()
     }
 
     pub fn window_node(&self, layout: LayoutId, wid: WindowId) -> Option<NodeId> {
