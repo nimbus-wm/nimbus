@@ -116,8 +116,7 @@ impl<S: System> ScreenCache<S> {
                     screen.as_concrete_TypeRef(),
                 )
             })
-            .map(|id| SpaceId(NonZeroU64::new(id).unwrap()))
-            .map(Some)
+            .map(|id| Some(SpaceId(NonZeroU64::new(id)?)))
             .collect()
     }
 }
