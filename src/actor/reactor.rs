@@ -9,6 +9,7 @@ mod animation;
 use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
+use tokio::sync::oneshot;
 use tracing::{debug, info, instrument, trace, warn, Span};
 
 use crate::{
@@ -314,7 +315,7 @@ impl Reactor {
     }
 
     fn handle_layout_response(&mut self, response: layout::EventResponse) {
-        if let Some(wid) = response.raise_window {
+        for wid in response.raise_windows {
             info!(raise_window = ?wid);
             self.raise_window(wid);
         }
@@ -322,12 +323,14 @@ impl Reactor {
 
     fn raise_window(&mut self, wid: WindowId) {
         self.raise_token.set_pid(wid.pid);
+        let (tx, rx) = oneshot::channel();
         self.apps
             .get_mut(&wid.pid)
             .unwrap()
             .handle
-            .send(Request::Raise(wid, self.raise_token.clone()))
+            .send(Request::Raise(wid, self.raise_token.clone(), Some(tx)))
             .unwrap();
+        let _ = rx.blocking_recv();
     }
 
     /// The main window of the active app, if any.
@@ -598,7 +601,7 @@ mod tests {
                         Requested(true),
                     ));
                 }
-                Request::Raise(_, _) => todo!(),
+                Request::Raise(_, _, _) => todo!(),
             }
         }
 

@@ -33,6 +33,7 @@ use icrate::{
     Foundation::{CGPoint, CGRect},
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
@@ -96,7 +97,7 @@ impl Debug for AppThreadHandle {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Request {
     Terminate,
     GetVisibleWindows,
@@ -110,7 +111,7 @@ pub enum Request {
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
 
-    Raise(WindowId, RaiseToken),
+    Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>),
 }
 
 /// Prevents stale activation requests from happening after more recent ones.
@@ -257,7 +258,7 @@ impl State {
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
-    fn handle_request(&mut self, request: Request) -> Result<(), accessibility::Error> {
+    fn handle_request(&mut self, request: &mut Request) -> Result<(), accessibility::Error> {
         match request {
             Request::Terminate => {
                 CFRunLoop::get_current().stop();
@@ -300,7 +301,7 @@ impl State {
                     known_visible,
                 });
             }
-            Request::SetWindowPos(wid, pos, txid) => {
+            &mut Request::SetWindowPos(wid, pos, txid) => {
                 let window = self.window_mut(wid)?;
                 window.last_seen_txid = txid;
                 trace("set_position", &window.elem, || {
@@ -314,7 +315,7 @@ impl State {
                     Requested(true),
                 ));
             }
-            Request::SetWindowFrame(wid, frame, txid) => {
+            &mut Request::SetWindowFrame(wid, frame, txid) => {
                 let window = self.window_mut(wid)?;
                 window.last_seen_txid = txid;
                 trace("set_position", &window.elem, || {
@@ -331,11 +332,11 @@ impl State {
                     Requested(true),
                 ));
             }
-            Request::BeginWindowAnimation(wid) => {
+            &mut Request::BeginWindowAnimation(wid) => {
                 let window = self.window(wid)?;
                 self.stop_notifications_for_animation(&window.elem);
             }
-            Request::EndWindowAnimation(wid) => {
+            &mut Request::EndWindowAnimation(wid) => {
                 let &WindowState { ref elem, last_seen_txid } = self.window(wid)?;
                 self.restart_notifications_after_animation(elem);
                 let frame = trace("frame", elem, || elem.frame())?;
@@ -346,8 +347,8 @@ impl State {
                     Requested(true),
                 ));
             }
-            Request::Raise(wid, token) => {
-                let window = self.window(wid)?;
+            Request::Raise(wid, token, done) => {
+                let window = self.window(*wid)?;
                 trace("raise", &window.elem, || window.elem.raise())?;
                 // This request could be handled out of order with respect to
                 // later requests sent to other apps by the reactor. To avoid
@@ -403,6 +404,9 @@ impl State {
                         Ok(())
                     })
                     .unwrap_or(Ok(()))?;
+                if let Some(done) = done.take() {
+                    let _ = done.send(());
+                }
             }
         }
         Ok(())
@@ -624,10 +628,10 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         // sure all pending events are handled eventually. For now just handle
         // them all.
         let mut state = state.borrow_mut();
-        while let Ok((span, request)) = state.requests_rx.try_recv() {
+        while let Ok((span, mut request)) = state.requests_rx.try_recv() {
             let _guard = span.enter();
             debug!(?state.bundle_id, ?state.pid, ?request, "Got request");
-            match state.handle_request(request.clone()) {
+            match state.handle_request(&mut request) {
                 Ok(()) => (),
                 Err(err) => {
                     error!(?state.bundle_id, ?state.pid, ?request, "Error handling request: {err}");

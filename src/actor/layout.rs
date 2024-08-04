@@ -87,7 +87,7 @@ pub enum LayoutEvent {
 #[must_use]
 #[derive(Debug, Clone, Default)]
 pub struct EventResponse {
-    pub raise_window: Option<WindowId>,
+    pub raise_windows: Vec<WindowId>,
 }
 
 impl LayoutManager {
@@ -200,7 +200,7 @@ impl LayoutManager {
                 let Some(new) = new else {
                     return EventResponse::default();
                 };
-                EventResponse { raise_window: Some(new) }
+                EventResponse { raise_windows: vec![new] }
             }
             LayoutCommand::Ascend => {
                 if is_floating {
@@ -276,11 +276,15 @@ impl LayoutManager {
             LayoutCommand::ToggleFocusFloating => {
                 if is_floating {
                     EventResponse {
-                        raise_window: self.tree.window_at(self.tree.selection(layout)),
+                        raise_windows: self
+                            .tree
+                            .window_at(self.tree.selection(layout))
+                            .into_iter()
+                            .collect(),
                     }
                 } else {
                     EventResponse {
-                        raise_window: self.last_floating_focus,
+                        raise_windows: self.last_floating_focus.into_iter().collect(),
                     }
                 }
             }
