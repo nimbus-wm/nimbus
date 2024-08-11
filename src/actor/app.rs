@@ -98,6 +98,7 @@ impl Debug for AppThreadHandle {
 
 #[derive(Debug, Clone)]
 pub enum Request {
+    Terminate,
     GetVisibleWindows,
 
     SetWindowFrame(WindowId, CGRect, TransactionId),
@@ -258,6 +259,10 @@ impl State {
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
     fn handle_request(&mut self, request: Request) -> Result<(), accessibility::Error> {
         match request {
+            Request::Terminate => {
+                CFRunLoop::get_current().stop();
+                self.send_event(Event::ApplicationThreadTerminated(self.pid));
+            }
             Request::GetVisibleWindows => {
                 let window_elems = match self.app.windows() {
                     Ok(elems) => elems,

@@ -26,6 +26,7 @@ pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 pub enum Event {
     ApplicationLaunched(pid_t, AppState),
     ApplicationTerminated(pid_t),
+    ApplicationThreadTerminated(pid_t),
     ApplicationActivated(pid_t, Option<WindowId>),
     ApplicationGloballyActivated(pid_t),
     ApplicationGloballyDeactivated(pid_t),
@@ -154,9 +155,11 @@ impl Reactor {
                 self.apps.insert(pid, state);
             }
             Event::ApplicationTerminated(pid) => {
-                // FIXME: This isn't ordered wrt other events from the app;
-                // reroute the event through the app thread so it's the last
-                // event for this app.
+                if let Some(app) = self.apps.get_mut(&pid) {
+                    _ = app.handle.send(Request::Terminate);
+                }
+            }
+            Event::ApplicationThreadTerminated(pid) => {
                 self.apps.remove(&pid);
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
@@ -557,6 +560,7 @@ mod tests {
 
         for request in requests {
             match request {
+                Request::Terminate => break,
                 Request::GetVisibleWindows => {}
                 Request::SetWindowFrame(wid, frame, txid) => {
                     let window = windows.entry(wid).or_default();
