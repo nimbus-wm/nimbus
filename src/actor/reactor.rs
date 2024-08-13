@@ -21,6 +21,8 @@ use crate::{
 };
 use animation::Animation;
 
+use super::app::Quiet;
+
 pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 
 #[derive(Debug)]
@@ -28,11 +30,11 @@ pub enum Event {
     ApplicationLaunched(pid_t, AppState),
     ApplicationTerminated(pid_t),
     ApplicationThreadTerminated(pid_t),
-    ApplicationActivated(pid_t, Option<WindowId>),
+    ApplicationActivated(pid_t, Quiet),
     ApplicationGloballyActivated(pid_t),
     ApplicationGloballyDeactivated(pid_t),
     ApplicationDeactivated(pid_t),
-    ApplicationMainWindowChanged(pid_t, Option<WindowId>),
+    ApplicationMainWindowChanged(pid_t, Option<WindowId>, Quiet),
 
     WindowsDiscovered {
         pid: pid_t,
@@ -76,6 +78,7 @@ pub struct AppState {
     pub main_window: Option<WindowId>,
     // You should probably use `frontmost_app` in reactor instead.
     pub is_frontmost: bool,
+    pub frontmost_is_quiet: Quiet,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -148,7 +151,7 @@ impl Reactor {
 
     fn handle_event(&mut self, event: Event) {
         debug!(?event, "Event");
-        let main_window_orig = self.main_window();
+        let main_window_orig = self.main_window_quiet();
         let mut animation_focus_wid = None;
         let mut is_resize = false;
         match event {
@@ -164,10 +167,10 @@ impl Reactor {
                 self.apps.remove(&pid);
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
-            Event::ApplicationActivated(pid, main_window) => {
-                let state = self.apps.get_mut(&pid).unwrap();
-                state.is_frontmost = true;
-                state.main_window = main_window;
+            Event::ApplicationActivated(pid, quiet) => {
+                let app = self.apps.get_mut(&pid).unwrap();
+                app.is_frontmost = true;
+                app.frontmost_is_quiet = quiet;
             }
             Event::ApplicationGloballyActivated(pid) => {
                 // See the comment in main_window() for the difference between
@@ -182,7 +185,7 @@ impl Reactor {
                     self.global_frontmost_app_pid = None;
                 }
             }
-            Event::ApplicationMainWindowChanged(pid, main_window) => {
+            Event::ApplicationMainWindowChanged(pid, main_window, _quiet) => {
                 self.apps.get_mut(&pid).unwrap().main_window = main_window;
             }
             Event::WindowsDiscovered { pid, new, known_visible } => {
@@ -298,12 +301,13 @@ impl Reactor {
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
-        if self.main_window() != main_window_orig {
+        let main_window = self.main_window_quiet();
+        if main_window.1 == Quiet::No && main_window != main_window_orig {
             // TODO: There's an edge case where the space updates and the main
             // window does not (because it is on multiple spaces). Update the
             // layout in that case too.
             if let Some(space) = self.main_screen_space() {
-                self.send_layout_event(LayoutEvent::WindowRaised(space, self.main_window()));
+                self.send_layout_event(LayoutEvent::WindowRaised(space, main_window.0));
             }
         }
         self.update_layout(animation_focus_wid, is_resize);
@@ -314,27 +318,41 @@ impl Reactor {
         self.handle_layout_response(response)
     }
 
-    fn handle_layout_response(&mut self, response: layout::EventResponse) {
+    fn handle_layout_response(&mut self, mut response: layout::EventResponse) {
+        let last = response.raise_windows.pop();
         for wid in response.raise_windows {
             info!(raise_window = ?wid);
-            self.raise_window(wid);
+            self.raise_window(wid, Quiet::Yes);
+        }
+        if let Some(wid) = last {
+            self.raise_window(wid, Quiet::No);
         }
     }
 
-    fn raise_window(&mut self, wid: WindowId) {
+    fn raise_window(&mut self, wid: WindowId, quiet: Quiet) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
         self.apps
             .get_mut(&wid.pid)
             .unwrap()
             .handle
-            .send(Request::Raise(wid, self.raise_token.clone(), Some(tx)))
+            .send(Request::Raise(
+                wid,
+                self.raise_token.clone(),
+                Some(tx),
+                quiet,
+            ))
             .unwrap();
         let _ = rx.blocking_recv();
     }
 
     /// The main window of the active app, if any.
     fn main_window(&self) -> Option<WindowId> {
+        self.main_window_quiet().0
+    }
+
+    /// The main window of the active app, if any, and whether it was raised quietly.
+    fn main_window_quiet(&self) -> (Option<WindowId>, Quiet) {
         // Because apps self-report this event from their respective
         // threads, they can appear out of order. To mitigate this, we
         // require that the "global" view from NSNotificationCenter
@@ -350,15 +368,16 @@ impl Reactor {
         // we don't want to record the old main window as having focus,
         // since it never did. So we wait until both events are received.
         let Some(pid) = self.global_frontmost_app_pid else {
-            return None;
+            return (None, Quiet::default());
         };
         match self.apps.get(&pid) {
-            Some(AppState {
+            Some(&AppState {
                 is_frontmost: true,
+                frontmost_is_quiet,
                 main_window: Some(window),
                 ..
-            }) if self.windows.contains_key(window) => Some(*window),
-            _ => None,
+            }) if self.windows.contains_key(&window) => (Some(window), frontmost_is_quiet),
+            _ => (None, Quiet::default()),
         }
     }
 
@@ -388,7 +407,7 @@ impl Reactor {
             if target_frame.same_as(current_frame) {
                 continue;
             }
-            info!(?wid, ?current_frame, ?target_frame);
+            trace!(?wid, ?current_frame, ?target_frame);
             let handle = &self.apps.get(&wid.pid).unwrap().handle;
             let is_new = Some(wid) == new_wid;
             let txid = window.next_txid();
@@ -458,6 +477,7 @@ mod tests {
                         handle,
                         main_window,
                         is_frontmost,
+                        frontmost_is_quiet: Quiet::No,
                     },
                 ),
                 Event::WindowsDiscovered {
@@ -516,16 +536,24 @@ mod tests {
         );
         reactor.handle_event(ApplicationGloballyDeactivated(1));
         assert_eq!(None, reactor.main_window());
-        reactor.handle_event(ApplicationActivated(2, None));
+        reactor.handle_event(ApplicationActivated(2, Quiet::No));
         reactor.handle_event(ApplicationGloballyActivated(2));
         assert_eq!(None, reactor.main_window());
-        reactor.handle_event(ApplicationMainWindowChanged(2, Some(WindowId::new(2, 2))));
+        reactor.handle_event(ApplicationMainWindowChanged(
+            2,
+            Some(WindowId::new(2, 2)),
+            Quiet::No,
+        ));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
         assert_eq!(
             reactor.layout.selected_window(space),
             Some(WindowId::new(2, 2))
         );
-        reactor.handle_event(ApplicationMainWindowChanged(1, Some(WindowId::new(1, 2))));
+        reactor.handle_event(ApplicationMainWindowChanged(
+            1,
+            Some(WindowId::new(1, 2)),
+            Quiet::No,
+        ));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
         reactor.handle_event(ApplicationDeactivated(1));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
@@ -601,7 +629,7 @@ mod tests {
                         Requested(true),
                     ));
                 }
-                Request::Raise(_, _, _) => todo!(),
+                Request::Raise(_, _, _, _) => todo!(),
             }
         }
 

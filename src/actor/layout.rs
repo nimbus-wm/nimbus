@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
@@ -27,6 +27,8 @@ pub struct LayoutManager {
     active_layouts: HashMap<SpaceId, LayoutId>,
     space_configurations: HashMap<(SpaceId, Size), LayoutId>,
     floating_windows: BTreeSet<WindowId>,
+    #[serde(skip)]
+    active_floating_windows: HashMap<SpaceId, HashMap<pid_t, HashSet<WindowId>>>,
     #[serde(skip)]
     focused_window: Option<WindowId>,
     last_floating_focus: Option<WindowId>,
@@ -97,6 +99,7 @@ impl LayoutManager {
             active_layouts: Default::default(),
             space_configurations: Default::default(),
             floating_windows: Default::default(),
+            active_floating_windows: Default::default(),
             focused_window: None,
             last_floating_focus: None,
         }
@@ -119,9 +122,17 @@ impl LayoutManager {
             LayoutEvent::WindowsOnScreenUpdated(space, pid, mut windows) => {
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
-                let layout = self.layout(space);
-                windows.retain(|wid| !self.floating_windows.contains(wid));
-                self.tree.set_windows_for_app(layout, pid, windows);
+                let floating_active =
+                    self.active_floating_windows.entry(space).or_default().entry(pid).or_default();
+                floating_active.clear();
+                windows.retain(|wid| {
+                    let floating = self.floating_windows.contains(wid);
+                    if floating {
+                        floating_active.insert(*wid);
+                    }
+                    !floating
+                });
+                self.tree.set_windows_for_app(self.layout(space), pid, windows);
             }
             LayoutEvent::AppClosed(pid) => {
                 self.tree.remove_windows_for_app(pid);
@@ -265,27 +276,52 @@ impl LayoutManager {
                     );
                     self.tree.select(node);
                     self.floating_windows.remove(&wid);
+                    self.active_floating_windows
+                        .entry(space)
+                        .or_default()
+                        .entry(wid.pid)
+                        .or_default()
+                        .remove(&wid);
                     self.last_floating_focus = None;
                 } else {
                     self.tree.remove_window(wid);
                     self.floating_windows.insert(wid);
+                    self.active_floating_windows
+                        .entry(space)
+                        .or_default()
+                        .entry(wid.pid)
+                        .or_default()
+                        .insert(wid);
                     self.last_floating_focus = Some(wid);
                 }
                 EventResponse::default()
             }
             LayoutCommand::ToggleFocusFloating => {
                 if is_floating {
-                    EventResponse {
-                        raise_windows: self
-                            .tree
-                            .window_at(self.tree.selection(layout))
-                            .into_iter()
-                            .collect(),
-                    }
+                    let selection = self.tree.window_at(self.tree.selection(layout));
+                    let tree_windows = self
+                        .tree
+                        .root(layout)
+                        .traverse_preorder(self.tree.map())
+                        .flat_map(|node| self.tree.window_at(node));
+                    let raise_windows = tree_windows
+                        .filter(|&wid| Some(wid) != selection)
+                        .chain(selection)
+                        .collect();
+                    EventResponse { raise_windows }
                 } else {
-                    EventResponse {
-                        raise_windows: self.last_floating_focus.into_iter().collect(),
-                    }
+                    let floating_windows = self
+                        .active_floating_windows
+                        .entry(space)
+                        .or_default()
+                        .values()
+                        .flatten()
+                        .copied();
+                    let raise_windows = floating_windows
+                        .filter(|&wid| Some(wid) != self.last_floating_focus)
+                        .chain(self.last_floating_focus)
+                        .collect();
+                    EventResponse { raise_windows }
                 }
             }
             LayoutCommand::Debug => {

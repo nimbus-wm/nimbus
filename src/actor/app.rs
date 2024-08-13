@@ -15,7 +15,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
@@ -105,13 +105,25 @@ pub enum Request {
     SetWindowFrame(WindowId, CGRect, TransactionId),
     SetWindowPos(WindowId, CGPoint, TransactionId),
 
-    /// Temporarily suspends position and size update events for this window.
+    /// Temporarily suspend position and size update events for this window.
     BeginWindowAnimation(WindowId),
-    /// Resumes position and size events for the window. One position and size
+    /// Resume position and size events for the window. One position and size
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
 
-    Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>),
+    /// Raise the window by making it the main window of this app and then
+    /// making this app frontmost.
+    ///
+    /// Events attributed to this request will have the [`Quiet`] parameter
+    /// attached to them.
+    Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>, Quiet),
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
+pub enum Quiet {
+    Yes,
+    #[default]
+    No,
 }
 
 /// Prevents stale activation requests from happening after more recent ones.
@@ -156,15 +168,17 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Even
 }
 
 struct State {
+    pid: pid_t,
+    bundle_id: Option<String>,
+    running_app: Id<NSRunningApplication>,
     app: AXUIElement,
-    windows: HashMap<WindowId, WindowState>,
+    observer: Observer,
     events_tx: Sender<(Span, Event)>,
     requests_rx: Receiver<(Span, Request)>,
-    pid: pid_t,
-    running_app: Id<NSRunningApplication>,
-    bundle_id: Option<String>,
+    windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
-    observer: Observer,
+    main_window: Option<WindowId>,
+    last_activated: Option<Instant>,
 }
 
 struct WindowState {
@@ -224,12 +238,19 @@ impl State {
             windows.push((wid, info));
         }
 
+        self.main_window = self.app.main_window().ok().and_then(|w| self.id(&w).ok());
+        let is_frontmost = self.app.frontmost().map(|b| b.into()).unwrap_or(false);
+        if is_frontmost {
+            self.last_activated = Some(Instant::now());
+        }
+
         // Send the ApplicationLaunched event.
         let app_state = AppState {
             handle,
             info,
-            main_window: self.app.main_window().ok().and_then(|w| self.id(&w).ok()),
-            is_frontmost: self.app.frontmost().map(|b| b.into()).unwrap_or(false),
+            main_window: self.main_window,
+            is_frontmost,
+            frontmost_is_quiet: Quiet::No,
         };
         if self
             .events_tx
@@ -347,9 +368,36 @@ impl State {
                     Requested(true),
                 ));
             }
-            Request::Raise(wid, token, done) => {
-                let window = self.window(*wid)?;
+            &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
+                let window = self.window(wid)?;
                 trace("raise", &window.elem, || window.elem.raise())?;
+                let quiet_if = (quiet == Quiet::Yes).then_some(wid);
+                // FIXME: quiet is ignored by reactor;
+                // if we're activated quietly and then service a non-quiet raise
+                // request, we need to signal the reactor that we are not quietly
+                // raised anymore.
+                //
+                // This should be more correct than trying to do something with
+                // `quiet` on main window change events directly.
+                //
+                // Another framing:
+                // There are two "edges" that can transition from one main window
+                // state to another. One is an app main window change and the other
+                // is a frontmost app change. Either can be labelled with quiet;
+                // in the case of the frontmost app, the quiet label from the most
+                // recent frontmost update of that app applies (even if the actual
+                // event was a global frontmost change). The quiet label of the
+                // transitioning edge should be applied to the main window change.
+                //
+                // This seems easiest to model in a separate component.
+                let main_window = self.on_main_window_changed(quiet_if);
+                if main_window != Some(wid) {
+                    warn!(
+                        "Raise request failed to raise {desired:?}; instead got {main_window:?}",
+                        desired = self.window(wid)?.elem
+                    );
+                    return Ok(());
+                }
                 // This request could be handled out of order with respect to
                 // later requests sent to other apps by the reactor. To avoid
                 // raising ourselves after a later request was processed to
@@ -398,7 +446,17 @@ impl State {
                             self.running_app
                                 .activateWithOptions(NSApplicationActivateIgnoringOtherApps)
                         };
-                        if !success {
+                        if success {
+                            // For now we assume the activation worked if the
+                            // call succeeded.
+                            // TODO: Don't send the event, just wait for the real one and attach
+                            // `quiet` to it (under timeout). Also don't send `done` until then
+                            // (or timeout).
+                            // Idea: Maybe we can control the timeout in client and use the send
+                            // result to decide whether `quiet` applies.
+                            self.last_activated = Some(Instant::now());
+                            self.send_event(Event::ApplicationActivated(self.pid, quiet));
+                        } else {
                             warn!(?self.pid, "Failed to activate app");
                         }
                         Ok(())
@@ -412,6 +470,40 @@ impl State {
         Ok(())
     }
 
+    fn on_main_window_changed(&mut self, quiet_if: Option<WindowId>) -> Option<WindowId> {
+        // Always read back the main window instead of getting it from an event,
+        // in case the event is stale. This is necessary because we sometimes
+        // manufacture events and don't want them to be incorrectly interleaved.
+        let elem = match trace("main_window", &self.app, || self.app.main_window()) {
+            Ok(elem) => elem,
+            Err(e) => {
+                error!("Failed to read main window: {e:?}");
+                return None;
+            }
+        };
+        let Some(wid) = self.id(&elem).ok() else {
+            // I suspect we may hit this at some point (before receiving the
+            // window created notification); it isn't handled correctly today.
+            error!("Got MainWindowChanged on unknown window {elem:?}");
+            return None;
+        };
+        if self.main_window == Some(wid) {
+            // Suppress redundant events.
+            return Some(wid);
+        }
+        self.main_window = Some(wid);
+        let quiet = match quiet_if {
+            Some(id) if id == wid => Quiet::Yes,
+            _ => Quiet::No,
+        };
+        self.send_event(Event::ApplicationMainWindowChanged(
+            self.pid,
+            Some(wid),
+            quiet,
+        ));
+        Some(wid)
+    }
+
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
     fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
         trace!(?notif, ?elem, "Got notification");
@@ -420,26 +512,28 @@ impl State {
         // TODO: Handle all of these.
         match notif {
             kAXApplicationActivatedNotification => {
-                // Unfortunately, if the user clicks on a new main window to
-                // activate this app, we get this notification before getting
-                // the main window changed notification. To distinguish from the
-                // case where the app was activated and the main window has
-                // *not* changed, we read the main window and send it along with
-                // the notification.
-                let main = elem.main_window().ok().and_then(|w| self.id(&w).ok());
-                self.send_event(Event::ApplicationActivated(self.pid, main));
+                // Suppress events from our own activation.
+                // Since the events we manufacture aren't guaranteed to have happened,
+                // we are stuck with using a timeout so we don't suppress real events
+                // in the future.
+                match self.last_activated {
+                    Some(ts) if ts.elapsed() < Duration::from_millis(1000) => (),
+                    _ => {
+                        // Unfortunately, if the user clicks on a new main window to
+                        // activate this app, we get this notification before getting
+                        // the main window changed notification. First read the main
+                        // window and send a notification if it changed.
+                        self.on_main_window_changed(None);
+                        self.send_event(Event::ApplicationActivated(self.pid, Quiet::default()));
+                    }
+                }
             }
             kAXApplicationDeactivatedNotification => {
+                self.last_activated = None;
                 self.send_event(Event::ApplicationDeactivated(self.pid));
             }
             kAXMainWindowChangedNotification => {
-                let main = self.id(&elem).ok();
-                if main.is_none() {
-                    // I suspect we may hit this at some point (before receiving the
-                    // window created notification); it isn't handled correctly today.
-                    error!("Got MainWindowChanged on unknown window {elem:?}");
-                }
-                self.send_event(Event::ApplicationMainWindowChanged(self.pid, main));
+                self.on_main_window_changed(None);
             }
             kAXWindowCreatedNotification => {
                 let Ok(window) = WindowInfo::try_from(&elem) else {
@@ -598,15 +692,17 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
         });
 
         RefCell::new(State {
-            app: app.clone(),
-            windows: HashMap::new(),
-            events_tx,
-            requests_rx,
             pid,
             running_app,
             bundle_id: info.bundle_id.clone(),
-            last_window_idx: 0,
+            app: app.clone(),
             observer,
+            events_tx,
+            requests_rx,
+            windows: HashMap::new(),
+            last_window_idx: 0,
+            main_window: None,
+            last_activated: None,
         })
     });
 
