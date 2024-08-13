@@ -24,9 +24,11 @@ impl HotkeyManager {
 
     pub fn register_wm(&self, modifiers: Modifiers, key_code: KeyCode, cmd: WmCommand) {
         let events_tx = self.events_tx.clone();
+        let mut seq = 0;
         self.hook
             .register(Hotkey { modifiers, key_code }, move || {
-                let span = info_span!("hotkey::press", ?key_code);
+                seq += 1;
+                let span = info_span!("hotkey::press", ?key_code, ?seq);
                 events_tx.send((span, WmEvent::Command(cmd.clone()))).unwrap()
             })
             .unwrap();

@@ -44,7 +44,7 @@ fn main() {
             tracing_tree::HierarchicalLayer::default()
                 .with_indent_amount(2)
                 .with_indent_lines(true)
-                .with_deferred_spans(true)
+                //.with_deferred_spans(true)
                 .with_span_retrace(true)
                 .with_targets(true)
                 .with_timer(UtcDateTime::default()),
