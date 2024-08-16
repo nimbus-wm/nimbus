@@ -303,7 +303,6 @@ impl State {
                 let mut known_visible = Vec::with_capacity(window_elems.len() as usize);
                 for elem in window_elems.iter() {
                     let elem = elem.clone();
-                    // FIXME: This check is quadratic.
                     if let Ok(id) = self.id(&elem) {
                         known_visible.push(id);
                         continue;
@@ -639,10 +638,18 @@ impl State {
     }
 
     fn id(&self, elem: &AXUIElement) -> Result<WindowId, accessibility::Error> {
-        let Some((&wid, _)) = self.windows.iter().find(|(_, w)| &w.elem == elem) else {
-            return Err(accessibility::Error::NotFound);
-        };
-        Ok(wid)
+        if let Ok(id) = WindowServerId::try_from(elem) {
+            let wid = WindowId {
+                pid: self.pid,
+                idx: NonZeroU32::new(id.as_u32()).expect("Window server id was 0"),
+            };
+            if self.windows.contains_key(&wid) {
+                return Ok(wid);
+            }
+        } else if let Some((&wid, _)) = self.windows.iter().find(|(_, w)| &w.elem == elem) {
+            return Ok(wid);
+        }
+        Err(accessibility::Error::NotFound)
     }
 
     fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
