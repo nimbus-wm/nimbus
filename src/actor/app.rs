@@ -480,14 +480,26 @@ impl State {
                 return None;
             }
         };
-        let Some(wid) = self.id(&elem).ok() else {
-            // I suspect we may hit this at some point (before receiving the
-            // window created notification); it isn't handled correctly today.
-            error!("Got MainWindowChanged on unknown window {elem:?}");
-            return None;
+        // Often we get this event for new windows before the WindowCreated
+        // notification. If that happens, register it and send the corresponding
+        // event here.
+        let wid = match self.id(&elem).ok() {
+            Some(wid) => wid,
+            None => {
+                let Ok(info) = WindowInfo::try_from(&elem) else {
+                    return None;
+                };
+                let Some(wid) = self.register_window(elem) else {
+                    warn!(?self.pid, "Got MainWindowChanged on unknown window");
+                    return None;
+                };
+                self.send_event(Event::WindowCreated(wid, info));
+                wid
+            }
         };
+        // Suppress redundant events. This is so we don't repeat an event that
+        // was manufactured as a quiet event before.
         if self.main_window == Some(wid) {
-            // Suppress redundant events.
             return Some(wid);
         }
         self.main_window = Some(wid);
@@ -535,6 +547,10 @@ impl State {
                 self.on_main_window_changed(None);
             }
             kAXWindowCreatedNotification => {
+                if self.id(&elem).is_ok() {
+                    // We already registered this window because of an earlier event.
+                    return;
+                }
                 let Ok(window) = WindowInfo::try_from(&elem) else {
                     return;
                 };
