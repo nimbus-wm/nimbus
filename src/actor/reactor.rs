@@ -5,10 +5,12 @@
 //! changes by sending requests out to the other actors in the system.
 
 mod animation;
+mod main_window;
 
 use std::{collections::HashMap, mem, sync, thread};
 
 use icrate::Foundation::CGRect;
+use main_window::MainWindowTracker;
 use tokio::sync::oneshot;
 use tracing::{debug, info, instrument, trace, warn, Span};
 
@@ -27,7 +29,14 @@ pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 
 #[derive(Debug)]
 pub enum Event {
-    ApplicationLaunched(pid_t, AppState),
+    ApplicationLaunched {
+        pid: pid_t,
+        info: AppInfo,
+        handle: AppThreadHandle,
+        is_frontmost: bool,
+        main_window: Option<WindowId>,
+        visible_windows: Vec<(WindowId, WindowInfo)>,
+    },
     ApplicationTerminated(pid_t),
     ApplicationThreadTerminated(pid_t),
     ApplicationActivated(pid_t, Quiet),
@@ -67,18 +76,15 @@ pub struct Reactor {
     layout: LayoutManager,
     windows: HashMap<WindowId, WindowState>,
     main_screen: Option<Screen>,
-    global_frontmost_app_pid: Option<pid_t>,
     raise_token: RaiseToken,
+    main_window_tracker: MainWindowTracker,
 }
 
 #[derive(Debug)]
-pub struct AppState {
+struct AppState {
+    #[allow(unused)]
     pub info: AppInfo,
     pub handle: AppThreadHandle,
-    pub main_window: Option<WindowId>,
-    // You should probably use `frontmost_app` in reactor instead.
-    pub is_frontmost: bool,
-    pub frontmost_is_quiet: Quiet,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -144,19 +150,27 @@ impl Reactor {
             layout,
             windows: HashMap::new(),
             main_screen: None,
-            global_frontmost_app_pid: None,
             raise_token: RaiseToken::default(),
+            main_window_tracker: MainWindowTracker::default(),
         }
     }
 
     fn handle_event(&mut self, event: Event) {
         debug!(?event, "Event");
-        let main_window_orig = self.main_window_quiet();
         let mut animation_focus_wid = None;
         let mut is_resize = false;
+        let raised_window = self.main_window_tracker.handle_event(&event);
         match event {
-            Event::ApplicationLaunched(pid, state) => {
-                self.apps.insert(pid, state);
+            Event::ApplicationLaunched {
+                pid,
+                info,
+                handle,
+                visible_windows,
+                is_frontmost: _,
+                main_window: _,
+            } => {
+                self.apps.insert(pid, AppState { info, handle });
+                self.on_windows_discovered(pid, visible_windows, vec![]);
             }
             Event::ApplicationTerminated(pid) => {
                 if let Some(app) = self.apps.get_mut(&pid) {
@@ -167,44 +181,15 @@ impl Reactor {
                 self.apps.remove(&pid);
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
-            Event::ApplicationActivated(pid, quiet) => {
-                let app = self.apps.get_mut(&pid).unwrap();
-                app.is_frontmost = true;
-                app.frontmost_is_quiet = quiet;
-            }
-            Event::ApplicationGloballyActivated(pid) => {
-                // See the comment in main_window() for the difference between
-                // this and the ApplicationActivated event.
-                self.global_frontmost_app_pid = Some(pid);
-            }
-            Event::ApplicationDeactivated(pid) => {
-                self.apps.get_mut(&pid).unwrap().is_frontmost = false;
-            }
-            Event::ApplicationGloballyDeactivated(pid) => {
-                if self.global_frontmost_app_pid == Some(pid) {
-                    self.global_frontmost_app_pid = None;
-                }
-            }
-            Event::ApplicationMainWindowChanged(pid, main_window, _quiet) => {
-                self.apps.get_mut(&pid).unwrap().main_window = main_window;
+            Event::ApplicationActivated(_, _)
+            | Event::ApplicationGloballyActivated(_)
+            | Event::ApplicationDeactivated(_)
+            | Event::ApplicationGloballyDeactivated(_)
+            | Event::ApplicationMainWindowChanged(_, _, _) => {
+                // Handled by MainWindowTracker.
             }
             Event::WindowsDiscovered { pid, new, known_visible } => {
-                // FIXME: There is no synchronization ensuring that these windows
-                // are for the current space. The only way I've found to do that
-                // is to take a "snapshot" using CGWindowListCopyWindowInfo.
-                let mut app_windows = known_visible;
-                app_windows.retain(|wid| self.windows[wid].is_standard);
-                app_windows
-                    .extend(new.iter().filter_map(|(wid, info)| info.is_standard.then_some(wid)));
-                self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-                // FIXME: We assume all windows are on the main screen.
-                if let Some(space) = self.main_screen_space() {
-                    self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
-                        space,
-                        pid,
-                        app_windows,
-                    ));
-                }
+                self.on_windows_discovered(pid, new, known_visible);
             }
             Event::WindowCreated(wid, window) => {
                 // TODO: It's possible for a window to be on multiple spaces
@@ -301,16 +286,34 @@ impl Reactor {
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
-        let main_window = self.main_window_quiet();
-        if main_window.1 == Quiet::No && main_window != main_window_orig {
+        if let Some(raised_window) = raised_window {
             // TODO: There's an edge case where the space updates and the main
             // window does not (because it is on multiple spaces). Update the
             // layout in that case too.
             if let Some(space) = self.main_screen_space() {
-                self.send_layout_event(LayoutEvent::WindowRaised(space, main_window.0));
+                self.send_layout_event(LayoutEvent::WindowRaised(space, Some(raised_window)));
             }
         }
         self.update_layout(animation_focus_wid, is_resize);
+    }
+
+    fn on_windows_discovered(
+        &mut self,
+        pid: pid_t,
+        new: Vec<(WindowId, WindowInfo)>,
+        known_visible: Vec<WindowId>,
+    ) {
+        // FIXME: There is no synchronization ensuring that these windows
+        // are for the current space. The only way I've found to do that
+        // is to take a "snapshot" using CGWindowListCopyWindowInfo.
+        let mut app_windows = known_visible;
+        app_windows.retain(|wid| self.windows[wid].is_standard);
+        app_windows.extend(new.iter().filter_map(|(wid, info)| info.is_standard.then_some(wid)));
+        self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
+        // FIXME: We assume all windows are on the main screen.
+        if let Some(space) = self.main_screen_space() {
+            self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
+        }
     }
 
     fn send_layout_event(&mut self, event: LayoutEvent) {
@@ -348,37 +351,7 @@ impl Reactor {
 
     /// The main window of the active app, if any.
     fn main_window(&self) -> Option<WindowId> {
-        self.main_window_quiet().0
-    }
-
-    /// The main window of the active app, if any, and whether it was raised quietly.
-    fn main_window_quiet(&self) -> (Option<WindowId>, Quiet) {
-        // Because apps self-report this event from their respective
-        // threads, they can appear out of order. To mitigate this, we
-        // require that the "global" view from NSNotificationCenter
-        // agrees with the app about which is frontmost. This guarantees
-        // eventual consistency.
-        //
-        // Since the global events provide an authoritative ordering, why
-        // care about this event at all? The reason is that we want to
-        // know what the main window of the app is upon activation. This
-        // is important when the user clicks on a window of the app
-        // that was not previously the main window: The frontmost app
-        // and its main window can switch at the same time. In that case
-        // we don't want to record the old main window as having focus,
-        // since it never did. So we wait until both events are received.
-        let Some(pid) = self.global_frontmost_app_pid else {
-            return (None, Quiet::default());
-        };
-        match self.apps.get(&pid) {
-            Some(&AppState {
-                is_frontmost: true,
-                frontmost_is_quiet,
-                main_window: Some(window),
-                ..
-            }) if self.windows.contains_key(&window) => (Some(window), frontmost_is_quiet),
-            _ => (None, Quiet::default()),
-        }
+        self.main_window_tracker.main_window()
     }
 
     fn main_screen_space(&self) -> Option<SpaceId> {
@@ -425,7 +398,7 @@ impl Reactor {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::{
         collections::BTreeMap,
         sync::mpsc::{channel, Receiver, Sender},
@@ -441,25 +414,25 @@ mod tests {
     };
 
     impl Reactor {
-        fn handle_events(&mut self, events: Vec<Event>) {
+        pub fn handle_events(&mut self, events: Vec<Event>) {
             for event in events {
                 self.handle_event(event);
             }
         }
     }
 
-    struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
+    pub struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
     impl Apps {
-        fn new() -> Apps {
+        pub fn new() -> Apps {
             let (tx, rx) = channel();
             Apps(tx, rx)
         }
 
-        fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Vec<Event> {
+        pub fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Vec<Event> {
             self.make_app_with_opts(pid, windows, None, false)
         }
 
-        fn make_app_with_opts(
+        pub fn make_app_with_opts(
             &mut self,
             pid: pid_t,
             windows: Vec<WindowInfo>,
@@ -467,34 +440,25 @@ mod tests {
             is_frontmost: bool,
         ) -> Vec<Event> {
             let handle = AppThreadHandle::new_for_test(self.0.clone());
-            vec![
-                Event::ApplicationLaunched(
-                    pid,
-                    AppState {
-                        info: AppInfo {
-                            bundle_id: Some(format!("com.testapp{pid}")),
-                            localized_name: Some(format!("TestApp{pid}")),
-                        },
-                        handle,
-                        main_window,
-                        is_frontmost,
-                        frontmost_is_quiet: Quiet::No,
-                    },
-                ),
-                Event::WindowsDiscovered {
-                    pid,
-                    new: (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
-                    known_visible: vec![],
+            vec![Event::ApplicationLaunched {
+                pid,
+                info: AppInfo {
+                    bundle_id: Some(format!("com.testapp{pid}")),
+                    localized_name: Some(format!("TestApp{pid}")),
                 },
-            ]
+                handle,
+                is_frontmost,
+                main_window,
+                visible_windows: (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
+            }]
         }
 
-        fn requests(&mut self) -> Vec<Request> {
+        pub fn requests(&mut self) -> Vec<Request> {
             self.1.try_iter().map(|(_span, rq)| rq).collect()
         }
     }
 
-    fn make_window(idx: usize) -> WindowInfo {
+    pub fn make_window(idx: usize) -> WindowInfo {
         WindowInfo {
             is_standard: true,
             title: format!("Window{idx}"),
@@ -506,75 +470,8 @@ mod tests {
         }
     }
 
-    fn make_windows(count: usize) -> Vec<WindowInfo> {
+    pub fn make_windows(count: usize) -> Vec<WindowInfo> {
         (1..=count).map(make_window).collect()
-    }
-
-    #[test]
-    fn it_tracks_frontmost_app_and_main_window_correctly() {
-        use Event::*;
-        let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
-        let space = SpaceId::new(1);
-        reactor.handle_event(ScreenParametersChanged(
-            vec![CGRect::ZERO],
-            vec![Some(space)],
-        ));
-        assert_eq!(None, reactor.main_window());
-
-        reactor.handle_event(ApplicationGloballyActivated(1));
-        reactor.handle_events(apps.make_app_with_opts(
-            1,
-            make_windows(2),
-            Some(WindowId::new(1, 1)),
-            true,
-        ));
-        reactor.handle_events(apps.make_app(2, make_windows(2)));
-        assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(1, 1))
-        );
-        reactor.handle_event(ApplicationGloballyDeactivated(1));
-        assert_eq!(None, reactor.main_window());
-        reactor.handle_event(ApplicationActivated(2, Quiet::No));
-        reactor.handle_event(ApplicationGloballyActivated(2));
-        assert_eq!(None, reactor.main_window());
-        reactor.handle_event(ApplicationMainWindowChanged(
-            2,
-            Some(WindowId::new(2, 2)),
-            Quiet::No,
-        ));
-        assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(2, 2))
-        );
-        reactor.handle_event(ApplicationMainWindowChanged(
-            1,
-            Some(WindowId::new(1, 2)),
-            Quiet::No,
-        ));
-        assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
-        reactor.handle_event(ApplicationDeactivated(1));
-        assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
-        reactor.handle_event(ApplicationDeactivated(2));
-        assert_eq!(None, reactor.main_window());
-
-        reactor.handle_event(ApplicationGloballyActivated(3));
-        assert_eq!(None, reactor.main_window());
-
-        reactor.handle_events(apps.make_app_with_opts(
-            3,
-            make_windows(2),
-            Some(WindowId::new(3, 1)),
-            true,
-        ));
-        assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(3, 1))
-        );
     }
 
     #[derive(Default, PartialEq, Debug)]

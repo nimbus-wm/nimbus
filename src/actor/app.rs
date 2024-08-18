@@ -37,7 +37,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
-    actor::reactor::{AppState, Event, Requested, TransactionId},
+    actor::reactor::{Event, Requested, TransactionId},
     sys::{
         app::running_apps,
         geometry::{ToCGType, ToICrate},
@@ -245,31 +245,20 @@ impl State {
         }
 
         // Send the ApplicationLaunched event.
-        let app_state = AppState {
-            handle,
-            info,
-            main_window: self.main_window,
-            is_frontmost,
-            frontmost_is_quiet: Quiet::No,
-        };
         if self
             .events_tx
             .send((
                 Span::current(),
-                Event::ApplicationLaunched(self.pid, app_state),
+                Event::ApplicationLaunched {
+                    pid: self.pid,
+                    handle,
+                    info,
+                    is_frontmost,
+                    main_window: self.main_window,
+                    visible_windows: windows,
+                },
             ))
             .is_err()
-            || self
-                .events_tx
-                .send((
-                    Span::current(),
-                    Event::WindowsDiscovered {
-                        pid: self.pid,
-                        new: windows,
-                        known_visible: vec![],
-                    },
-                ))
-                .is_err()
         {
             debug!(pid = ?self.pid, "Failed to send ApplicationLaunched event, exiting thread");
             return false;
@@ -371,24 +360,6 @@ impl State {
                 let window = self.window(wid)?;
                 trace("raise", &window.elem, || window.elem.raise())?;
                 let quiet_if = (quiet == Quiet::Yes).then_some(wid);
-                // FIXME: quiet is ignored by reactor;
-                // if we're activated quietly and then service a non-quiet raise
-                // request, we need to signal the reactor that we are not quietly
-                // raised anymore.
-                //
-                // This should be more correct than trying to do something with
-                // `quiet` on main window change events directly.
-                //
-                // Another framing:
-                // There are two "edges" that can transition from one main window
-                // state to another. One is an app main window change and the other
-                // is a frontmost app change. Either can be labelled with quiet;
-                // in the case of the frontmost app, the quiet label from the most
-                // recent frontmost update of that app applies (even if the actual
-                // event was a global frontmost change). The quiet label of the
-                // transitioning edge should be applied to the main window change.
-                //
-                // This seems easiest to model in a separate component.
                 let main_window = self.on_main_window_changed(quiet_if);
                 if main_window != Some(wid) {
                     warn!(
@@ -448,7 +419,7 @@ impl State {
                         if success {
                             // For now we assume the activation worked if the
                             // call succeeded.
-                            // TODO: Don't send the event, just wait for the real one and attach
+                            // FIXME: Don't send the event, just wait for the real one and attach
                             // `quiet` to it (under timeout). Also don't send `done` until then
                             // (or timeout).
                             // Idea: Maybe we can control the timeout in client and use the send
