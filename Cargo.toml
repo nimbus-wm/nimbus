@@ -53,6 +53,9 @@ tracing-tree = { version = "0.3.0", features = ["time"] }
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 tokio = { version = "1.35.1", features = ["rt", "sync", "macros"] }
+test-log = { version = "0.2.16", default-features = false, features = [
+    "trace",
+] }
 
 [patch.crates-io]
 core-foundation = { git = "https://github.com/tmandry/core-foundation-rs", branch = "master" }

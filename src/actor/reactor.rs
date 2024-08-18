@@ -432,6 +432,7 @@ mod tests {
     };
 
     use icrate::Foundation::{CGPoint, CGSize};
+    use test_log::test;
 
     use super::*;
     use crate::{
