@@ -355,78 +355,149 @@ impl State {
                 ));
             }
             &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
-                let window = self.window(wid)?;
-                trace("raise", &window.elem, || window.elem.raise())?;
-                let quiet_if = (quiet == Quiet::Yes).then_some(wid);
-                let main_window = self.on_main_window_changed(quiet_if);
-                if main_window != Some(wid) {
-                    warn!(
-                        "Raise request failed to raise {desired:?}; instead got {main_window:?}",
-                        desired = self.window(wid)?.elem
-                    );
-                    return Ok(());
-                }
-                // This request could be handled out of order with respect to
-                // later requests sent to other apps by the reactor. To avoid
-                // raising ourselves after a later request was processed to
-                // raise a different app, we check the last-raised pid while
-                // holding a lock that ensures no other apps are executing a
-                // raise request at the same time.
-                //
-                // FIXME: Unfonrtunately this is still very racy in that we now
-                // use the unsynchronized NSRunningApplication API to raise the
-                // application, which still relies on the application itself to
-                // see and respond to a request, and there is no apparent
-                // ordering between this and the accessibility messaging. The
-                // only way to know whether a raise request was processed is
-                // to wait for an event telling us the app has been activated.
-                // We can hold the token until then, but will need to time out
-                // just in case the activation silently fails for some reason.
-                token
-                    .with(self.pid, || {
-                        // Check whether the app thinks it is frontmost. If it
-                        // does we won't get an activated event, so don't
-                        // bother activating it.
-                        //
-                        // We read the value directly instead of using the
-                        // cached value because it's possible the cache is
-                        // outdated and the app is no longer frontmost. If that
-                        // happens, it's important that we activate the app or
-                        // the window may never be raised.
-                        //
-                        // Note that it is possible for the app to be outdated
-                        // since the window server is the source of truth. For
-                        // now we don't handle this case. We could handle it
-                        // by looking at the window list and seeing whether
-                        // the requested window is indeed frontmost.
-                        if trace("is_frontmost", &self.app, || self.app.frontmost())?.into() {
-                            trace!("App is already frontmost; skipping activation");
-                            // Declare success.
-                            _ = done.take().map(|s| s.send(()));
-                            return Ok(());
-                        }
-                        // This option is deprecated, but there is no alternative.
-                        #[allow(non_upper_case_globals)]
-                        const NSApplicationActivateIgnoringOtherApps:
-                            NSApplicationActivationOptions = 1 << 1;
-                        // SAFETY: This method should be marked as safe.
-                        let success = trace_misc("activate", || unsafe {
-                            self.running_app
-                                .activateWithOptions(NSApplicationActivateIgnoringOtherApps)
-                        });
-                        if success {
-                            // Record the activation so we can match against its
-                            // notification and correctly mark it as quiet.
-                            self.last_activated = Some((Instant::now(), quiet, done.take()));
-                        } else {
-                            warn!(?self.pid, "Failed to activate app");
-                        }
-                        Ok(())
-                    })
-                    .unwrap_or(Ok(()))?;
+                self.handle_raise_request(wid, token, done, quiet)?;
             }
         }
         Ok(())
+    }
+
+    #[instrument(skip_all, fields(app = ?self.app, ?notif))]
+    fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
+        trace!(?notif, ?elem, "Got notification");
+        #[allow(non_upper_case_globals)]
+        #[forbid(non_snake_case)]
+        // TODO: Handle all of these.
+        match notif {
+            kAXApplicationActivatedNotification | kAXApplicationDeactivatedNotification => {
+                _ = self.on_activation_changed();
+            }
+            kAXMainWindowChangedNotification => {
+                self.on_main_window_changed(None);
+            }
+            kAXWindowCreatedNotification => {
+                if self.id(&elem).is_ok() {
+                    // We already registered this window because of an earlier event.
+                    return;
+                }
+                let Ok(window) = WindowInfo::try_from(&elem) else {
+                    return;
+                };
+                let Some(wid) = self.register_window(elem) else {
+                    return;
+                };
+                self.send_event(Event::WindowCreated(wid, window));
+            }
+            kAXUIElementDestroyedNotification => {
+                let Some((&wid, _)) = self.windows.iter().find(|(_, w)| w.elem == elem) else {
+                    return;
+                };
+                self.windows.remove(&wid);
+                self.send_event(Event::WindowDestroyed(wid));
+            }
+            kAXWindowMovedNotification | kAXWindowResizedNotification => {
+                // The difference between these two events isn't very useful to
+                // expose. Anytime there's a resize we'll want to check the
+                // position to see which corner the window was resized from. So
+                // we always read and send the full frame since it's a single
+                // request anyway.
+                let Ok(wid) = self.id(&elem) else {
+                    return;
+                };
+                let last_seen = self.window(wid).unwrap().last_seen_txid;
+                let Ok(frame) = elem.frame() else {
+                    return;
+                };
+                self.send_event(Event::WindowFrameChanged(
+                    wid,
+                    frame.to_icrate(),
+                    last_seen,
+                    Requested(false),
+                ));
+            }
+            kAXWindowMiniaturizedNotification => {}
+            kAXWindowDeminiaturizedNotification => {}
+            kAXTitleChangedNotification => {}
+            _ => {
+                error!("Unhandled notification {notif:?} on {elem:#?}");
+            }
+        }
+    }
+
+    fn handle_raise_request(
+        &mut self,
+        wid: WindowId,
+        token: &RaiseToken,
+        done: &mut Option<oneshot::Sender<()>>,
+        quiet: Quiet,
+    ) -> Result<(), accessibility::Error> {
+        let window = self.window(wid)?;
+        trace("raise", &window.elem, || window.elem.raise())?;
+        let quiet_if = (quiet == Quiet::Yes).then_some(wid);
+        let main_window = self.on_main_window_changed(quiet_if);
+        if main_window != Some(wid) {
+            warn!(
+                "Raise request failed to raise {desired:?}; instead got {main_window:?}",
+                desired = self.window(wid)?.elem
+            );
+            return Ok(());
+        }
+        // This request could be handled out of order with respect to
+        // later requests sent to other apps by the reactor. To avoid
+        // raising ourselves after a later request was processed to
+        // raise a different app, we check the last-raised pid while
+        // holding a lock that ensures no other apps are executing a
+        // raise request at the same time.
+        //
+        // FIXME: Unfonrtunately this is still very racy in that we now
+        // use the unsynchronized NSRunningApplication API to raise the
+        // application, which still relies on the application itself to
+        // see and respond to a request, and there is no apparent
+        // ordering between this and the accessibility messaging. The
+        // only way to know whether a raise request was processed is
+        // to wait for an event telling us the app has been activated.
+        // We can hold the token until then, but will need to time out
+        // just in case the activation silently fails for some reason.
+        token
+            .with(self.pid, || {
+                // Check whether the app thinks it is frontmost. If it
+                // does we won't get an activated event, so don't
+                // bother activating it.
+                //
+                // We read the value directly instead of using the
+                // cached value because it's possible the cache is
+                // outdated and the app is no longer frontmost. If that
+                // happens, it's important that we activate the app or
+                // the window may never be raised.
+                //
+                // Note that it is possible for the app to be outdated
+                // since the window server is the source of truth. For
+                // now we don't handle this case. We could handle it
+                // by looking at the window list and seeing whether
+                // the requested window is indeed frontmost.
+                if trace("is_frontmost", &self.app, || self.app.frontmost())?.into() {
+                    trace!("App is already frontmost; skipping activation");
+                    // Declare success.
+                    _ = done.take().map(|s| s.send(()));
+                    return Ok(());
+                }
+                // This option is deprecated, but there is no alternative.
+                #[allow(non_upper_case_globals)]
+                const NSApplicationActivateIgnoringOtherApps: NSApplicationActivationOptions =
+                    1 << 1;
+                // SAFETY: This method should be marked as safe.
+                let success = trace_misc("activate", || unsafe {
+                    self.running_app.activateWithOptions(NSApplicationActivateIgnoringOtherApps)
+                });
+                if success {
+                    // Record the activation so we can match against its
+                    // notification and correctly mark it as quiet.
+                    self.last_activated = Some((Instant::now(), quiet, done.take()));
+                } else {
+                    warn!(?self.pid, "Failed to activate app");
+                }
+                Ok(())
+            })
+            .unwrap_or(Ok(()))
     }
 
     fn on_main_window_changed(&mut self, quiet_if: Option<WindowId>) -> Option<WindowId> {
@@ -516,68 +587,6 @@ impl State {
             self.send_event(Event::ApplicationDeactivated(self.pid));
         }
         Ok(())
-    }
-
-    #[instrument(skip_all, fields(app = ?self.app, ?notif))]
-    fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
-        trace!(?notif, ?elem, "Got notification");
-        #[allow(non_upper_case_globals)]
-        #[forbid(non_snake_case)]
-        // TODO: Handle all of these.
-        match notif {
-            kAXApplicationActivatedNotification | kAXApplicationDeactivatedNotification => {
-                _ = self.on_activation_changed();
-            }
-            kAXMainWindowChangedNotification => {
-                self.on_main_window_changed(None);
-            }
-            kAXWindowCreatedNotification => {
-                if self.id(&elem).is_ok() {
-                    // We already registered this window because of an earlier event.
-                    return;
-                }
-                let Ok(window) = WindowInfo::try_from(&elem) else {
-                    return;
-                };
-                let Some(wid) = self.register_window(elem) else {
-                    return;
-                };
-                self.send_event(Event::WindowCreated(wid, window));
-            }
-            kAXUIElementDestroyedNotification => {
-                let Some((&wid, _)) = self.windows.iter().find(|(_, w)| w.elem == elem) else {
-                    return;
-                };
-                self.windows.remove(&wid);
-                self.send_event(Event::WindowDestroyed(wid));
-            }
-            kAXWindowMovedNotification | kAXWindowResizedNotification => {
-                // The difference between these two events isn't very useful to
-                // expose. Anytime there's a resize we'll want to check the
-                // position to see which corner the window was resized from. So
-                // we always read and send the full frame since it's a single
-                // request anyway.
-                let Ok(wid) = self.id(&elem) else {
-                    return;
-                };
-                let last_seen = self.window(wid).unwrap().last_seen_txid;
-                let Ok(frame) = elem.frame() else {
-                    return;
-                };
-                self.send_event(Event::WindowFrameChanged(
-                    wid,
-                    frame.to_icrate(),
-                    last_seen,
-                    Requested(false),
-                ));
-            }
-            kAXWindowMiniaturizedNotification => {}
-            kAXWindowDeminiaturizedNotification => {}
-            kAXTitleChangedNotification => {}
-            _ => {
-                error!("Unhandled notification {notif:?} on {elem:#?}");
-            }
-        }
     }
 
     #[must_use]
