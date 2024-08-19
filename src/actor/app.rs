@@ -140,7 +140,7 @@ impl RaiseToken {
     /// Checks if the most recent activation request was for `pid`. Calls the
     /// supplied closure if it was.
     pub fn with<R>(&self, pid: pid_t, f: impl FnOnce() -> R) -> Option<R> {
-        let _lock = self.0 .0.lock().unwrap();
+        let _lock = trace_misc("RT lock", || self.0 .0.lock()).unwrap();
         if pid == self.0 .1.load(Ordering::SeqCst) {
             Some(f())
         } else {
@@ -178,7 +178,8 @@ struct State {
     windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
     main_window: Option<WindowId>,
-    last_activated: Option<Instant>,
+    last_activated: Option<(Instant, Quiet, Option<oneshot::Sender<()>>)>,
+    is_frontmost: bool,
 }
 
 struct WindowState {
@@ -239,10 +240,7 @@ impl State {
         }
 
         self.main_window = self.app.main_window().ok().and_then(|w| self.id(&w).ok());
-        let is_frontmost = self.app.frontmost().map(|b| b.into()).unwrap_or(false);
-        if is_frontmost {
-            self.last_activated = Some(Instant::now());
-        }
+        self.is_frontmost = self.app.frontmost().map(|b| b.into()).unwrap_or(false);
 
         // Send the ApplicationLaunched event.
         if self
@@ -253,7 +251,7 @@ impl State {
                     pid: self.pid,
                     handle,
                     info,
-                    is_frontmost,
+                    is_frontmost: self.is_frontmost,
                     main_window: self.main_window,
                     visible_windows: windows,
                 },
@@ -382,59 +380,50 @@ impl State {
                 // ordering between this and the accessibility messaging. The
                 // only way to know whether a raise request was processed is
                 // to wait for an event telling us the app has been activated.
-                // This might benefit from using async/await.
-                //
-                // The below comments are for the old way which used the
-                // accessibility API. This solved the ordering problem, but has
-                // the unfortunate issue that it raises *all* windows of the
-                // application, not just the main window.
-                //
-                // ---
-                //
-                // The only way this can fail to provide eventual consistency is
-                // if we time out on the set_frontmost request but the app
-                // processes it later. For now we set a fairly long timeout to
-                // mitigate this (500ms – not too long, to avoid blocking all
-                // raise requests on an unresponsive app). It's unlikely that an
-                // app will be unresponsive for so long after responding to the
-                // raise request.
-                //
-                // In the future, we could do better by asking the app if it was
-                // activated (with an unlimited timeout while not holding the
-                // lock). If it was and another app was activated in the
-                // meantime, we would "undo" our activation in favor of the app
-                // that is supposed to be activated. This requires taking into
-                // account user-initiated activations.
+                // We can hold the token until then, but will need to time out
+                // just in case the activation silently fails for some reason.
                 token
                     .with(self.pid, || {
+                        // Check whether the app thinks it is frontmost. If it
+                        // does we won't get an activated event, so don't
+                        // bother activating it.
+                        //
+                        // We read the value directly instead of using the
+                        // cached value because it's possible the cache is
+                        // outdated and the app is no longer frontmost. If that
+                        // happens, it's important that we activate the app or
+                        // the window may never be raised.
+                        //
+                        // Note that it is possible for the app to be outdated
+                        // since the window server is the source of truth. For
+                        // now we don't handle this case. We could handle it
+                        // by looking at the window list and seeing whether
+                        // the requested window is indeed frontmost.
+                        if trace("is_frontmost", &self.app, || self.app.frontmost())?.into() {
+                            trace!("App is already frontmost; skipping activation");
+                            // Declare success.
+                            _ = done.take().map(|s| s.send(()));
+                            return Ok(());
+                        }
                         // This option is deprecated, but there is no alternative.
                         #[allow(non_upper_case_globals)]
                         const NSApplicationActivateIgnoringOtherApps:
                             NSApplicationActivationOptions = 1 << 1;
-                        let success = unsafe {
-                            // This should be marked as safe.
+                        // SAFETY: This method should be marked as safe.
+                        let success = trace_misc("activate", || unsafe {
                             self.running_app
                                 .activateWithOptions(NSApplicationActivateIgnoringOtherApps)
-                        };
+                        });
                         if success {
-                            // For now we assume the activation worked if the
-                            // call succeeded.
-                            // FIXME: Don't send the event, just wait for the real one and attach
-                            // `quiet` to it (under timeout). Also don't send `done` until then
-                            // (or timeout).
-                            // Idea: Maybe we can control the timeout in client and use the send
-                            // result to decide whether `quiet` applies.
-                            self.last_activated = Some(Instant::now());
-                            self.send_event(Event::ApplicationActivated(self.pid, quiet));
+                            // Record the activation so we can match against its
+                            // notification and correctly mark it as quiet.
+                            self.last_activated = Some((Instant::now(), quiet, done.take()));
                         } else {
                             warn!(?self.pid, "Failed to activate app");
                         }
                         Ok(())
                     })
                     .unwrap_or(Ok(()))?;
-                if let Some(done) = done.take() {
-                    let _ = done.send(());
-                }
             }
         }
         Ok(())
@@ -486,6 +475,49 @@ impl State {
         Some(wid)
     }
 
+    fn on_activation_changed(&mut self) -> Result<(), accessibility::Error> {
+        // Regardless of the notification we received, read the current activation
+        // and base our event on that. This has the effect of "collapsing" old
+        // stale events, ensuring that they don't interfere with the matching
+        // we do below.
+        let is_frontmost: bool = trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
+        if is_frontmost == self.is_frontmost {
+            return Ok(());
+        }
+        self.is_frontmost = is_frontmost;
+
+        if is_frontmost {
+            // Suppress events from our own activation by attempting to match up
+            // the event with `self.last_activated`.
+            //
+            // Since it is possible for an activation to not happen for some reason,
+            // we are stuck with using a timeout so we don't suppress real events
+            // in the future.
+            let quiet = match self.last_activated.take() {
+                // Idea: Maybe we can control the timeout in client and use the send
+                // result to decide whether `quiet` applies.
+                Some((ts, quiet, done)) if ts.elapsed() < Duration::from_millis(1000) => {
+                    // Initiated by us.
+                    _ = done.map(|s| s.send(()));
+                    quiet
+                }
+                _ => {
+                    // Initiated by the user or system.
+                    // Unfortunately, if the user clicks on a new main window to
+                    // activate this app, we get this notification before getting
+                    // the main window changed notification. First read the main
+                    // window and send a notification if it changed.
+                    self.on_main_window_changed(None);
+                    Quiet::No
+                }
+            };
+            self.send_event(Event::ApplicationActivated(self.pid, quiet));
+        } else {
+            self.send_event(Event::ApplicationDeactivated(self.pid));
+        }
+        Ok(())
+    }
+
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
     fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
         trace!(?notif, ?elem, "Got notification");
@@ -493,26 +525,8 @@ impl State {
         #[forbid(non_snake_case)]
         // TODO: Handle all of these.
         match notif {
-            kAXApplicationActivatedNotification => {
-                // Suppress events from our own activation.
-                // Since the events we manufacture aren't guaranteed to have happened,
-                // we are stuck with using a timeout so we don't suppress real events
-                // in the future.
-                match self.last_activated {
-                    Some(ts) if ts.elapsed() < Duration::from_millis(1000) => (),
-                    _ => {
-                        // Unfortunately, if the user clicks on a new main window to
-                        // activate this app, we get this notification before getting
-                        // the main window changed notification. First read the main
-                        // window and send a notification if it changed.
-                        self.on_main_window_changed(None);
-                        self.send_event(Event::ApplicationActivated(self.pid, Quiet::default()));
-                    }
-                }
-            }
-            kAXApplicationDeactivatedNotification => {
-                self.last_activated = None;
-                self.send_event(Event::ApplicationDeactivated(self.pid));
+            kAXApplicationActivatedNotification | kAXApplicationDeactivatedNotification => {
+                _ = self.on_activation_changed();
             }
             kAXMainWindowChangedNotification => {
                 self.on_main_window_changed(None);
@@ -697,6 +711,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
             last_window_idx: 0,
             main_window: None,
             last_activated: None,
+            is_frontmost: false,
         })
     });
 
@@ -744,5 +759,13 @@ fn trace<T>(
         let app = elem.parent();
         debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
     }
+    out
+}
+
+fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let out = f();
+    let end = Instant::now();
+    trace!(time = ?(end - start), "{desc:12}");
     out
 }
