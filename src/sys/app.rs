@@ -64,6 +64,7 @@ pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
     pub frame: CGRect,
+    #[allow(unused)]
     pub sys_id: WindowServerId,
 }
 

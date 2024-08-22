@@ -58,6 +58,7 @@ impl TryFrom<&AXUIElement> for WindowServerId {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct WindowServerInfo {
     pub id: WindowServerId,
     pub pid: pid_t,
