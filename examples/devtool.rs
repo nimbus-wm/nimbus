@@ -2,7 +2,6 @@
 
 use std::{future::Future, path::PathBuf, time::Instant};
 
-use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::pid_t;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -19,7 +18,10 @@ use icrate::{
     Foundation::MainThreadMarker,
 };
 use nimbus_wm::{
-    actor::reactor,
+    actor::{
+        app::system::{prelude::*, AXUIElement, WindowInfo},
+        reactor,
+    },
     sys::{
         app,
         screen::{self, ScreenCache},
@@ -315,11 +317,11 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
 }
 
-fn get_windows_for_app(app: AXUIElement) -> Result<Vec<app::WindowInfo>, accessibility::Error> {
+fn get_windows_for_app(app: AXUIElement) -> Result<Vec<WindowInfo>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows.into_iter().map(|win| app::WindowInfo::try_from(&*win)).collect()
+    windows.iter().map(|win| WindowInfo::try_from(&*win)).collect()
 }
 
 fn get_apps(opt: &Opt) {

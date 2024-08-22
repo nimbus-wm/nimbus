@@ -1,5 +1,7 @@
 //! Utilities for interfacing with OS-specific APIs.
 
+#![cfg_attr(test, allow(dead_code))]
+
 pub mod app;
 pub mod event;
 pub mod executor;
