@@ -212,6 +212,10 @@ impl LayoutTree {
         false
     }
 
+    pub fn toggle_fullscreen(&mut self, node: NodeId) -> bool {
+        self.tree.data.layout.toggle_fullscreen(node)
+    }
+
     pub fn calculate_layout(&self, layout: LayoutId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
         self.tree.data.layout.get_sizes(
             &self.tree.map,

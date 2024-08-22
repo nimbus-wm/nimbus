@@ -64,6 +64,7 @@ pub enum LayoutCommand {
     Ungroup,
     ToggleFocusFloating,
     ToggleWindowFloating,
+    ToggleFullscreen,
     Debug,
     Serialize,
     SaveAndExit(PathBuf),
@@ -322,6 +323,20 @@ impl LayoutManager {
                         .chain(self.last_floating_focus)
                         .collect();
                     EventResponse { raise_windows }
+                }
+            }
+            LayoutCommand::ToggleFullscreen => {
+                let node = self.tree.selection(layout);
+                if self.tree.toggle_fullscreen(node) {
+                    // If we have multiple windows in the newly fullscreen node,
+                    // make sure they are on top.
+                    let node_windows = node
+                        .traverse_preorder(self.tree.map())
+                        .flat_map(|n| self.tree.window_at(n))
+                        .collect();
+                    EventResponse { raise_windows: node_windows }
+                } else {
+                    EventResponse::default()
                 }
             }
             LayoutCommand::Debug => {

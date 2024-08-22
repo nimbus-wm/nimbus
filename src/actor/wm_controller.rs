@@ -191,6 +191,7 @@ impl WmController {
         mgr.register(ALT, KeyE, Command::Layout(Ungroup));
         mgr.register(ALT, Space, Command::Layout(ToggleFocusFloating));
         mgr.register(ALT | SHIFT, Space, Command::Layout(ToggleWindowFloating));
+        mgr.register(ALT, KeyF, Command::Layout(ToggleFullscreen));
 
         mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
         mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));

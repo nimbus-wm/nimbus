@@ -120,6 +120,9 @@ struct LayoutInfo {
     kind: LayoutKind,
     /// The last ungrouped layout of this node.
     last_ungrouped_kind: LayoutKind,
+    /// Whether the node is fullscreen.
+    #[serde(default)]
+    is_fullscreen: bool,
 }
 
 impl Layout {
@@ -184,6 +187,11 @@ impl Layout {
         self.info[node].size += share;
     }
 
+    pub(super) fn toggle_fullscreen(&mut self, node: NodeId) -> bool {
+        self.info[node].is_fullscreen = !self.info[node].is_fullscreen;
+        self.info[node].is_fullscreen
+    }
+
     pub(super) fn debug(&self, node: NodeId, is_container: bool) -> String {
         let info = &self.info[node];
         if is_container {
@@ -198,10 +206,10 @@ impl Layout {
         map: &NodeMap,
         window: &super::window::Window,
         root: NodeId,
-        rect: CGRect,
+        screen: CGRect,
     ) -> Vec<(WindowId, CGRect)> {
         let mut sizes = vec![];
-        self.apply(map, window, root, rect, &mut sizes);
+        self.apply(map, window, root, screen, screen, &mut sizes);
         sizes
     }
 
@@ -211,8 +219,12 @@ impl Layout {
         window: &super::window::Window,
         node: NodeId,
         rect: CGRect,
+        screen: CGRect,
         sizes: &mut Vec<(WindowId, CGRect)>,
     ) {
+        let info = &self.info[node];
+        let rect = if info.is_fullscreen { screen } else { rect };
+
         if let Some(wid) = window.at(node) {
             debug_assert!(
                 node.children(map).next().is_none(),
@@ -223,10 +235,10 @@ impl Layout {
         }
 
         use LayoutKind::*;
-        match self.info[node].kind {
+        match info.kind {
             Tabbed | Stacked => {
                 for child in node.children(map) {
-                    self.apply(map, window, child, rect, sizes);
+                    self.apply(map, window, child, rect, screen, sizes);
                 }
             }
             Horizontal => {
@@ -242,7 +254,7 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(map, window, child, rect, sizes);
+                    self.apply(map, window, child, rect, screen, sizes);
                     x = rect.max().x;
                 }
             }
@@ -259,7 +271,7 @@ impl Layout {
                         },
                     }
                     .round();
-                    self.apply(map, window, child, rect, sizes);
+                    self.apply(map, window, child, rect, screen, sizes);
                     y = rect.max().y;
                 }
             }
