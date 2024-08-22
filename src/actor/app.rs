@@ -3,6 +3,9 @@
 //!
 //! These APIs support reading and writing window states like position and size.
 
+pub mod system;
+
+#[cfg_attr(test, allow(unused_imports))]
 use std::{
     fmt::Debug,
     num::NonZeroU32,
@@ -14,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use accessibility::{AXAttribute, AXUIElement, AXUIElementActions, AXUIElementAttributes};
+use accessibility::AXAttribute;
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification, kAXTitleChangedNotification,
@@ -24,11 +27,11 @@ use accessibility_sys::{
 };
 use core_foundation::{runloop::CFRunLoop, string::CFString};
 use icrate::{
-    objc2::rc::Id,
-    AppKit::{NSApplicationActivationOptions, NSRunningApplication},
+    AppKit::NSApplicationActivationOptions,
     Foundation::{CGPoint, CGRect},
 };
 use serde::{Deserialize, Serialize};
+pub use system::pid_t;
 use tokio::sync::{
     mpsc::{
         unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
@@ -38,8 +41,9 @@ use tokio::sync::{
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
-pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
+#[allow(unused_imports)]
 use crate::{
+    actor::app::system::{prelude::*, AXUIElement, Id, NSRunningApplication, Observer},
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
@@ -47,10 +51,13 @@ use crate::{
         event,
         executor::Executor,
         geometry::{ToCGType, ToICrate},
-        observer::Observer,
+        run_loop::WakeupHandle,
         window_server::{self, WindowServerId},
     },
 };
+
+pub type AppInfo = crate::sys::app::AppInfo;
+pub type WindowInfo = system::WindowInfo;
 
 /// An identifier representing a window.
 ///
@@ -155,12 +162,14 @@ impl RaiseToken {
     }
 }
 
+#[cfg(not(test))]
 pub fn spawn_initial_app_threads(events_tx: reactor::Sender) {
     for (pid, info) in running_apps(None) {
         spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 
+#[cfg(not(test))]
 pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     thread::Builder::new()
         .name(format!(
@@ -171,6 +180,7 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         .unwrap();
 }
 
+#[cfg_attr(test, allow(dead_code))]
 struct State {
     pid: pid_t,
     bundle_id: Option<String>,
@@ -190,6 +200,7 @@ struct WindowState {
     last_seen_txid: TransactionId,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 const APP_NOTIFICATIONS: &[&str] = &[
     kAXApplicationActivatedNotification,
     kAXApplicationDeactivatedNotification,
@@ -763,6 +774,7 @@ impl State {
     }
 }
 
+#[cfg(not(test))]
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     let app = AXUIElement::application(pid);
     let Some(running_app) = NSRunningApplication::with_process_id(pid) else {
@@ -779,8 +791,8 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         return;
     };
     let (notifications_tx, notifications_rx) = channel();
-    let observer =
-        observer.install(move |elem, notif| _ = notifications_tx.send((elem, notif.to_owned())));
+    let observer = observer
+        .install(move |elem, notif| _ = notifications_tx.send((elem.into(), notif.to_owned())));
 
     // Create our app state.
     let state = State {
@@ -823,4 +835,62 @@ fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
     let end = Instant::now();
     trace!(time = ?(end - start), "{desc:12}");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use super::*;
+    use crate::actor::app::system::fake::{
+        FakeAXUIElement, FakeNSRunningApplication, FakeObserver,
+    };
+
+    #[test]
+    fn test_app_actor() {
+        let pid = 1234;
+        let (events_tx, mut events_rx) = channel();
+
+        let app = FakeAXUIElement::application(pid);
+        let running_app = Id::new(FakeNSRunningApplication);
+        let observer = FakeObserver;
+
+        let state = Rc::new(RefCell::new(State {
+            pid,
+            running_app,
+            bundle_id: Some("com.example.test".to_string()),
+            app: app.clone().into(),
+            observer,
+            events_tx,
+            windows: HashMap::default(),
+            last_window_idx: 0,
+            main_window: None,
+            last_activated: None,
+            is_frontmost: false,
+        }));
+
+        // Test handling a request
+        state.borrow_mut().handle_request(&mut Request::GetVisibleWindows).unwrap();
+
+        // Check if an event was sent
+        if let Ok((_, event)) = events_rx.try_recv() {
+            match event {
+                Event::WindowsDiscovered {
+                    pid: event_pid,
+                    new,
+                    known_visible,
+                } => {
+                    assert_eq!(event_pid, pid);
+                    assert!(new.is_empty());
+                    assert!(known_visible.is_empty());
+                }
+                _ => panic!("Unexpected event type"),
+            }
+        } else {
+            panic!("No event received");
+        }
+
+        //state.borrow_mut().handle_request(&mut Request::SetWindowPos((), (), ())).unwrap();
+        // Add more test cases here...
+    }
 }

@@ -85,9 +85,12 @@ impl WmController {
         use self::{WmCommand::*, WmEvent::*};
         match event {
             AppEventsRegistered => {
+                #[cfg(not(test))]
                 actor::app::spawn_initial_app_threads(self.events_tx.clone());
             }
+            #[allow(unused)]
             AppLaunch(pid, info) => {
+                #[cfg(not(test))]
                 actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
             }
             ReactorEvent(mut event) => {

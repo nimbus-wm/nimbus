@@ -2,7 +2,6 @@
 
 use std::{future::Future, path::PathBuf, time::Instant};
 
-use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::pid_t;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -19,10 +18,12 @@ use icrate::{
     Foundation::MainThreadMarker,
 };
 use nimbus_wm::{
-    actor::reactor,
+    actor::{
+        app::system::{prelude::*, AXUIElement, WindowInfo},
+        reactor,
+    },
     sys::{
         self,
-        app::WindowInfo,
         screen::{self, ScreenCache},
         window_server::{self, WindowServerId},
     },
