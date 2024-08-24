@@ -18,7 +18,7 @@ struct AppState {
 }
 
 impl MainWindowTracker {
-    /// Returns Some(wid) if a WindowRaised layout event should be produced.
+    /// Returns Some(wid) if a WindowFocused layout event should be produced.
     #[must_use]
     pub fn handle_event(&mut self, event: &Event) -> Option<WindowId> {
         // There are two kinds of edges that can transition from one main window

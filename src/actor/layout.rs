@@ -76,7 +76,7 @@ pub enum LayoutEvent {
     AppClosed(pid_t),
     WindowAdded(SpaceId, WindowId),
     WindowRemoved(WindowId),
-    WindowRaised(SpaceId, Option<WindowId>),
+    WindowFocused(SpaceId, Option<WindowId>),
     WindowResized {
         space: SpaceId,
         wid: WindowId,
@@ -90,7 +90,12 @@ pub enum LayoutEvent {
 #[must_use]
 #[derive(Debug, Clone, Default)]
 pub struct EventResponse {
+    /// Windows to raise quietly. No WindowFocused events will be created for
+    /// these.
     pub raise_windows: Vec<WindowId>,
+    /// Window to focus. This window will be raised after the windows in
+    /// raise_windows and a WindowFocused event will be generated.
+    pub focus_window: Option<WindowId>,
 }
 
 impl LayoutManager {
@@ -147,7 +152,7 @@ impl LayoutManager {
                 self.tree.remove_window(wid);
                 self.floating_windows.remove(&wid);
             }
-            LayoutEvent::WindowRaised(space, wid) => {
+            LayoutEvent::WindowFocused(space, wid) => {
                 self.focused_window = wid;
                 if let Some(wid) = wid {
                     if self.floating_windows.contains(&wid) {
@@ -212,7 +217,10 @@ impl LayoutManager {
                 let Some(new) = new else {
                     return EventResponse::default();
                 };
-                EventResponse { raise_windows: vec![new] }
+                EventResponse {
+                    focus_window: Some(new),
+                    ..Default::default()
+                }
             }
             LayoutCommand::Ascend => {
                 if is_floating {
@@ -305,11 +313,10 @@ impl LayoutManager {
                         .root(layout)
                         .traverse_preorder(self.tree.map())
                         .flat_map(|node| self.tree.window_at(node));
-                    let raise_windows = tree_windows
-                        .filter(|&wid| Some(wid) != selection)
-                        .chain(selection)
-                        .collect();
-                    EventResponse { raise_windows }
+                    EventResponse {
+                        raise_windows: tree_windows.filter(|&wid| Some(wid) != selection).collect(),
+                        focus_window: selection,
+                    }
                 } else {
                     let floating_windows = self
                         .active_floating_windows
@@ -318,11 +325,12 @@ impl LayoutManager {
                         .values()
                         .flatten()
                         .copied();
-                    let raise_windows = floating_windows
-                        .filter(|&wid| Some(wid) != self.last_floating_focus)
-                        .chain(self.last_floating_focus)
-                        .collect();
-                    EventResponse { raise_windows }
+                    EventResponse {
+                        raise_windows: floating_windows
+                            .filter(|&wid| Some(wid) != self.last_floating_focus)
+                            .collect(),
+                        focus_window: self.last_floating_focus,
+                    }
                 }
             }
             LayoutCommand::ToggleFullscreen => {
@@ -334,7 +342,10 @@ impl LayoutManager {
                         .traverse_preorder(self.tree.map())
                         .flat_map(|n| self.tree.window_at(n))
                         .collect();
-                    EventResponse { raise_windows: node_windows }
+                    EventResponse {
+                        raise_windows: node_windows,
+                        focus_window: None,
+                    }
                 } else {
                     EventResponse::default()
                 }
@@ -430,7 +441,7 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
-        _ = mgr.handle_event(WindowRaised(space, Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(space, Some(WindowId::new(pid, 1))));
         _ = mgr.handle_command(space, LayoutCommand::MoveNode(Direction::Up));
         assert_eq!(
             vec![

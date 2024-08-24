@@ -291,7 +291,7 @@ impl Reactor {
             // window does not (because it is on multiple spaces). Update the
             // layout in that case too.
             if let Some(space) = self.main_screen_space() {
-                self.send_layout_event(LayoutEvent::WindowRaised(space, Some(raised_window)));
+                self.send_layout_event(LayoutEvent::WindowFocused(space, Some(raised_window)));
             }
         }
         self.update_layout(animation_focus_wid, is_resize);
@@ -321,13 +321,13 @@ impl Reactor {
         self.handle_layout_response(response)
     }
 
-    fn handle_layout_response(&mut self, mut response: layout::EventResponse) {
-        let last = response.raise_windows.pop();
-        for wid in response.raise_windows {
+    fn handle_layout_response(&mut self, response: layout::EventResponse) {
+        let layout::EventResponse { raise_windows, focus_window } = response;
+        for wid in raise_windows {
             info!(raise_window = ?wid);
             self.raise_window(wid, Quiet::Yes);
         }
-        if let Some(wid) = last {
+        if let Some(wid) = focus_window {
             self.raise_window(wid, Quiet::No);
         }
     }
