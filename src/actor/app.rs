@@ -842,16 +842,14 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::actor::app::system::fake::{
-        FakeAXUIElement, FakeNSRunningApplication, FakeObserver,
-    };
+    use crate::actor::app::system::fake::{self, FakeNSRunningApplication, FakeObserver};
 
     #[test]
     fn test_app_actor() {
         let pid = 1234;
         let (events_tx, mut events_rx) = channel();
 
-        let app = FakeAXUIElement::application(pid);
+        let app = fake::Application::new();
         let running_app = Id::new(FakeNSRunningApplication);
         let observer = FakeObserver;
 
@@ -869,10 +867,7 @@ mod tests {
             is_frontmost: false,
         }));
 
-        // Test handling a request
         state.borrow_mut().handle_request(&mut Request::GetVisibleWindows).unwrap();
-
-        // Check if an event was sent
         if let Ok((_, event)) = events_rx.try_recv() {
             match event {
                 Event::WindowsDiscovered {
@@ -890,7 +885,24 @@ mod tests {
             panic!("No event received");
         }
 
-        //state.borrow_mut().handle_request(&mut Request::SetWindowPos((), (), ())).unwrap();
-        // Add more test cases here...
+        let win = app.mk_window();
+        state.borrow_mut().handle_request(&mut Request::GetVisibleWindows).unwrap();
+        if let Ok((_, event)) = events_rx.try_recv() {
+            match event {
+                Event::WindowsDiscovered {
+                    pid: event_pid,
+                    new,
+                    known_visible,
+                } => {
+                    assert_eq!(event_pid, pid);
+                    assert_eq!(new.len(), 1);
+                    assert_eq!(new[0].0, WindowId::new(pid, win.id()));
+                    assert!(known_visible.is_empty());
+                }
+                _ => panic!("Unexpected event type"),
+            }
+        } else {
+            panic!("No event received");
+        }
     }
 }

@@ -163,7 +163,7 @@ impl TryFrom<&AXUIElement> for WindowInfo {
 pub mod fake {
     use std::{
         cell::{Ref, RefCell, RefMut},
-        sync::{Arc, Weak},
+        sync::Arc,
     };
 
     use accessibility_sys::{
@@ -176,35 +176,95 @@ pub mod fake {
 
     use super::*;
 
-    #[derive(Debug, Clone)]
-    pub struct FakeAXUIElement {
-        kind: Arc<RefCell<ElementKind>>,
-    }
+    #[derive(Debug, PartialEq)]
+    pub struct Ptr<T>(Arc<RefCell<T>>);
+    type Weak<T> = std::sync::Weak<RefCell<T>>;
 
-    impl PartialEq for FakeAXUIElement {
-        fn eq(&self, other: &Self) -> bool {
-            Arc::ptr_eq(&self.kind, &other.kind)
+    impl<T> Ptr<T> {
+        fn new(inner: T) -> Self {
+            Self(Arc::new(RefCell::new(inner)))
+        }
+        fn borrow(&self) -> Ref<T> {
+            self.0.borrow()
+        }
+        fn borrow_mut(&self) -> RefMut<T> {
+            self.0.borrow_mut()
         }
     }
 
-    #[derive(Debug)]
-    enum ElementKind {
-        Application(Application),
-        #[allow(dead_code)]
-        Window(Window),
+    impl<T> Clone for Ptr<T> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
     }
 
-    #[derive(Debug)]
-    struct Application {
+    #[derive(Debug, Clone, PartialEq)]
+    enum ElementKind {
+        Application(Ptr<Application>),
+        Window(Ptr<Window>),
+    }
+
+    macro_rules! element_kind {
+        ($ty:ident) => {
+            // These are always wrapped in an Arc, so comparing pointers is useful.
+            impl PartialEq for $ty {
+                fn eq(&self, other: &Self) -> bool {
+                    self as *const $ty == other as *const $ty
+                }
+            }
+
+            impl From<Ptr<$ty>> for ElementKind {
+                fn from(inner: Ptr<$ty>) -> ElementKind {
+                    ElementKind::$ty(inner)
+                }
+            }
+
+            impl From<Ptr<$ty>> for FakeAXUIElement {
+                fn from(inner: Ptr<$ty>) -> FakeAXUIElement {
+                    FakeAXUIElement { kind: ElementKind::from(inner) }
+                }
+            }
+
+            impl From<Ptr<$ty>> for AXUIElement {
+                fn from(inner: Ptr<$ty>) -> AXUIElement {
+                    AXUIElement(FakeAXUIElement::from(inner))
+                }
+            }
+        };
+    }
+    element_kind!(Application);
+    element_kind!(Window);
+
+    #[derive(Debug, Default)]
+    pub struct Application {
         #[allow(dead_code)]
         main_window: Option<FakeAXUIElement>,
         windows: Vec<FakeAXUIElement>,
         frontmost_id: Option<WindowServerId>,
     }
 
+    impl Application {
+        pub fn new() -> Ptr<Self> {
+            Ptr::new(Self::default())
+        }
+    }
+
+    impl Ptr<Application> {
+        pub fn mk_window(&self) -> Ptr<Window> {
+            let mut this = self.borrow_mut();
+            let win = Ptr::new(Window {
+                parent: Arc::downgrade(&self.0),
+                frame: CGRect::default(),
+                id: WindowServerId::new(1),
+            });
+            this.windows.push(win.clone().into());
+            win
+        }
+    }
+
     #[derive(Debug)]
-    struct Window {
-        parent: Weak<RefCell<ElementKind>>,
+    pub struct Window {
+        parent: Weak<Application>,
         frame: CGRect,
         id: WindowServerId,
     }
@@ -213,79 +273,99 @@ pub mod fake {
         fn parent(&self) -> Result<FakeAXUIElement> {
             self.parent
                 .upgrade()
-                .map(FakeAXUIElement::wrap)
+                .map(|kind| FakeAXUIElement { kind: Ptr(kind).into() })
                 .ok_or(Error::Ax(kAXErrorCannotComplete))
         }
     }
 
-    impl FakeAXUIElement {
-        fn wrap(kind: Arc<RefCell<ElementKind>>) -> Self {
-            Self { kind }
+    impl Ptr<Window> {
+        pub fn id(&self) -> u32 {
+            self.borrow().id.as_u32()
         }
+    }
 
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct FakeAXUIElement {
+        kind: ElementKind,
+    }
+
+    impl FakeAXUIElement {
         pub fn application(_pid: pid_t) -> Self {
             Self {
-                kind: Arc::new(RefCell::new(ElementKind::Application(Application {
+                kind: ElementKind::Application(Ptr::new(Application {
                     main_window: None,
                     windows: Vec::new(),
                     frontmost_id: None,
-                }))),
+                })),
+            }
+        }
+
+        fn as_window(&self) -> Result<Ptr<Window>> {
+            match &self.kind {
+                ElementKind::Window(inner) => Ok(Ptr::clone(inner)),
+                _ => Err(Error::Ax(kAXErrorNoValue)),
+            }
+        }
+
+        fn as_application(&self) -> Result<Ptr<Application>> {
+            match &self.kind {
+                ElementKind::Application(inner) => Ok(Ptr::clone(inner)),
+                _ => Err(Error::Ax(kAXErrorNoValue)),
             }
         }
 
         pub fn role(&self) -> Result<CFString> {
-            let role = match &*self.kind.borrow() {
+            let role = match &self.kind {
                 ElementKind::Application { .. } => kAXApplicationRole,
                 ElementKind::Window { .. } => kAXWindowRole,
             };
             Ok(CFString::from_static_string(role))
         }
 
-        fn as_window(&self) -> Result<RefMut<Window>> {
-            RefMut::filter_map(self.kind.borrow_mut(), |kind| match kind {
-                ElementKind::Window(inner) => Some(inner),
-                _ => None,
-            })
-            .map_err(|_| Error::Ax(kAXErrorNoValue))
+        pub fn subrole(&self) -> Result<CFString> {
+            let _ = self.as_window()?;
+            Ok(CFString::from_static_string(kAXStandardWindowSubrole))
         }
 
-        fn as_application(&self) -> Result<RefMut<Application>> {
-            RefMut::filter_map(self.kind.borrow_mut(), |kind| match kind {
-                ElementKind::Application(inner) => Some(inner),
-                _ => None,
-            })
-            .map_err(|_| Error::Ax(kAXErrorNoValue))
+        pub fn title(&self) -> Result<CFString> {
+            let _ = self.as_window()?;
+            Ok(CFString::from_static_string(""))
         }
 
         pub fn frontmost(&self) -> Result<CFBoolean> {
             let window = self.as_window()?;
             let parent = self.parent()?;
             let parent = parent.as_application().expect("Wrong parent type");
-            Ok((parent.frontmost_id == Some(window.id)).into())
+            let same = parent.borrow().frontmost_id == Some(window.borrow().id);
+            Ok(same.into())
         }
 
         pub fn raise(&self) -> Result<()> {
             let window = self.as_window().map_err(|_| Error::Ax(kAXErrorIllegalArgument))?;
             let parent = self.parent()?;
-            let mut parent = parent.as_application().expect("Wrong parent type");
-            parent.frontmost_id = Some(window.id);
+            let parent = parent.as_application().expect("Wrong parent type");
+            parent.borrow_mut().frontmost_id = Some(window.borrow().id);
             Ok(())
         }
 
         pub fn parent(&self) -> Result<Self> {
-            self.as_window()?.parent()
+            self.as_window()?.borrow().parent()
         }
 
         pub fn windows(&self) -> Result<Vec<Self>> {
-            Ok(self.as_application()?.windows.clone())
+            Ok(self.as_application()?.borrow().windows.clone())
         }
+
         pub fn main_window(&self) -> Result<Self> {
             let app = self.as_application()?;
+            let app = app.borrow();
             let Some(id) = app.frontmost_id else {
                 return Err(Error::Ax(kAXErrorNoValue));
             };
-            let Some(win) =
-                app.windows.iter().find(|w| w.as_window().map(|w| w.id == id).unwrap_or(false))
+            let Some(win) = app
+                .windows
+                .iter()
+                .find(|w| w.as_window().map(|w| w.borrow().id == id).unwrap_or(false))
             else {
                 return Err(Error::Ax(kAXErrorNoValue));
             };
@@ -293,19 +373,21 @@ pub mod fake {
         }
 
         pub fn frame(&self) -> Result<CGRect> {
-            Ok(self.as_window()?.frame)
+            Ok(self.as_window()?.borrow().frame)
         }
+
         pub fn set_position(&self, pos: CGPoint) -> Result<()> {
-            self.as_window()?.frame.origin = pos;
+            self.as_window()?.borrow_mut().frame.origin = pos;
             Ok(())
         }
+
         pub fn set_size(&self, size: CGSize) -> Result<()> {
-            self.as_window()?.frame.size = size;
+            self.as_window()?.borrow_mut().frame.size = size;
             Ok(())
         }
 
         pub fn window_id(&self) -> Result<WindowServerId> {
-            Ok(self.as_window()?.id)
+            Ok(self.as_window()?.borrow().id)
         }
     }
 
@@ -325,14 +407,16 @@ pub mod fake {
             _elem: &AXUIElement,
             _notification: &'static str,
         ) -> Result<()> {
-            todo!()
+            // TODO
+            Ok(())
         }
         pub fn remove_notification(
             &self,
             _elem: &AXUIElement,
             _notification: &'static str,
         ) -> Result<()> {
-            todo!()
+            // TODO
+            Ok(())
         }
     }
 
