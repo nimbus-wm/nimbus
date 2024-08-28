@@ -37,6 +37,9 @@ struct Cli {
 fn main() {
     let opt: Cli = Parser::parse();
 
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
         .with(metrics::timing_layer())

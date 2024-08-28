@@ -240,6 +240,7 @@ impl Reactor {
                 is_resize = true;
             }
             Event::ScreenParametersChanged(frames, spaces) => {
+                info!("screen parameters changed");
                 self.main_screen = frames
                     .into_iter()
                     .zip(spaces)
@@ -254,6 +255,7 @@ impl Reactor {
                 // FIXME: Update visible windows if space changed
             }
             Event::SpaceChanged(spaces) => {
+                info!("space changed");
                 let Some(screen) = self.main_screen.as_mut() else {
                     return;
                 };
@@ -312,13 +314,23 @@ impl Reactor {
         self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
         // FIXME: We assume all windows are on the main screen.
         if let Some(space) = self.main_screen_space() {
-            self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
+            // Filter out some noise.
+            if self.windows.iter().any(|(wid, _)| wid.pid == pid) {
+                self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
+                    space,
+                    pid,
+                    app_windows,
+                ));
+            }
         }
     }
 
     fn send_layout_event(&mut self, event: LayoutEvent) {
         let response = self.layout.handle_event(event);
-        self.handle_layout_response(response)
+        self.handle_layout_response(response);
+        if let Some(space) = self.main_screen_space() {
+            self.layout.debug_tree_desc(space, "after event");
+        }
     }
 
     fn handle_layout_response(&mut self, response: layout::EventResponse) {

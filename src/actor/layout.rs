@@ -111,21 +111,38 @@ impl LayoutManager {
         }
     }
 
+    pub fn debug_tree(&self, space: SpaceId) {
+        self.debug_tree_desc(space, "");
+    }
+
+    pub fn debug_tree_desc(&self, space: SpaceId, desc: &'static str) {
+        if let Some(&layout) = self.active_layouts.get(&space) {
+            debug!("Tree {desc}\n{}", self.tree.draw_tree(layout).trim());
+        } else {
+            debug!("No layout for space {space:?}");
+        }
+    }
+
     pub fn handle_event(&mut self, event: LayoutEvent) -> EventResponse {
         debug!(?event);
         match event {
             LayoutEvent::SpaceExposed(space, size) => {
+                self.debug_tree(space);
                 let layout =
                     self.space_configurations.entry((space, size.into())).or_insert_with(|| {
                         if let Some(&active) = self.active_layouts.get(&space) {
+                            debug!("Cloning layout {active:?}");
                             self.tree.clone_layout(active)
                         } else {
+                            debug!("Creating new layout");
                             self.tree.create_layout()
                         }
                     });
+                debug!("Using layout {layout:?} on space {space:?}");
                 self.active_layouts.insert(space, *layout);
             }
             LayoutEvent::WindowsOnScreenUpdated(space, pid, mut windows) => {
+                self.debug_tree(space);
                 // The windows may already be in the layout if we restored a saved state, so
                 // make sure not to duplicate or erase them here.
                 let floating_active =
@@ -145,6 +162,7 @@ impl LayoutManager {
                 self.floating_windows.remove_all_for_pid(pid);
             }
             LayoutEvent::WindowAdded(space, wid) => {
+                self.debug_tree(space);
                 let layout = self.layout(space);
                 self.tree.add_window(layout, self.tree.root(layout), wid);
             }
