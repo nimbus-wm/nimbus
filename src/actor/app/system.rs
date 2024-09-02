@@ -177,59 +177,63 @@ pub mod fake {
 
     use super::*;
 
-    #[derive(Debug)]
-    pub struct Ptr<T: ?Sized>(Arc<RefCell<T>>);
-    type Weak<T> = std::sync::Weak<RefCell<T>>;
-
-    impl<T> Ptr<T> {
-        fn new(inner: T) -> Self {
-            Self(Arc::new(RefCell::new(inner)))
-        }
-    }
-    impl<T: ?Sized> Ptr<T> {
-        fn borrow(&self) -> Ref<T> {
-            self.0.borrow()
-        }
-        fn borrow_mut(&self) -> RefMut<T> {
-            self.0.borrow_mut()
-        }
-    }
-
-    impl<T: ?Sized> Clone for Ptr<T> {
-        fn clone(&self) -> Self {
-            Self(Arc::clone(&self.0))
-        }
-    }
-
-    impl<T: ?Sized> PartialEq for Ptr<T> {
-        fn eq(&self, other: &Self) -> bool {
-            Arc::ptr_eq(&self.0, &other.0)
-        }
-    }
-
-    macro_rules! element_kind {
-        ($ty:ident) => {
-            impl From<Ptr<$ty>> for Ptr<dyn Element> {
-                fn from(inner: Ptr<$ty>) -> Ptr<dyn Element> {
-                    Ptr(inner.0)
-                }
+    macro_rules! forward {
+        ($(pub fn $name:ident(&self) -> $ret:ty;)*) => { $(
+            pub fn $name(&self) -> $ret {
+                self.elem.borrow().$name()
             }
-
-            impl From<Ptr<$ty>> for FakeAXUIElement {
-                fn from(inner: Ptr<$ty>) -> FakeAXUIElement {
-                    FakeAXUIElement { elem: inner.into() }
-                }
+        )* };
+        ($(pub fn $name:ident(&mut self, $arg:ident: $argt:ty) -> $ret:ty;)*) => { $(
+            pub fn $name(&self, $arg: $argt) -> $ret {
+                self.elem.borrow_mut().$name($arg)
             }
-
-            impl From<Ptr<$ty>> for AXUIElement {
-                fn from(inner: Ptr<$ty>) -> AXUIElement {
-                    AXUIElement(FakeAXUIElement::from(inner))
-                }
-            }
-        };
+        )* };
     }
-    element_kind!(Application);
-    element_kind!(Window);
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct FakeAXUIElement {
+        elem: Ptr<dyn Element>,
+    }
+
+    impl FakeAXUIElement {
+        pub fn application(_pid: pid_t) -> Self {
+            Self {
+                elem: Ptr::new(Application {
+                    main_window: None,
+                    windows: Vec::new(),
+                    frontmost_id: None,
+                })
+                .into(),
+            }
+        }
+        pub fn role(&self) -> Result<CFString> {
+            Ok(CFString::from_static_string(self.elem.borrow().role()))
+        }
+        forward! {
+            pub fn subrole(&self) -> Result<CFString>;
+            pub fn title(&self) -> Result<CFString>;
+            pub fn frontmost(&self) -> Result<CFBoolean>;
+            pub fn parent(&self) -> Result<FakeAXUIElement>;
+            pub fn windows(&self) -> Result<Vec<FakeAXUIElement>>;
+            pub fn main_window(&self) -> Result<FakeAXUIElement>;
+            pub fn frame(&self) -> Result<CGRect>;
+            pub fn raise(&self) -> Result<()>;
+            pub fn window_id(&self) -> Result<WindowServerId>;
+        }
+        forward! {
+            pub fn set_position(&mut self, pos: CGPoint) -> Result<()>;
+            pub fn set_size(&mut self, size: CGSize) -> Result<()>;
+        }
+    }
+
+    // Brilliant hack to get rust-analyzer completion working.
+    impl Deref for FakeAXUIElement {
+        type Target = ::accessibility::AXUIElement;
+        #[track_caller]
+        fn deref(&self) -> &Self::Target {
+            panic!("Attempted to invoke an unfaked method on AXUIElement")
+        }
+    }
 
     #[derive(Debug, Default)]
     pub struct Application {
@@ -380,61 +384,57 @@ pub mod fake {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct FakeAXUIElement {
-        elem: Ptr<dyn Element>,
-    }
+    macro_rules! element_kind {
+        ($ty:ident) => {
+            impl From<Ptr<$ty>> for Ptr<dyn Element> {
+                fn from(inner: Ptr<$ty>) -> Ptr<dyn Element> {
+                    Ptr(inner.0)
+                }
+            }
 
-    macro_rules! forward {
-        ($(pub fn $name:ident(&self) -> $ret:ty;)*) => { $(
-            pub fn $name(&self) -> $ret {
-                self.elem.borrow().$name()
+            impl From<Ptr<$ty>> for FakeAXUIElement {
+                fn from(inner: Ptr<$ty>) -> FakeAXUIElement {
+                    FakeAXUIElement { elem: inner.into() }
+                }
             }
-        )* };
-        ($(pub fn $name:ident(&mut self, $arg:ident: $argt:ty) -> $ret:ty;)*) => { $(
-            pub fn $name(&self, $arg: $argt) -> $ret {
-                self.elem.borrow_mut().$name($arg)
-            }
-        )* };
-    }
 
-    impl FakeAXUIElement {
-        pub fn application(_pid: pid_t) -> Self {
-            Self {
-                elem: Ptr::new(Application {
-                    main_window: None,
-                    windows: Vec::new(),
-                    frontmost_id: None,
-                })
-                .into(),
+            impl From<Ptr<$ty>> for AXUIElement {
+                fn from(inner: Ptr<$ty>) -> AXUIElement {
+                    AXUIElement(FakeAXUIElement::from(inner))
+                }
             }
+        };
+    }
+    element_kind!(Application);
+    element_kind!(Window);
+
+    #[derive(Debug)]
+    pub struct Ptr<T: ?Sized>(Arc<RefCell<T>>);
+    type Weak<T> = std::sync::Weak<RefCell<T>>;
+
+    impl<T> Ptr<T> {
+        fn new(inner: T) -> Self {
+            Self(Arc::new(RefCell::new(inner)))
         }
-        pub fn role(&self) -> Result<CFString> {
-            Ok(CFString::from_static_string(self.elem.borrow().role()))
+    }
+    impl<T: ?Sized> Ptr<T> {
+        fn borrow(&self) -> Ref<T> {
+            self.0.borrow()
         }
-        forward! {
-            pub fn subrole(&self) -> Result<CFString>;
-            pub fn title(&self) -> Result<CFString>;
-            pub fn frontmost(&self) -> Result<CFBoolean>;
-            pub fn parent(&self) -> Result<FakeAXUIElement>;
-            pub fn windows(&self) -> Result<Vec<FakeAXUIElement>>;
-            pub fn main_window(&self) -> Result<FakeAXUIElement>;
-            pub fn frame(&self) -> Result<CGRect>;
-            pub fn raise(&self) -> Result<()>;
-            pub fn window_id(&self) -> Result<WindowServerId>;
-        }
-        forward! {
-            pub fn set_position(&mut self, pos: CGPoint) -> Result<()>;
-            pub fn set_size(&mut self, size: CGSize) -> Result<()>;
+        fn borrow_mut(&self) -> RefMut<T> {
+            self.0.borrow_mut()
         }
     }
 
-    // Brilliant hack to get rust-analyzer completion working.
-    impl Deref for FakeAXUIElement {
-        type Target = ::accessibility::AXUIElement;
-        #[track_caller]
-        fn deref(&self) -> &Self::Target {
-            panic!("Attempted to invoke an unfaked method on AXUIElement")
+    impl<T: ?Sized> Clone for Ptr<T> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    impl<T: ?Sized> PartialEq for Ptr<T> {
+        fn eq(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.0, &other.0)
         }
     }
 
