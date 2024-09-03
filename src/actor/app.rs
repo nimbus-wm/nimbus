@@ -3,8 +3,6 @@
 //!
 //! These APIs support reading and writing window states like position and size.
 
-pub mod system;
-
 #[cfg_attr(test, allow(unused_imports))]
 use std::{
     fmt::Debug,
@@ -30,7 +28,6 @@ use icrate::{
     Foundation::{CGPoint, CGRect},
 };
 use serde::{Deserialize, Serialize};
-pub use system::pid_t;
 use tokio::sync::{
     mpsc::{
         unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
@@ -40,9 +37,9 @@ use tokio::sync::{
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
+pub use crate::system::pid_t;
 #[allow(unused_imports)]
 use crate::{
-    actor::app::system::{prelude::*, AXUIElement, Id, NSRunningApplication, Observer},
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
@@ -53,10 +50,11 @@ use crate::{
         run_loop::WakeupHandle,
         window_server::{self, WindowServerId},
     },
+    system::{prelude::*, AXUIElement, Id, NSRunningApplication, Observer},
 };
 
 pub type AppInfo = crate::sys::app::AppInfo;
-pub type WindowInfo = system::WindowInfo;
+pub type WindowInfo = crate::system::WindowInfo;
 
 /// An identifier representing a window.
 ///
@@ -833,7 +831,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::actor::app::system::fake::{self, FakeNSRunningApplication, FakeObserver};
+    use crate::system::fake::{self, FakeNSRunningApplication, FakeObserver};
 
     #[test]
     fn test_app_actor() {
