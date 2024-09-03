@@ -108,6 +108,10 @@ impl Ptr<Application> {
         this.windows.push(win.clone().into());
         win
     }
+
+    pub fn terminate_abruptly(&self) {
+        self.borrow().connection.terminate()
+    }
 }
 
 #[derive(Debug)]
@@ -282,6 +286,10 @@ impl Connection {
         }
     }
 
+    fn terminate(&self) {
+        self.connected.store(false, Ordering::Relaxed)
+    }
+
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
     }
@@ -346,5 +354,46 @@ impl FakeNSRunningApplication {
     #[allow(non_snake_case)]
     pub unsafe fn activateWithOptions(&self, _options: NSApplicationActivationOptions) -> bool {
         todo!()
+    }
+}
+
+mod tests {
+    use super::*;
+    use crate::system::prelude::*;
+
+    #[track_caller]
+    fn assert_err<T: Debug>(res: Result<T>, code: i32) {
+        assert!(
+            matches!(
+                res,
+                Err(Error::Ax(e)) if e == code
+            ),
+            "Expected error with code {code}, got {res:?}"
+        );
+    }
+
+    #[test]
+    fn it_works() {
+        let app = Application::new();
+        let app_elem: AXUIElement = app.clone().into();
+        assert_eq!(app_elem.windows().unwrap().len(), 0);
+        assert_err(app_elem.main_window(), kAXErrorNoValue);
+        let win = app.mk_window();
+        let win_elem: AXUIElement = win.clone().into();
+        assert_eq!(app_elem.windows().unwrap().len(), 1);
+        assert_err(app_elem.main_window(), kAXErrorNoValue);
+        assert_eq!(win_elem.parent().expect("no parent"), app_elem);
+    }
+
+    #[test]
+    fn terminate_abruptly() {
+        let app = Application::new();
+        let app_elem: AXUIElement = app.clone().into();
+        let win = app.mk_window();
+        let win_elem: AXUIElement = win.clone().into();
+        app.terminate_abruptly();
+        assert_err(app_elem.windows(), kAXErrorCannotComplete);
+        assert_err(app_elem.main_window(), kAXErrorCannotComplete);
+        assert_err(win_elem.parent(), kAXErrorCannotComplete);
     }
 }
