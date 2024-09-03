@@ -5,7 +5,7 @@
 #[cfg(test)]
 pub mod fake;
 
-use std::{mem::transmute, ops::Deref};
+use std::{fmt::Debug, mem::transmute, ops::Deref};
 
 use accessibility::{AXUIElement as AXUIElementImpl, AXUIElementAttributes as _};
 use accessibility_sys::{kAXStandardWindowSubrole, kAXWindowRole};
@@ -80,12 +80,16 @@ impl AXUIElement {
     pub fn main_window(&self) -> Result<Self> {
         self.0.main_window().map(Self)
     }
+
+    pub fn parent(&self) -> Result<Self> {
+        self.0.parent().map(Self)
+    }
 }
 
 mod iter {
     use super::*;
 
-    pub trait Iterable {
+    pub trait Iterable: Debug {
         type Item;
         fn iter(&self) -> impl Iterator<Item = impl Deref<Target = Self::Item>>;
         fn len(&self) -> usize;
