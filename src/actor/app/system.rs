@@ -164,7 +164,10 @@ pub mod fake {
     use std::{
         cell::{Ref, RefCell, RefMut},
         fmt::Debug,
-        sync::Arc,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
     };
 
     use accessibility_sys::{
@@ -180,12 +183,16 @@ pub mod fake {
     macro_rules! forward {
         ($(pub fn $name:ident(&self) -> $ret:ty;)*) => { $(
             pub fn $name(&self) -> $ret {
-                self.elem.borrow().$name()
+                let this = self.elem.borrow();
+                this.connection().check()?;
+                this.$name()
             }
         )* };
         ($(pub fn $name:ident(&mut self, $arg:ident: $argt:ty) -> $ret:ty;)*) => { $(
             pub fn $name(&self, $arg: $argt) -> $ret {
-                self.elem.borrow_mut().$name($arg)
+                let mut this = self.elem.borrow_mut();
+                this.connection().check()?;
+                this.$name($arg)
             }
         )* };
     }
@@ -198,12 +205,7 @@ pub mod fake {
     impl FakeAXUIElement {
         pub fn application(_pid: pid_t) -> Self {
             Self {
-                elem: Ptr::new(Application {
-                    main_window: None,
-                    windows: Vec::new(),
-                    frontmost_id: None,
-                })
-                .into(),
+                elem: Application::new().into(),
             }
         }
         pub fn role(&self) -> Result<CFString> {
@@ -235,17 +237,23 @@ pub mod fake {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub struct Application {
         #[allow(dead_code)]
         main_window: Option<FakeAXUIElement>,
         windows: Vec<Ptr<Window>>,
         frontmost_id: Option<WindowServerId>,
+        connection: Connection,
     }
 
     impl Application {
         pub fn new() -> Ptr<Self> {
-            Ptr::new(Self::default())
+            Ptr::new(Application {
+                main_window: None,
+                windows: Vec::new(),
+                frontmost_id: None,
+                connection: Connection::new(),
+            })
         }
     }
 
@@ -256,6 +264,7 @@ pub mod fake {
                 parent: Arc::downgrade(&self.0),
                 frame: CGRect::default(),
                 id: WindowServerId::new(1),
+                connection: this.connection.clone(),
             });
             this.windows.push(win.clone().into());
             win
@@ -267,6 +276,7 @@ pub mod fake {
         parent: Weak<Application>,
         frame: CGRect,
         id: WindowServerId,
+        connection: Connection,
     }
 
     impl Ptr<Window> {
@@ -287,7 +297,11 @@ pub mod fake {
 
     #[allow(unused_variables)]
     trait Element: Debug {
+        // Required methods.
+        fn connection(&self) -> &Connection;
         fn role(&self) -> &'static str;
+
+        // Provided stubs.
         provide_stubs! {
             fn subrole(&self) -> Result<CFString>;
             fn title(&self) -> Result<CFString>;
@@ -310,6 +324,10 @@ pub mod fake {
     }
 
     impl Element for Application {
+        fn connection(&self) -> &Connection {
+            &self.connection
+        }
+
         fn role(&self) -> &'static str {
             kAXApplicationRole
         }
@@ -330,6 +348,10 @@ pub mod fake {
     }
 
     impl Element for Window {
+        fn connection(&self) -> &Connection {
+            &self.connection
+        }
+
         fn role(&self) -> &'static str {
             kAXWindowRole
         }
@@ -407,6 +429,32 @@ pub mod fake {
     }
     element_kind!(Application);
     element_kind!(Window);
+
+    /// Simulates a connection to an app.
+    #[derive(Debug, Clone)]
+    struct Connection {
+        connected: Arc<AtomicBool>,
+    }
+
+    impl Connection {
+        fn new() -> Self {
+            Connection {
+                connected: Arc::new(AtomicBool::new(true)),
+            }
+        }
+
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::Relaxed)
+        }
+
+        fn check(&self) -> Result<()> {
+            if self.is_connected() {
+                Ok(())
+            } else {
+                Err(Error::Ax(kAXErrorCannotComplete))
+            }
+        }
+    }
 
     #[derive(Debug)]
     pub struct Ptr<T: ?Sized>(Arc<RefCell<T>>);
