@@ -1,4 +1,4 @@
-//! Utilities for interfacing with OS-specific APIs.
+//! Utilities for interfacing directly with OS-specific APIs.
 
 #![cfg_attr(test, allow(dead_code))]
 

@@ -18,15 +18,13 @@ use icrate::{
     Foundation::MainThreadMarker,
 };
 use nimbus_wm::{
-    actor::{
-        app::system::{prelude::*, AXUIElement, WindowInfo},
-        reactor,
-    },
+    actor::reactor,
     sys::{
         self,
         screen::{self, ScreenCache},
         window_server::{self, WindowServerId},
     },
+    system::{prelude::*, AXUIElement, WindowInfo},
 };
 use tokio::sync::mpsc;
 use tracing::info;
