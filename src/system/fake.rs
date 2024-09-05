@@ -1,6 +1,9 @@
 use std::{
+    borrow,
     cell::{Ref, RefCell, RefMut},
+    collections::{HashMap, HashSet},
     fmt::Debug,
+    hash::Hash,
     ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -11,7 +14,7 @@ use std::{
 use accessibility_sys::{
     kAXApplicationRole, kAXErrorActionUnsupported, kAXErrorAttributeUnsupported,
     kAXErrorCannotComplete, kAXErrorIllegalArgument, kAXErrorNoValue, kAXStandardWindowSubrole,
-    kAXWindowRole,
+    kAXWindowCreatedNotification, kAXWindowRole,
 };
 use core_foundation::{boolean::CFBoolean, string::CFString};
 use core_graphics::display::{CGPoint, CGRect, CGSize};
@@ -36,17 +39,12 @@ macro_rules! forward {
     )* };
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FakeAXUIElement {
     elem: Ptr<dyn Element>,
 }
 
 impl FakeAXUIElement {
-    pub fn application(_pid: pid_t) -> Self {
-        Self {
-            elem: Application::new().into(),
-        }
-    }
     pub fn role(&self) -> Result<CFString> {
         Ok(CFString::from_static_string(self.elem.borrow().role()))
     }
@@ -86,12 +84,12 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn new() -> Ptr<Self> {
+    pub fn new(observer: FakeObserver) -> Ptr<Self> {
         Ptr::new(Application {
             main_window: None,
             windows: Vec::new(),
             frontmost_id: None,
-            connection: Connection::new(),
+            connection: Connection::new(observer),
         })
     }
 }
@@ -105,7 +103,10 @@ impl Ptr<Application> {
             id: WindowServerId::new(1),
             connection: this.connection.clone(),
         });
-        this.windows.push(win.clone().into());
+        this.windows.push(win.clone());
+        this.connection
+            .observer
+            .notify(self, kAXWindowCreatedNotification, &win.clone().into());
         win
     }
 
@@ -277,12 +278,14 @@ element_kind!(Window);
 #[derive(Debug, Clone)]
 struct Connection {
     connected: Arc<AtomicBool>,
+    observer: FakeObserver,
 }
 
 impl Connection {
-    fn new() -> Self {
+    fn new(observer: FakeObserver) -> Self {
         Connection {
             connected: Arc::new(AtomicBool::new(true)),
+            observer,
         }
     }
 
@@ -332,20 +335,94 @@ impl<T: ?Sized> PartialEq for Ptr<T> {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
+impl<T: ?Sized> Eq for Ptr<T> {}
 
-pub struct FakeObserver;
+impl<T: ?Sized> Hash for Ptr<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(Arc::as_ptr(&self.0) as *const u8 as usize)
+    }
+}
+
+/// Helper to make it easier to use elements as keys of a map.
+#[repr(transparent)]
+struct ElementKey;
+
+impl<T: ?Sized> borrow::Borrow<ElementKey> for Ptr<T> {
+    fn borrow(&self) -> &ElementKey {
+        // SAFETY: ElementKey is a ZST and the pointer does not dangle.
+        unsafe { &*(Arc::as_ptr(&self.0) as *const ElementKey) }
+    }
+}
+
+impl borrow::Borrow<ElementKey> for FakeAXUIElement {
+    fn borrow(&self) -> &ElementKey {
+        borrow::Borrow::borrow(&self.elem)
+    }
+}
+
+impl PartialEq for ElementKey {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const Self == other as *const Self
+    }
+}
+impl Eq for ElementKey {}
+
+impl Hash for ElementKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(self as *const Self as usize)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FakeObserver(Arc<RefCell<FakeObserverInner>>);
+
+#[derive(Default, Debug)]
+struct FakeObserverInner {
+    subscriptions: HashMap<FakeAXUIElement, HashSet<&'static str>>,
+    pending_notifs: Vec<(AXUIElement, &'static str)>,
+}
+
 impl FakeObserver {
-    pub fn add_notification(&self, _elem: &AXUIElement, _notification: &'static str) -> Result<()> {
-        // TODO
+    pub fn new() -> Self {
+        Self(Arc::new(RefCell::new(FakeObserverInner::default())))
+    }
+
+    pub fn add_notification(&self, elem: &AXUIElement, notification: &'static str) -> Result<()> {
+        self.0.borrow_mut().subscriptions_for(elem.0.clone()).insert(notification);
         Ok(())
     }
+
     pub fn remove_notification(
         &self,
-        _elem: &AXUIElement,
-        _notification: &'static str,
+        elem: &AXUIElement,
+        notification: &'static str,
     ) -> Result<()> {
-        // TODO
+        self.0.borrow_mut().subscriptions_for(elem.0.clone()).remove(notification);
         Ok(())
+    }
+
+    pub fn pending_notifications(&self) -> Vec<(AXUIElement, &'static str)> {
+        std::mem::take(&mut self.0.borrow_mut().pending_notifs)
+    }
+
+    fn notify(
+        &self,
+        elem: &impl borrow::Borrow<ElementKey>,
+        notification: &'static str,
+        target: &FakeAXUIElement,
+    ) {
+        let mut this = self.0.borrow_mut();
+        if let Some(subscriptions) = this.subscriptions.get(borrow::Borrow::borrow(elem)) {
+            if subscriptions.contains(&notification) {
+                this.pending_notifs.push((target.clone().into(), notification));
+            }
+        }
+    }
+}
+
+impl FakeObserverInner {
+    fn subscriptions_for(&mut self, elem: FakeAXUIElement) -> &mut HashSet<&'static str> {
+        self.subscriptions.entry(elem).or_default()
     }
 }
 
@@ -373,21 +450,29 @@ mod tests {
     }
 
     #[test]
-    fn it_works() {
-        let app = Application::new();
+    fn mk_window() {
+        let observer = FakeObserver::new();
+        let app = Application::new(observer.clone());
         let app_elem: AXUIElement = app.clone().into();
+        observer.add_notification(&app_elem, kAXWindowCreatedNotification).unwrap();
         assert_eq!(app_elem.windows().unwrap().len(), 0);
         assert_err(app_elem.main_window(), kAXErrorNoValue);
+        assert!(observer.pending_notifications().is_empty());
         let win = app.mk_window();
         let win_elem: AXUIElement = win.clone().into();
         assert_eq!(app_elem.windows().unwrap().len(), 1);
         assert_err(app_elem.main_window(), kAXErrorNoValue);
         assert_eq!(win_elem.parent().expect("no parent"), app_elem);
+        assert_eq!(
+            observer.pending_notifications(),
+            vec![(win_elem, kAXWindowCreatedNotification)]
+        );
     }
 
     #[test]
     fn terminate_abruptly() {
-        let app = Application::new();
+        let observer = FakeObserver::new();
+        let app = Application::new(observer.clone());
         let app_elem: AXUIElement = app.clone().into();
         let win = app.mk_window();
         let win_elem: AXUIElement = win.clone().into();
