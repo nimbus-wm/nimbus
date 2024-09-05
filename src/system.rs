@@ -68,7 +68,7 @@ impl Into<AXUIElement> for AXUIElementInner {
 }
 
 impl AXUIElement {
-    #[allow(dead_code)]
+    #[cfg(not(test))]
     pub fn application(pid: pid_t) -> Self {
         Self(AXUIElementInner::application(pid))
     }

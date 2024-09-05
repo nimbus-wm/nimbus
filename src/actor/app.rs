@@ -847,9 +847,9 @@ mod tests {
         let pid = 1234;
         let (events_tx, mut events_rx) = channel();
 
-        let app = fake::Application::new();
+        let observer = FakeObserver::new();
+        let app = fake::Application::new(observer.clone());
         let running_app = Id::new(FakeNSRunningApplication);
-        let observer = FakeObserver;
 
         let state = Rc::new(RefCell::new(State {
             pid,
