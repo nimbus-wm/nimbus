@@ -261,20 +261,21 @@ impl Reactor {
                 };
                 screen.space =
                     *spaces.first().expect("Spaces should be non-empty if there is a main screen");
-                if let Some(space) = self.main_screen_space() {
-                    self.send_layout_event(LayoutEvent::SpaceExposed(
-                        space,
-                        self.main_screen.unwrap().frame.size,
-                    ));
-                }
-                if self.main_screen_space().is_some() {
-                    // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
-                    // (see notes for WindowsDiscovered above).
-                    for app in self.apps.values_mut() {
-                        // Errors mean the app terminated (and a termination event
-                        // is coming); ignore.
-                        _ = app.handle.send(Request::GetVisibleWindows);
-                    }
+                let Some(space) = self.main_screen_space() else {
+                    // Either the space is disabled or there is no main screen.
+                    return;
+                };
+                self.send_layout_event(LayoutEvent::SpaceExposed(
+                    space,
+                    self.main_screen.unwrap().frame.size,
+                ));
+                self.send_layout_event(LayoutEvent::WindowFocused(space, self.main_window()));
+                // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
+                // (see notes for WindowsDiscovered above).
+                for app in self.apps.values_mut() {
+                    // Errors mean the app terminated (and a termination event
+                    // is coming); ignore.
+                    _ = app.handle.send(Request::GetVisibleWindows);
                 }
             }
             Event::Command(Command::Hello) => {
@@ -289,9 +290,6 @@ impl Reactor {
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if let Some(raised_window) = raised_window {
-            // TODO: There's an edge case where the space updates and the main
-            // window does not (because it is on multiple spaces). Update the
-            // layout in that case too.
             if let Some(space) = self.main_screen_space() {
                 self.send_layout_event(LayoutEvent::WindowFocused(space, Some(raised_window)));
             }
@@ -347,16 +345,17 @@ impl Reactor {
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
-        let Some(app) = self.apps.get_mut(&wid.pid) else {
-            warn!("Attempted to raise window for unknown pid {}", wid.pid);
-            return;
-        };
-        _ = app.handle.send(Request::Raise(
-            wid,
-            self.raise_token.clone(),
-            Some(tx),
-            quiet,
-        ));
+        self.apps
+            .get_mut(&wid.pid)
+            .unwrap()
+            .handle
+            .send(Request::Raise(
+                wid,
+                self.raise_token.clone(),
+                Some(tx),
+                quiet,
+            ))
+            .unwrap();
         let _ = rx.blocking_recv();
     }
 

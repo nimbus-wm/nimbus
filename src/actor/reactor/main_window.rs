@@ -274,4 +274,34 @@ mod tests {
             Some(WindowId::new(1, 2))
         );
     }
+
+    #[test]
+    fn it_selects_main_window_when_space_is_enabled() {
+        use Event::*;
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let space = SpaceId::new(1);
+        reactor.handle_event(ScreenParametersChanged(
+            vec![CGRect::ZERO],
+            vec![Some(space)],
+        ));
+
+        reactor.handle_events(apps.make_app_with_opts(
+            3,
+            make_windows(2),
+            Some(WindowId::new(3, 1)),
+            false,
+        ));
+
+        reactor.handle_event(SpaceChanged(vec![None]));
+        reactor.handle_event(ApplicationActivated(3, Quiet::No));
+        reactor.handle_event(ApplicationGloballyActivated(3));
+        assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
+
+        reactor.handle_event(SpaceChanged(vec![Some(space)]));
+        assert_eq!(
+            reactor.layout.selected_window(space),
+            Some(WindowId::new(3, 1))
+        );
+    }
 }
