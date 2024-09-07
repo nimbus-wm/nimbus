@@ -347,17 +347,16 @@ impl Reactor {
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
-        self.apps
-            .get_mut(&wid.pid)
-            .unwrap()
-            .handle
-            .send(Request::Raise(
-                wid,
-                self.raise_token.clone(),
-                Some(tx),
-                quiet,
-            ))
-            .unwrap();
+        let Some(app) = self.apps.get_mut(&wid.pid) else {
+            warn!("Attempted to raise window for unknown pid {}", wid.pid);
+            return;
+        };
+        _ = app.handle.send(Request::Raise(
+            wid,
+            self.raise_token.clone(),
+            Some(tx),
+            quiet,
+        ));
         let _ = rx.blocking_recv();
     }
 
