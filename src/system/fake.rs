@@ -426,6 +426,11 @@ impl FakeObserverInner {
     }
 }
 
+pub struct FakeWindowServer {
+    main_window: HashMap<pid_t, Option<WindowServerId>>,
+    focused_app: Option<pid_t>,
+}
+
 pub struct FakeNSRunningApplication;
 impl FakeNSRunningApplication {
     #[allow(non_snake_case)]
