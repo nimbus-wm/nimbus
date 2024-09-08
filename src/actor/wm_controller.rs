@@ -168,7 +168,6 @@ impl WmController {
         const SHIFT: Modifiers = Modifiers::SHIFT;
 
         let mgr = HotkeyManager::new(self.sender.upgrade().unwrap());
-        mgr.register(ALT, KeyW, Command::Hello);
         //mgr.register(ALT, KeyS, Command::Layout(Shuffle));
         mgr.register(ALT, KeyA, Command::Layout(Ascend));
         mgr.register(ALT, KeyD, Command::Layout(Descend));
@@ -194,12 +193,12 @@ impl WmController {
         mgr.register(ALT, KeyF, Command::Layout(ToggleFullscreen));
 
         mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
-        mgr.register(ALT | SHIFT, KeyD, Command::Layout(Debug));
-        mgr.register(ALT | SHIFT, KeyS, Command::Layout(Serialize));
+        mgr.register(ALT | SHIFT, KeyD, Command::Debug);
+        mgr.register(ALT | SHIFT, KeyS, Command::Serialize);
         mgr.register(
             ALT | SHIFT,
             KeyE,
-            Command::Layout(SaveAndExit(self.config.restore_file.clone())),
+            Command::SaveAndExit(self.config.restore_file.clone()),
         );
         mgr.register_wm(ALT, KeyZ, WmCommand::ToggleSpaceActivated);
 

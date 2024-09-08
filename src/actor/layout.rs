@@ -7,7 +7,7 @@ use std::{
 
 use icrate::Foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::{
     actor::app::{pid_t, WindowId},
@@ -52,7 +52,6 @@ impl From<CGSize> for Size {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum LayoutCommand {
-    Shuffle,
     NextWindow,
     PrevWindow,
     MoveFocus(Direction),
@@ -65,9 +64,6 @@ pub enum LayoutCommand {
     ToggleFocusFloating,
     ToggleWindowFloating,
     ToggleFullscreen,
-    Debug,
-    Serialize,
-    SaveAndExit(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,12 +108,16 @@ impl LayoutManager {
     }
 
     pub fn debug_tree(&self, space: SpaceId) {
-        self.debug_tree_desc(space, "");
+        self.debug_tree_desc(space, "", false);
     }
 
-    pub fn debug_tree_desc(&self, space: SpaceId, desc: &'static str) {
+    pub fn debug_tree_desc(&self, space: SpaceId, desc: &'static str, print: bool) {
         if let Some(&layout) = self.active_layouts.get(&space) {
-            debug!("Tree {desc}\n{}", self.tree.draw_tree(layout).trim());
+            if print {
+                println!("Tree {desc}\n{}", self.tree.draw_tree(layout).trim());
+            } else {
+                debug!("Tree {desc}\n{}", self.tree.draw_tree(layout).trim());
+            }
         } else {
             debug!("No layout for space {space:?}");
         }
@@ -262,12 +262,46 @@ impl LayoutManager {
             return EventResponse::default();
         };
         let layout = self.layout(space);
-        match command {
-            LayoutCommand::Shuffle => {
-                // TODO
-                // self.window_order.shuffle(&mut rand::thread_rng());
-                EventResponse::default()
+
+        if let LayoutCommand::ToggleFocusFloating = &command {
+            if is_floating {
+                let selection = self.tree.window_at(self.tree.selection(layout));
+                let tree_windows = self
+                    .tree
+                    .root(layout)
+                    .traverse_preorder(self.tree.map())
+                    .flat_map(|node| self.tree.window_at(node));
+                return EventResponse {
+                    raise_windows: tree_windows.filter(|&wid| Some(wid) != selection).collect(),
+                    focus_window: selection,
+                };
+            } else {
+                let floating_windows = self
+                    .active_floating_windows
+                    .entry(space)
+                    .or_default()
+                    .values()
+                    .flatten()
+                    .copied();
+                return EventResponse {
+                    raise_windows: floating_windows
+                        .filter(|&wid| Some(wid) != self.last_floating_focus)
+                        .collect(),
+                    focus_window: self.last_floating_focus,
+                };
             }
+        }
+
+        // Remaining commands only work for tiling layout.
+        if is_floating {
+            return EventResponse::default();
+        }
+
+        match command {
+            // Handled above.
+            LayoutCommand::ToggleWindowFloating => unreachable!(),
+            LayoutCommand::ToggleFocusFloating => unreachable!(),
+
             LayoutCommand::NextWindow => {
                 // TODO
                 self.handle_command(Some(space), LayoutCommand::MoveFocus(Direction::Left))
@@ -277,9 +311,6 @@ impl LayoutManager {
                 self.handle_command(Some(space), LayoutCommand::MoveFocus(Direction::Right))
             }
             LayoutCommand::MoveFocus(direction) => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 let new = self
                     .tree
                     .traverse(self.tree.selection(layout), direction)
@@ -293,84 +324,36 @@ impl LayoutManager {
                 }
             }
             LayoutCommand::Ascend => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 self.tree.ascend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::Descend => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 self.tree.descend_selection(layout);
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 let selection = self.tree.selection(layout);
                 self.tree.move_node(layout, selection, direction);
                 EventResponse::default()
             }
             LayoutCommand::Split(orientation) => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 let selection = self.tree.selection(layout);
                 self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     self.tree.set_layout(parent, LayoutKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
-                if is_floating {
-                    return EventResponse::default();
-                }
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     if self.tree.layout(parent).is_group() {
                         self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
                     }
                 }
                 EventResponse::default()
-            }
-            // Handled above.
-            LayoutCommand::ToggleWindowFloating => unreachable!(),
-            LayoutCommand::ToggleFocusFloating => {
-                if is_floating {
-                    let selection = self.tree.window_at(self.tree.selection(layout));
-                    let tree_windows = self
-                        .tree
-                        .root(layout)
-                        .traverse_preorder(self.tree.map())
-                        .flat_map(|node| self.tree.window_at(node));
-                    EventResponse {
-                        raise_windows: tree_windows.filter(|&wid| Some(wid) != selection).collect(),
-                        focus_window: selection,
-                    }
-                } else {
-                    let floating_windows = self
-                        .active_floating_windows
-                        .entry(space)
-                        .or_default()
-                        .values()
-                        .flatten()
-                        .copied();
-                    EventResponse {
-                        raise_windows: floating_windows
-                            .filter(|&wid| Some(wid) != self.last_floating_focus)
-                            .collect(),
-                        focus_window: self.last_floating_focus,
-                    }
-                }
             }
             LayoutCommand::ToggleFullscreen => {
                 let node = self.tree.selection(layout);
@@ -389,21 +372,6 @@ impl LayoutManager {
                     EventResponse::default()
                 }
             }
-            LayoutCommand::Debug => {
-                self.tree.print_tree(layout);
-                EventResponse::default()
-            }
-            LayoutCommand::Serialize => {
-                println!("{}", self.serialize_to_string());
-                EventResponse::default()
-            }
-            LayoutCommand::SaveAndExit(path) => match self.save(path) {
-                Ok(()) => std::process::exit(0),
-                Err(e) => {
-                    error!("Could not save layout: {e}");
-                    std::process::exit(3);
-                }
-            },
         }
     }
 
@@ -423,7 +391,7 @@ impl LayoutManager {
         Ok(ron::from_str(&buf)?)
     }
 
-    fn save(&self, path: PathBuf) -> std::io::Result<()> {
+    pub fn save(&self, path: PathBuf) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -431,7 +399,7 @@ impl LayoutManager {
         Ok(())
     }
 
-    fn serialize_to_string(&self) -> String {
+    pub fn serialize_to_string(&self) -> String {
         ron::ser::to_string(&self).unwrap()
     }
 

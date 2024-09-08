@@ -7,12 +7,12 @@
 mod animation;
 mod main_window;
 
-use std::{collections::HashMap, mem, sync, thread};
+use std::{collections::HashMap, mem, path::PathBuf, sync, thread};
 
 use icrate::Foundation::CGRect;
 use main_window::MainWindowTracker;
 use tokio::sync::oneshot;
-use tracing::{debug, info, instrument, trace, warn, Span};
+use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
@@ -66,9 +66,11 @@ pub struct Requested(pub bool);
 
 #[derive(Debug, Clone)]
 pub enum Command {
-    Hello,
     Layout(LayoutCommand),
     Metrics(MetricsCommand),
+    Debug,
+    Serialize,
+    SaveAndExit(PathBuf),
 }
 
 pub struct Reactor {
@@ -278,15 +280,27 @@ impl Reactor {
                     _ = app.handle.send(Request::GetVisibleWindows);
                 }
             }
-            Event::Command(Command::Hello) => {
-                println!("Hello, world!");
-            }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
                 let response = self.layout.handle_command(self.main_screen_space(), cmd);
                 self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
+            Event::Command(Command::Debug) => {
+                if let Some(space) = self.main_screen_space() {
+                    self.layout.debug_tree_desc(space, "", true);
+                }
+            }
+            Event::Command(Command::Serialize) => {
+                println!("{}", self.layout.serialize_to_string());
+            }
+            Event::Command(Command::SaveAndExit(path)) => match self.layout.save(path) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    error!("Could not save layout: {e}");
+                    std::process::exit(3);
+                }
+            },
         }
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(
@@ -327,7 +341,7 @@ impl Reactor {
         let response = self.layout.handle_event(event);
         self.handle_layout_response(response);
         if let Some(space) = self.main_screen_space() {
-            self.layout.debug_tree_desc(space, "after event");
+            self.layout.debug_tree_desc(space, "after event", false);
         }
     }
 
