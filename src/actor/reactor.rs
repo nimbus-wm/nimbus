@@ -269,7 +269,7 @@ impl Reactor {
                     space,
                     self.main_screen.unwrap().frame.size,
                 ));
-                self.send_layout_event(LayoutEvent::WindowFocused(space, self.main_window()));
+                self.send_layout_event(LayoutEvent::WindowFocused(Some(space), self.main_window()));
                 // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                 // (see notes for WindowsDiscovered above).
                 for app in self.apps.values_mut() {
@@ -283,16 +283,16 @@ impl Reactor {
             }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
-                let Some(space) = self.main_screen_space() else { return };
-                let response = self.layout.handle_command(space, cmd);
+                let response = self.layout.handle_command(self.main_screen_space(), cmd);
                 self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
         }
         if let Some(raised_window) = raised_window {
-            if let Some(space) = self.main_screen_space() {
-                self.send_layout_event(LayoutEvent::WindowFocused(space, Some(raised_window)));
-            }
+            self.send_layout_event(LayoutEvent::WindowFocused(
+                self.main_screen_space(),
+                Some(raised_window),
+            ));
         }
         self.update_layout(animation_focus_wid, is_resize);
     }

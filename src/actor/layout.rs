@@ -76,7 +76,7 @@ pub enum LayoutEvent {
     AppClosed(pid_t),
     WindowAdded(SpaceId, WindowId),
     WindowRemoved(WindowId),
-    WindowFocused(SpaceId, Option<WindowId>),
+    WindowFocused(Option<SpaceId>, Option<WindowId>),
     WindowResized {
         space: SpaceId,
         wid: WindowId,
@@ -175,7 +175,7 @@ impl LayoutManager {
                 if let Some(wid) = wid {
                     if self.floating_windows.contains(&wid) {
                         self.last_floating_focus = Some(wid);
-                    } else {
+                    } else if let Some(space) = space {
                         let layout = self.layout(space);
                         if let Some(node) = self.tree.window_node(layout, wid) {
                             self.tree.select(node);
@@ -199,17 +199,69 @@ impl LayoutManager {
         EventResponse::default()
     }
 
-    pub fn handle_command(&mut self, space: SpaceId, command: LayoutCommand) -> EventResponse {
-        let layout = self.layout(space);
+    pub fn handle_command(
+        &mut self,
+        space: Option<SpaceId>,
+        command: LayoutCommand,
+    ) -> EventResponse {
+        if let Some(space) = space {
+            let layout = self.layout(space);
+            debug!("Tree:\n{}", self.tree.draw_tree(layout).trim());
+            debug!(selection = ?self.tree.selection(layout));
+        }
         let is_floating = if let Some(focus) = self.focused_window {
             self.floating_windows.contains(&focus)
         } else {
             false
         };
-        debug!("Tree:\n{}", self.tree.draw_tree(layout).trim());
-        debug!(selection = ?self.tree.selection(layout));
         debug!(?self.floating_windows);
         debug!(?self.focused_window, ?self.last_floating_focus, ?is_floating);
+
+        // ToggleWindowFloating is the only command that works when the space is
+        // disabled.
+        if let LayoutCommand::ToggleWindowFloating = &command {
+            let Some(wid) = self.focused_window else {
+                return EventResponse::default();
+            };
+            if is_floating {
+                if let Some(space) = space {
+                    let layout = self.layout(space);
+                    let selection = self.tree.selection(layout);
+                    let node = self.tree.add_window(
+                        layout,
+                        selection.parent(self.tree.map()).unwrap_or(selection),
+                        wid,
+                    );
+                    self.tree.select(node);
+                    self.active_floating_windows
+                        .entry(space)
+                        .or_default()
+                        .entry(wid.pid)
+                        .or_default()
+                        .remove(&wid);
+                }
+                self.floating_windows.remove(&wid);
+                self.last_floating_focus = None;
+            } else {
+                if let Some(space) = space {
+                    self.active_floating_windows
+                        .entry(space)
+                        .or_default()
+                        .entry(wid.pid)
+                        .or_default()
+                        .insert(wid);
+                }
+                self.tree.remove_window(wid);
+                self.floating_windows.insert(wid);
+                self.last_floating_focus = Some(wid);
+            }
+            return EventResponse::default();
+        }
+
+        let Some(space) = space else {
+            return EventResponse::default();
+        };
+        let layout = self.layout(space);
         match command {
             LayoutCommand::Shuffle => {
                 // TODO
@@ -218,11 +270,11 @@ impl LayoutManager {
             }
             LayoutCommand::NextWindow => {
                 // TODO
-                self.handle_command(space, LayoutCommand::MoveFocus(Direction::Left))
+                self.handle_command(Some(space), LayoutCommand::MoveFocus(Direction::Left))
             }
             LayoutCommand::PrevWindow => {
                 // TODO
-                self.handle_command(space, LayoutCommand::MoveFocus(Direction::Right))
+                self.handle_command(Some(space), LayoutCommand::MoveFocus(Direction::Right))
             }
             LayoutCommand::MoveFocus(direction) => {
                 if is_floating {
@@ -290,39 +342,8 @@ impl LayoutManager {
                 }
                 EventResponse::default()
             }
-            LayoutCommand::ToggleWindowFloating => {
-                let Some(wid) = self.focused_window else {
-                    return EventResponse::default();
-                };
-                if is_floating {
-                    let selection = self.tree.selection(layout);
-                    let node = self.tree.add_window(
-                        layout,
-                        selection.parent(self.tree.map()).unwrap_or(selection),
-                        wid,
-                    );
-                    self.tree.select(node);
-                    self.floating_windows.remove(&wid);
-                    self.active_floating_windows
-                        .entry(space)
-                        .or_default()
-                        .entry(wid.pid)
-                        .or_default()
-                        .remove(&wid);
-                    self.last_floating_focus = None;
-                } else {
-                    self.tree.remove_window(wid);
-                    self.floating_windows.insert(wid);
-                    self.active_floating_windows
-                        .entry(space)
-                        .or_default()
-                        .entry(wid.pid)
-                        .or_default()
-                        .insert(wid);
-                    self.last_floating_focus = Some(wid);
-                }
-                EventResponse::default()
-            }
+            // Handled above.
+            LayoutCommand::ToggleWindowFloating => unreachable!(),
             LayoutCommand::ToggleFocusFloating => {
                 if is_floating {
                     let selection = self.tree.window_at(self.tree.selection(layout));
@@ -459,8 +480,8 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
-        _ = mgr.handle_event(WindowFocused(space, Some(WindowId::new(pid, 1))));
-        _ = mgr.handle_command(space, LayoutCommand::MoveNode(Direction::Up));
+        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_command(Some(space), LayoutCommand::MoveNode(Direction::Up));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 120, 60)),
@@ -484,7 +505,7 @@ mod tests {
         );
 
         // Change tha layout for the second screen size.
-        _ = mgr.handle_command(space, LayoutCommand::MoveNode(Direction::Down));
+        _ = mgr.handle_command(Some(space), LayoutCommand::MoveNode(Direction::Down));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 400, 1200)),
