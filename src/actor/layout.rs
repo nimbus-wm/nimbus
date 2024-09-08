@@ -537,4 +537,87 @@ mod tests {
             mgr.layout_sorted(space, screen2),
         );
     }
+
+    #[test]
+    fn floating_windows() {
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+
+        let screen1 = rect(0, 0, 120, 120);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
+
+        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 2))));
+        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+
+        // Make the first window float.
+        _ = mgr.handle_command(Some(space), LayoutCommand::ToggleWindowFloating);
+        let sizes: HashMap<_, _> = mgr.calculate_layout(space, screen1).into_iter().collect();
+        assert_eq!(sizes[&WindowId::new(pid, 2)], rect(0, 0, 60, 120));
+        assert_eq!(sizes[&WindowId::new(pid, 3)], rect(60, 0, 60, 120));
+
+        // Toggle back to the tiled windows.
+        let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
+        assert_eq!(vec![WindowId::new(pid, 3)], response.raise_windows);
+        assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
+        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+
+        // Make the second window float.
+        _ = mgr.handle_command(Some(space), LayoutCommand::ToggleWindowFloating);
+        let sizes: HashMap<_, _> = mgr.calculate_layout(space, screen1).into_iter().collect();
+        assert_eq!(sizes[&WindowId::new(pid, 3)], rect(0, 0, 120, 120));
+
+        // Toggle back to tiled.
+        let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
+        assert!(response.raise_windows.is_empty());
+        assert_eq!(Some(WindowId::new(pid, 3)), response.focus_window);
+        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+
+        // Toggle back to floating.
+        let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
+        assert_eq!(vec![WindowId::new(pid, 1)], response.raise_windows);
+        assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
+        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+    }
+
+    #[test]
+    fn floating_windows_space_disabled() {
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+
+        _ = mgr.handle_event(WindowFocused(None, Some(WindowId::new(pid, 1))));
+
+        // Make the first window float.
+        _ = mgr.handle_command(None, LayoutCommand::ToggleWindowFloating);
+
+        // Enable the space.
+        let screen1 = rect(0, 0, 120, 120);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
+
+        let sizes: HashMap<_, _> = mgr.calculate_layout(space, screen1).into_iter().collect();
+        assert_eq!(sizes[&WindowId::new(pid, 2)], rect(0, 0, 60, 120));
+        assert_eq!(sizes[&WindowId::new(pid, 3)], rect(60, 0, 60, 120));
+
+        // Toggle back to the tiled windows.
+        let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
+        let mut raised_windows = response.raise_windows;
+        raised_windows.extend(response.focus_window);
+        raised_windows.sort();
+        assert_eq!(
+            vec![WindowId::new(pid, 2), WindowId::new(pid, 3)],
+            raised_windows
+        );
+        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+
+        // Toggle back to floating.
+        let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
+        assert!(response.raise_windows.is_empty());
+        assert_eq!(Some(WindowId::new(pid, 1)), response.focus_window);
+        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+    }
 }
