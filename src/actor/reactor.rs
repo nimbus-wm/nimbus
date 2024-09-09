@@ -359,10 +359,8 @@ impl Reactor {
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
-        self.apps
-            .get_mut(&wid.pid)
-            .unwrap()
-            .handle
+        let Some(app) = self.apps.get_mut(&wid.pid) else { return };
+        app.handle
             .send(Request::Raise(
                 wid,
                 self.raise_token.clone(),
