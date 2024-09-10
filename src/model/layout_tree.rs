@@ -72,6 +72,10 @@ impl LayoutTree {
         self.layout_roots.insert(root)
     }
 
+    pub fn remove_layout(&mut self, layout: LayoutId) {
+        self.layout_roots.remove(layout).unwrap().remove(&mut self.tree)
+    }
+
     pub fn root(&self, layout: LayoutId) -> NodeId {
         self.layout_roots[layout].id()
     }

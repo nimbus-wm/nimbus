@@ -280,6 +280,8 @@ mod tests {
         use Event::*;
         let mut apps = Apps::new();
         let mut reactor = Reactor::new(LayoutManager::new());
+        let pid = 3;
+        let windows = make_windows(2);
         let space = SpaceId::new(1);
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
@@ -287,8 +289,8 @@ mod tests {
         ));
 
         reactor.handle_events(apps.make_app_with_opts(
-            3,
-            make_windows(2),
+            pid,
+            windows,
             Some(WindowId::new(3, 1)),
             false,
         ));
@@ -296,6 +298,11 @@ mod tests {
         reactor.handle_event(SpaceChanged(vec![None]));
         reactor.handle_event(ApplicationActivated(3, Quiet::No));
         reactor.handle_event(ApplicationGloballyActivated(3));
+        reactor.handle_event(WindowsDiscovered {
+            pid,
+            new: vec![],
+            known_visible: vec![WindowId::new(3, 1), WindowId::new(3, 2)],
+        });
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
 
         reactor.handle_event(SpaceChanged(vec![Some(space)]));
