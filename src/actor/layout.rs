@@ -39,7 +39,7 @@ pub enum LayoutEvent {
     AppClosed(pid_t),
     WindowAdded(SpaceId, WindowId),
     WindowRemoved(WindowId),
-    WindowFocused(Option<SpaceId>, Option<WindowId>),
+    WindowFocused(Option<SpaceId>, WindowId),
     WindowResized {
         space: SpaceId,
         wid: WindowId,
@@ -219,15 +219,13 @@ impl LayoutManager {
                 self.floating_windows.remove(&wid);
             }
             LayoutEvent::WindowFocused(space, wid) => {
-                self.focused_window = wid;
-                if let Some(wid) = wid {
-                    if self.floating_windows.contains(&wid) {
-                        self.last_floating_focus = Some(wid);
-                    } else if let Some(space) = space {
-                        let layout = self.layout(space);
-                        if let Some(node) = self.tree.window_node(layout, wid) {
-                            self.tree.select(node);
-                        }
+                self.focused_window = Some(wid);
+                if self.floating_windows.contains(&wid) {
+                    self.last_floating_focus = Some(wid);
+                } else if let Some(space) = space {
+                    let layout = self.layout(space);
+                    if let Some(node) = self.tree.window_node(layout, wid) {
+                        self.tree.select(node);
                     }
                 }
             }
@@ -318,12 +316,14 @@ impl LayoutManager {
                 let tree_windows = self
                     .tree
                     .root(layout)
-                    .traverse_preorder(self.tree.map())
+                    .traverse_postorder(self.tree.map())
                     .flat_map(|node| self.tree.window_at(node));
-                return EventResponse {
-                    raise_windows: tree_windows.filter(|&wid| Some(wid) != selection).collect(),
-                    focus_window: selection,
-                };
+                let mut raise_windows: Vec<_> =
+                    tree_windows.filter(|&wid| Some(wid) != selection).collect();
+                // We need to focus some window to transition into floating
+                // mode. If there is no selection, pick a window.
+                let focus_window = selection.or_else(|| raise_windows.pop());
+                return EventResponse { raise_windows, focus_window };
             } else {
                 let floating_windows = self
                     .active_floating_windows
@@ -332,12 +332,12 @@ impl LayoutManager {
                     .values()
                     .flatten()
                     .copied();
-                return EventResponse {
-                    raise_windows: floating_windows
-                        .filter(|&wid| Some(wid) != self.last_floating_focus)
-                        .collect(),
-                    focus_window: self.last_floating_focus,
-                };
+                let mut raise_windows: Vec<_> =
+                    floating_windows.filter(|&wid| Some(wid) != self.last_floating_focus).collect();
+                // We need to focus some window to transition into floating
+                // mode. If there is no last floating window, pick one.
+                let focus_window = self.last_floating_focus.or_else(|| raise_windows.pop());
+                return EventResponse { raise_windows, focus_window };
             }
         }
 
@@ -506,7 +506,7 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
         _ = mgr.handle_command(Some(space), LayoutCommand::MoveNode(Direction::Up));
         assert_eq!(
             vec![
@@ -579,7 +579,7 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 40, 120)),
@@ -593,7 +593,7 @@ mod tests {
         let screen2 = rect(0, 0, 1200, 1200);
         _ = mgr.handle_event(SpaceExposed(space, screen2.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 400, 1200)),
@@ -696,8 +696,8 @@ mod tests {
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
 
-        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 2))));
-        _ = mgr.handle_event(WindowFocused(Some(space), Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
 
         // Make the first window float.
         _ = mgr.handle_command(Some(space), LayoutCommand::ToggleWindowFloating);
@@ -709,7 +709,9 @@ mod tests {
         let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
         assert_eq!(vec![WindowId::new(pid, 3)], response.raise_windows);
         assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
-        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+        if let Some(focus) = response.focus_window {
+            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+        }
 
         // Make the second window float.
         _ = mgr.handle_command(Some(space), LayoutCommand::ToggleWindowFloating);
@@ -720,13 +722,17 @@ mod tests {
         let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
         assert!(response.raise_windows.is_empty());
         assert_eq!(Some(WindowId::new(pid, 3)), response.focus_window);
-        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+        if let Some(focus) = response.focus_window {
+            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+        }
 
         // Toggle back to floating.
         let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
         assert_eq!(vec![WindowId::new(pid, 1)], response.raise_windows);
         assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
-        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+        if let Some(focus) = response.focus_window {
+            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+        }
     }
 
     #[test]
@@ -736,7 +742,7 @@ mod tests {
         let space = SpaceId::new(1);
         let pid = 1;
 
-        _ = mgr.handle_event(WindowFocused(None, Some(WindowId::new(pid, 1))));
+        _ = mgr.handle_event(WindowFocused(None, WindowId::new(pid, 1)));
 
         // Make the first window float.
         _ = mgr.handle_command(None, LayoutCommand::ToggleWindowFloating);
@@ -759,12 +765,20 @@ mod tests {
             vec![WindowId::new(pid, 2), WindowId::new(pid, 3)],
             raised_windows
         );
-        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+        // This if let is kind of load bearing for this test: previously we
+        // allowed passing None for the window id of this event, except we
+        // did that in the test but not in production. This led to an uncaught
+        // bug!
+        if let Some(focus) = response.focus_window {
+            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+        }
 
         // Toggle back to floating.
         let response = mgr.handle_command(Some(space), LayoutCommand::ToggleFocusFloating);
         assert!(response.raise_windows.is_empty());
         assert_eq!(Some(WindowId::new(pid, 1)), response.focus_window);
-        _ = mgr.handle_event(WindowFocused(Some(space), response.focus_window));
+        if let Some(focus) = response.focus_window {
+            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+        }
     }
 }

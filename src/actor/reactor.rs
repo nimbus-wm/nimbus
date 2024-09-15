@@ -271,7 +271,9 @@ impl Reactor {
                     space,
                     self.main_screen.unwrap().frame.size,
                 ));
-                self.send_layout_event(LayoutEvent::WindowFocused(Some(space), self.main_window()));
+                if let Some(main_window) = self.main_window() {
+                    self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
+                }
                 // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                 // (see notes for WindowsDiscovered above).
                 for app in self.apps.values_mut() {
@@ -305,7 +307,7 @@ impl Reactor {
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(
                 self.main_screen_space(),
-                Some(raised_window),
+                raised_window,
             ));
         }
         self.update_layout(animation_focus_wid, is_resize);
