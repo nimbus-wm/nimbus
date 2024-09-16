@@ -15,8 +15,12 @@ use icrate::{
 use tracing::{info_span, trace, warn, Span};
 
 use crate::{
-    actor::app::AppInfo, actor::reactor::Event, sys::app::NSRunningApplicationExt,
-    sys::screen::ScreenCache,
+    actor::{app::AppInfo, reactor::Event},
+    sys::{
+        app::NSRunningApplicationExt,
+        screen::ScreenCache,
+        window_server::{self, WindowServerInfo},
+    },
 };
 
 use super::wm_controller::{self, WmEvent};
@@ -97,12 +101,20 @@ impl NotificationCenterInner {
         let mut screen_cache = self.ivars().screen_cache.borrow_mut();
         let frames = screen_cache.update_screen_config();
         let spaces = screen_cache.get_screen_spaces();
-        self.send_event(Event::ScreenParametersChanged(frames, spaces));
+        self.send_event(Event::ScreenParametersChanged(
+            frames,
+            spaces,
+            self.get_windows(),
+        ));
     }
 
     fn send_current_space(&self) {
         let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
-        self.send_event(Event::SpaceChanged(spaces));
+        self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+    }
+
+    fn get_windows(&self) -> Vec<WindowServerInfo> {
+        window_server::get_visible_windows_with_layer(None)
     }
 
     fn handle_app_event(&self, notif: &NSNotification) {

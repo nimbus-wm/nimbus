@@ -68,7 +68,6 @@ pub struct WindowServerInfo {
 
 /// Returns a list of windows visible on the screen, in order starting with the
 /// frontmost.
-#[allow(dead_code)]
 pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInfo> {
     // Note that the ordering is not documented. But
     // NSWindow::windowNumbersWithOptions *is* documented to return the windows
@@ -83,7 +82,6 @@ pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInf
     windows.iter().filter_map(|win| make_info(win, layer)).collect::<Vec<_>>()
 }
 
-#[allow(dead_code)]
 pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
     let array = CFArray::from_copyable(&[id]);
     let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe {

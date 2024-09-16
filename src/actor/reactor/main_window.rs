@@ -77,11 +77,11 @@ impl MainWindowTracker {
             }
             Event::ApplicationTerminated(_)
             | Event::WindowsDiscovered { .. }
-            | Event::WindowCreated(_, _)
+            | Event::WindowCreated(_, _, _)
             | Event::WindowDestroyed(_)
             | Event::WindowFrameChanged(_, _, _, _)
-            | Event::ScreenParametersChanged(_, _)
-            | Event::SpaceChanged(_)
+            | Event::ScreenParametersChanged(_, _, _)
+            | Event::SpaceChanged(_, _)
             | Event::Command(_) => return None,
         };
         if Some(event_pid) == self.global_frontmost && quiet_edge == Quiet::No {
@@ -138,6 +138,7 @@ mod tests {
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
             vec![Some(space)],
+            vec![],
         ));
         assert_eq!(None, reactor.main_window());
 
@@ -206,6 +207,7 @@ mod tests {
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
             vec![Some(space)],
+            vec![],
         ));
 
         reactor.handle_event(ApplicationGloballyActivated(1));
@@ -286,6 +288,7 @@ mod tests {
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
             vec![Some(space)],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app_with_opts(
@@ -295,7 +298,7 @@ mod tests {
             false,
         ));
 
-        reactor.handle_event(SpaceChanged(vec![None]));
+        reactor.handle_event(SpaceChanged(vec![None], vec![]));
         reactor.handle_event(ApplicationActivated(3, Quiet::No));
         reactor.handle_event(ApplicationGloballyActivated(3));
         reactor.handle_event(WindowsDiscovered {
@@ -305,7 +308,7 @@ mod tests {
         });
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
 
-        reactor.handle_event(SpaceChanged(vec![Some(space)]));
+        reactor.handle_event(SpaceChanged(vec![Some(space)], vec![]));
         assert_eq!(
             reactor.layout.selected_window(space),
             Some(WindowId::new(3, 1))

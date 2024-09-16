@@ -15,11 +15,16 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
-    actor::app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
-    actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
+    actor::{
+        app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
+        layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
+    },
     metrics::{self, MetricsCommand},
-    sys::geometry::{Round, SameAs},
-    sys::screen::SpaceId,
+    sys::{
+        geometry::{Round, SameAs},
+        screen::SpaceId,
+        window_server::{WindowServerId, WindowServerInfo},
+    },
 };
 use animation::Animation;
 
@@ -50,13 +55,13 @@ pub enum Event {
         new: Vec<(WindowId, WindowInfo)>,
         known_visible: Vec<WindowId>,
     },
-    WindowCreated(WindowId, WindowInfo),
+    WindowCreated(WindowId, WindowInfo, Option<WindowServerInfo>),
     WindowDestroyed(WindowId),
     WindowFrameChanged(WindowId, CGRect, TransactionId, Requested),
 
     // None in the SpaceId vec disables managing windows on that screen until the next space change.
-    ScreenParametersChanged(Vec<CGRect>, Vec<Option<SpaceId>>),
-    SpaceChanged(Vec<Option<SpaceId>>),
+    ScreenParametersChanged(Vec<CGRect>, Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
+    SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
 
     Command(Command),
 }
@@ -77,6 +82,7 @@ pub struct Reactor {
     apps: HashMap<pid_t, AppState>,
     layout: LayoutManager,
     windows: HashMap<WindowId, WindowState>,
+    window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     main_screen: Option<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
@@ -101,7 +107,7 @@ struct Screen {
 pub struct TransactionId(u32);
 
 #[derive(Debug)]
-pub struct WindowState {
+struct WindowState {
     #[allow(unused)]
     title: String,
     /// The last known frame of the window. Always includes the last write.
@@ -109,8 +115,9 @@ pub struct WindowState {
     /// This value only updates monotonically with respect to writes; in other
     /// words, we only accept reads when we know they come after the last write.
     frame_monotonic: CGRect,
-    is_standard: bool,
+    is_ax_standard: bool,
     last_sent_txid: TransactionId,
+    window_server_id: WindowServerId,
 }
 
 impl WindowState {
@@ -126,8 +133,9 @@ impl From<WindowInfo> for WindowState {
         WindowState {
             title: info.title,
             frame_monotonic: info.frame,
-            is_standard: info.is_standard,
+            is_ax_standard: info.is_standard,
             last_sent_txid: TransactionId::default(),
+            window_server_id: info.sys_id,
         }
     }
 }
@@ -151,6 +159,7 @@ impl Reactor {
             apps: HashMap::new(),
             layout,
             windows: HashMap::new(),
+            window_server_info: HashMap::new(),
             main_screen: None,
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
@@ -193,17 +202,20 @@ impl Reactor {
             Event::WindowsDiscovered { pid, new, known_visible } => {
                 self.on_windows_discovered(pid, new, known_visible);
             }
-            Event::WindowCreated(wid, window) => {
+            Event::WindowCreated(wid, window, ws_info) => {
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces. (Add a test)
                 // FIXME: We assume all windows are on the main screen.
+                self.windows.insert(wid, window.into());
+                if let Some(info) = ws_info {
+                    self.window_server_info.insert(info.id, info);
+                }
                 if let Some(space) = self.main_screen_space() {
-                    if window.is_standard {
+                    if self.window_is_standard(wid) {
                         animation_focus_wid = Some(wid);
                         self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
                     }
                 }
-                self.windows.insert(wid, window.into());
             }
             Event::WindowDestroyed(wid) => {
                 self.windows.remove(&wid).unwrap();
@@ -241,7 +253,7 @@ impl Reactor {
                 });
                 is_resize = true;
             }
-            Event::ScreenParametersChanged(frames, spaces) => {
+            Event::ScreenParametersChanged(frames, spaces, ws_windows) => {
                 info!("screen parameters changed");
                 self.main_screen = frames
                     .into_iter()
@@ -254,9 +266,11 @@ impl Reactor {
                         self.main_screen.unwrap().frame.size,
                     ));
                 }
+                self.window_server_info
+                    .extend(ws_windows.into_iter().map(|info| (info.id, info)));
                 // FIXME: Update visible windows if space changed
             }
-            Event::SpaceChanged(spaces) => {
+            Event::SpaceChanged(spaces, ws_windows) => {
                 info!("space changed");
                 let Some(screen) = self.main_screen.as_mut() else {
                     return;
@@ -274,6 +288,8 @@ impl Reactor {
                 if let Some(main_window) = self.main_window() {
                     self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
                 }
+                self.window_server_info
+                    .extend(ws_windows.into_iter().map(|info| (info.id, info)));
                 // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                 // (see notes for WindowsDiscovered above).
                 for app in self.apps.values_mut() {
@@ -323,9 +339,9 @@ impl Reactor {
         // are for the current space. The only way I've found to do that
         // is to take a "snapshot" using CGWindowListCopyWindowInfo.
         let mut app_windows = known_visible;
-        app_windows.retain(|wid| self.windows[wid].is_standard);
-        app_windows.extend(new.iter().filter_map(|(wid, info)| info.is_standard.then_some(wid)));
+        app_windows.extend(new.iter().map(|(wid, _)| *wid));
         self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
+        app_windows.retain(|wid| self.window_is_standard(*wid));
         // FIXME: We assume all windows are on the main screen.
         if let Some(space) = self.main_screen_space() {
             // Filter out some noise.
@@ -337,6 +353,18 @@ impl Reactor {
                 ));
             }
         }
+    }
+
+    fn window_is_standard(&self, id: WindowId) -> bool {
+        let Some(window) = self.windows.get(&id) else {
+            return false;
+        };
+        if let Some(info) = self.window_server_info.get(&window.window_server_id) {
+            if info.layer != 0 {
+                return false;
+            }
+        }
+        window.is_ax_standard
     }
 
     fn send_layout_event(&mut self, event: LayoutEvent) {
@@ -490,7 +518,7 @@ pub mod tests {
                 CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
                 CGSize::new(50.0, 50.0),
             ),
-            sys_id: WindowServerId::new(0),
+            sys_id: WindowServerId::new(idx as u32),
         }
     }
 
@@ -565,6 +593,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -592,6 +621,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -626,6 +656,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
@@ -663,6 +694,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(3)));
@@ -707,6 +739,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],
             vec![Some(SpaceId::new(1))],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(1)));
@@ -726,6 +759,7 @@ pub mod tests {
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],
             vec![None],
+            vec![],
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(1)));
@@ -738,7 +772,45 @@ pub mod tests {
 
         // Make sure it doesn't choke on destroyed events for ignored windows.
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 1)));
-        reactor.handle_event(Event::WindowCreated(WindowId::new(1, 2), make_window(2)));
+        reactor.handle_event(Event::WindowCreated(
+            WindowId::new(1, 2),
+            make_window(2),
+            None,
+        ));
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
+    }
+
+    #[test]
+    fn it_ignores_windows_nonzero_layers() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![Some(SpaceId::new(1))],
+            vec![WindowServerInfo {
+                id: WindowServerId::new(1),
+                pid: 1,
+                layer: 10,
+                frame: CGRect::ZERO,
+            }],
+        ));
+
+        reactor.handle_events(apps.make_app(1, make_windows(1)));
+
+        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        assert!(
+            windows.get(&WindowId::new(1, 1)).is_none(),
+            "Window should not have been moved",
+        );
+
+        // Make sure it doesn't choke on destroyed events for ignored windows.
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 1)));
+        reactor.handle_event(Event::WindowCreated(
+            WindowId::new(1, 2),
+            make_window(2),
+            None,
+        ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
     }
 }

@@ -43,7 +43,7 @@ use crate::{
         geometry::{ToCGType, ToICrate},
         observer::Observer,
         run_loop::WakeupHandle,
-        window_server::WindowServerId,
+        window_server::{self, WindowServerId},
     },
 };
 
@@ -385,7 +385,8 @@ impl State {
                 let Some(wid) = self.register_window(elem) else {
                     return;
                 };
-                self.send_event(Event::WindowCreated(wid, window));
+                let window_server_info = window_server::get_window(wid.idx.into());
+                self.send_event(Event::WindowCreated(wid, window, window_server_info));
             }
             kAXUIElementDestroyedNotification => {
                 let Some((&wid, _)) = self.windows.iter().find(|(_, w)| w.elem == elem) else {
@@ -524,7 +525,8 @@ impl State {
                     warn!(?self.pid, "Got MainWindowChanged on unknown window");
                     return None;
                 };
-                self.send_event(Event::WindowCreated(wid, info));
+                let window_server_info = window_server::get_window(wid.idx.into());
+                self.send_event(Event::WindowCreated(wid, info, window_server_info));
                 wid
             }
         };

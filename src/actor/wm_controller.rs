@@ -13,7 +13,7 @@ type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use crate::{
     actor::{self, app::AppInfo, reactor},
-    sys::{hotkey::HotkeyManager, screen::SpaceId},
+    sys::{hotkey::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
 };
 
 #[derive(Debug)]
@@ -90,8 +90,8 @@ impl WmController {
                 actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
             }
             ReactorEvent(mut event) => {
-                if let Event::SpaceChanged(spaces) | Event::ScreenParametersChanged(_, spaces) =
-                    &mut event
+                if let Event::SpaceChanged(spaces, _)
+                | Event::ScreenParametersChanged(_, spaces, _) = &mut event
                 {
                     self.handle_space_changed(spaces);
                     self.apply_space_activation(spaces);
@@ -112,12 +112,22 @@ impl WmController {
                 }
                 let mut spaces = self.cur_space.clone();
                 self.apply_space_activation(&mut spaces);
-                self.send_event(Event::SpaceChanged(spaces));
+                self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
             }
             Command(ReactorCommand(cmd)) => {
                 self.send_event(Event::Command(cmd));
             }
         }
+    }
+
+    fn get_windows(&self) -> Vec<WindowServerInfo> {
+        // TODO: This probably shouldn't happen here.
+        // We only do it because we manufacture a SpaceChanged event, and the
+        // reactor might need an accurate list of visible windows.
+        #[cfg(not(test))]
+        return crate::sys::window_server::get_visible_windows_with_layer(None);
+        #[cfg(test)]
+        vec![]
     }
 
     fn handle_space_changed(&mut self, spaces: &[Option<SpaceId>]) {
