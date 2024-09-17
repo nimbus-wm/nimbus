@@ -117,7 +117,7 @@ struct WindowState {
     frame_monotonic: CGRect,
     is_ax_standard: bool,
     last_sent_txid: TransactionId,
-    window_server_id: WindowServerId,
+    window_server_id: Option<WindowServerId>,
 }
 
 impl WindowState {
@@ -359,9 +359,11 @@ impl Reactor {
         let Some(window) = self.windows.get(&id) else {
             return false;
         };
-        if let Some(info) = self.window_server_info.get(&window.window_server_id) {
-            if info.layer != 0 {
-                return false;
+        if let Some(id) = window.window_server_id {
+            if let Some(info) = self.window_server_info.get(&id) {
+                if info.layer != 0 {
+                    return false;
+                }
             }
         }
         window.is_ax_standard
@@ -518,7 +520,7 @@ pub mod tests {
                 CGPoint::new(100.0 * f64::from(idx as u32), 100.0),
                 CGSize::new(50.0, 50.0),
             ),
-            sys_id: WindowServerId::new(idx as u32),
+            sys_id: Some(WindowServerId::new(idx as u32)),
         }
     }
 

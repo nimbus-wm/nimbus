@@ -64,7 +64,7 @@ pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
     pub frame: CGRect,
-    pub sys_id: WindowServerId,
+    pub sys_id: Option<WindowServerId>,
 }
 
 impl TryFrom<&AXUIElement> for WindowInfo {
@@ -75,7 +75,7 @@ impl TryFrom<&AXUIElement> for WindowInfo {
                 && element.subrole()? == kAXStandardWindowSubrole,
             title: element.title()?.to_string(),
             frame: element.frame()?.to_icrate(),
-            sys_id: WindowServerId::try_from(element)?,
+            sys_id: WindowServerId::try_from(element).ok(),
         })
     }
 }
