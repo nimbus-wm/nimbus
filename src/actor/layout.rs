@@ -84,7 +84,7 @@ pub struct LayoutManager {
 /// screen size so that users can change how their windows are laid out in
 /// different configurations. We only save a layout if it was modified by the
 /// user in some way.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct SpaceLayoutInfo {
     configurations: HashMap<Size, LayoutId>,
     active_size: Size,
@@ -98,7 +98,7 @@ impl SpaceLayoutInfo {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Debug)]
 struct Size {
     width: i32,
     height: i32,
@@ -146,6 +146,7 @@ impl LayoutManager {
         match event {
             LayoutEvent::SpaceExposed(space, size) => {
                 self.debug_tree(space);
+                debug!(space_layout = ?self.space_layouts.entry(space));
                 let size = size.into();
                 let (space_layout, mut unchanged) = match self.space_layouts.entry(space) {
                     Entry::Vacant(entry) => {
