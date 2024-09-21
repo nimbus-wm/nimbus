@@ -144,13 +144,16 @@ impl From<WindowInfo> for WindowState {
 impl Reactor {
     pub fn spawn(layout: LayoutManager) -> Sender {
         let (events_tx, events) = sync::mpsc::channel::<(Span, Event)>();
-        thread::spawn(move || {
-            let mut this = Reactor::new(layout);
-            for (span, event) in events {
-                let _guard = span.enter();
-                this.handle_event(event);
-            }
-        });
+        thread::Builder::new()
+            .name("reactor".to_string())
+            .spawn(move || {
+                let mut this = Reactor::new(layout);
+                for (span, event) in events {
+                    let _guard = span.enter();
+                    this.handle_event(event);
+                }
+            })
+            .unwrap();
         events_tx
     }
 

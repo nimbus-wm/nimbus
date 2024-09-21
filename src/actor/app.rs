@@ -164,7 +164,13 @@ pub fn spawn_initial_app_threads(events_tx: Sender<(Span, Event)>) {
 }
 
 pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
-    thread::spawn(move || app_thread_main(pid, info, events_tx));
+    thread::Builder::new()
+        .name(format!(
+            "{}({pid})",
+            info.bundle_id.as_deref().unwrap_or("")
+        ))
+        .spawn(move || app_thread_main(pid, info, events_tx))
+        .unwrap();
 }
 
 struct State {
