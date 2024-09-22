@@ -1,6 +1,6 @@
 use nimbus_wm::actor::layout::LayoutManager;
 use nimbus_wm::actor::notification_center::NotificationCenter;
-use nimbus_wm::actor::reactor::Reactor;
+use nimbus_wm::actor::reactor::{self, Reactor};
 use nimbus_wm::actor::wm_controller::{self, WmController};
 use nimbus_wm::metrics;
 use nimbus_wm::sys::executor::Executor;
@@ -27,6 +27,10 @@ struct Cli {
 
     #[arg(long)]
     restore: bool,
+
+    /// Record reactor events to the specified file path. Overwrites the file if exists.
+    #[arg(long)]
+    record: Option<PathBuf>,
 }
 
 fn main() {
@@ -60,7 +64,7 @@ fn main() {
     } else {
         LayoutManager::new()
     };
-    let events_tx = Reactor::spawn(layout);
+    let events_tx = Reactor::spawn(layout, reactor::Record::new(opt.record.as_deref()));
 
     let config = wm_controller::Config {
         one_space: opt.one,

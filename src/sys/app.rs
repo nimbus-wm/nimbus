@@ -5,8 +5,9 @@ use icrate::{
     AppKit::{NSRunningApplication, NSWorkspace},
     Foundation::{CGRect, NSString},
 };
+use serde::{Deserialize, Serialize};
 
-use super::geometry::ToICrate;
+use super::geometry::{CGRectDef, ToICrate};
 use super::window_server::WindowServerId;
 
 pub use accessibility_sys::pid_t;
@@ -43,7 +44,7 @@ impl NSRunningApplicationExt for NSRunningApplication {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[allow(dead_code)]
 pub struct AppInfo {
     pub bundle_id: Option<String>,
@@ -59,10 +60,11 @@ impl From<&NSRunningApplication> for AppInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct WindowInfo {
     pub is_standard: bool,
     pub title: String,
+    #[serde(with = "CGRectDef")]
     pub frame: CGRect,
     pub sys_id: Option<WindowServerId>,
 }

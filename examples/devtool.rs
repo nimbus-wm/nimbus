@@ -1,6 +1,6 @@
 //! This tool is used to exercise nimbus and system APIs during development.
 
-use std::{future::Future, time::Instant};
+use std::{future::Future, path::PathBuf, time::Instant};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::pid_t;
@@ -19,11 +19,13 @@ use icrate::{
     Foundation::MainThreadMarker,
 };
 use nimbus_wm::{
+    actor::reactor,
     sys::app,
     sys::screen::{self, ScreenCache},
     sys::window_server::{self, WindowServerId},
 };
 use tokio::sync::mpsc;
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Parser)]
@@ -44,6 +46,8 @@ enum Command {
     App(App),
     #[command(subcommand)]
     WindowServer(WindowServer),
+    #[command()]
+    Replay(Replay),
 }
 
 #[derive(Subcommand, Clone)]
@@ -84,11 +88,23 @@ enum WindowServer {
     Get { id: u32 },
 }
 
+#[derive(Parser, Clone)]
+struct Replay {
+    path: PathBuf,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
-        .with(tracing_tree::HierarchicalLayer::default())
+        .with(
+            tracing_tree::HierarchicalLayer::default()
+                .with_indent_amount(2)
+                .with_indent_lines(true)
+                .with_deferred_spans(true)
+                .with_span_retrace(true)
+                .with_targets(true),
+        )
         .init();
     let opt: Opt = Parser::parse();
 
@@ -180,6 +196,13 @@ async fn main() -> anyhow::Result<()> {
             Some(win) => println!("{win:?}"),
             None => println!("Could not find window {id}"),
         },
+        Command::Replay(Replay { path }) => {
+            reactor::replay(&path, |rx| {
+                for (_span, request) in rx.try_iter() {
+                    info!(?request);
+                }
+            })?;
+        }
     }
     Ok(())
 }

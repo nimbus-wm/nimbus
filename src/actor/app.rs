@@ -69,13 +69,13 @@ impl WindowId {
     }
 }
 
+#[derive(Clone)]
 pub struct AppThreadHandle {
     requests_tx: Sender<(Span, Request)>,
     wakeup: WakeupHandle,
 }
 
 impl AppThreadHandle {
-    #[cfg(test)]
     pub(crate) fn new_for_test(requests_tx: Sender<(Span, Request)>) -> Self {
         let this = AppThreadHandle {
             requests_tx,
@@ -119,7 +119,7 @@ pub enum Request {
     Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>, Quiet),
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Quiet {
     Yes,
     #[default]

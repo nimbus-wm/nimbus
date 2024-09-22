@@ -6,37 +6,42 @@
 
 mod animation;
 mod main_window;
+mod replay;
 
 use std::{collections::HashMap, mem, path::PathBuf, sync, thread};
 
 use icrate::Foundation::CGRect;
 use main_window::MainWindowTracker;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::{
-        app::{pid_t, AppInfo, AppThreadHandle, RaiseToken, Request, WindowId, WindowInfo},
+        app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
     metrics::{self, MetricsCommand},
     sys::{
-        geometry::{Round, SameAs},
+        geometry::{CGRectDef, Round, SameAs},
         screen::SpaceId,
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
 use animation::Animation;
 
-use super::app::Quiet;
+pub use replay::{replay, Record};
 
 pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 
-#[derive(Debug)]
+#[serde_as]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Event {
     ApplicationLaunched {
         pid: pid_t,
         info: AppInfo,
+        #[serde(skip, default = "replay::deserialize_app_thread_handle")]
         handle: AppThreadHandle,
         is_frontmost: bool,
         main_window: Option<WindowId>,
@@ -57,19 +62,28 @@ pub enum Event {
     },
     WindowCreated(WindowId, WindowInfo, Option<WindowServerInfo>),
     WindowDestroyed(WindowId),
-    WindowFrameChanged(WindowId, CGRect, TransactionId, Requested),
+    WindowFrameChanged(
+        WindowId,
+        #[serde(with = "CGRectDef")] CGRect,
+        TransactionId,
+        Requested,
+    ),
 
     // None in the SpaceId vec disables managing windows on that screen until the next space change.
-    ScreenParametersChanged(Vec<CGRect>, Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
+    ScreenParametersChanged(
+        #[serde_as(as = "Vec<CGRectDef>")] Vec<CGRect>,
+        Vec<Option<SpaceId>>,
+        Vec<WindowServerInfo>,
+    ),
     SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
 
     Command(Command),
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Requested(pub bool);
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Layout(LayoutCommand),
     Metrics(MetricsCommand),
@@ -104,7 +118,7 @@ struct Screen {
 
 /// A per-window counter that tracks the last time the reactor sent a request to
 /// change the window frame.
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransactionId(u32);
 
 #[derive(Debug)]
@@ -142,14 +156,17 @@ impl From<WindowInfo> for WindowState {
 }
 
 impl Reactor {
-    pub fn spawn(layout: LayoutManager) -> Sender {
+    pub fn spawn(layout: LayoutManager, mut record: Record) -> Sender {
         let (events_tx, events) = sync::mpsc::channel::<(Span, Event)>();
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
+                let record = &mut record;
+                record.start(&layout);
                 let mut this = Reactor::new(layout);
                 for (span, event) in events {
                     let _guard = span.enter();
+                    record.on_event(&event);
                     this.handle_event(event);
                 }
             })
@@ -157,7 +174,7 @@ impl Reactor {
         events_tx
     }
 
-    fn new(layout: LayoutManager) -> Reactor {
+    pub fn new(layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
             apps: HashMap::new(),
@@ -171,7 +188,7 @@ impl Reactor {
         }
     }
 
-    fn handle_event(&mut self, event: Event) {
+    pub fn handle_event(&mut self, event: Event) {
         debug!(?event, "Event");
         let mut animation_focus_wid = None;
         let mut is_resize = false;

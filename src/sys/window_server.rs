@@ -1,4 +1,4 @@
-use super::geometry::ToICrate;
+use super::geometry::{CGRectDef, ToICrate};
 
 use accessibility::AXUIElement;
 use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
@@ -19,13 +19,14 @@ use core_graphics::{
     },
 };
 use icrate::Foundation::CGRect;
+use serde::{Deserialize, Serialize};
 
 /// The window ID used by the window server.
 ///
 /// Obtaining this from AXUIElement uses a private API and is *not* guaranteed.
 /// Any functionality depending on this should have a backup plan in case it
 /// breaks in the future.
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WindowServerId(CGWindowID);
 
 impl WindowServerId {
@@ -57,12 +58,13 @@ impl TryFrom<&AXUIElement> for WindowServerId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(unused)]
 pub struct WindowServerInfo {
     pub id: WindowServerId,
     pub pid: pid_t,
     pub layer: i32,
+    #[serde(with = "CGRectDef")]
     pub frame: CGRect,
 }
 

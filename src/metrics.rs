@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tracing_timing::{group, Histogram};
 
 pub type TimingLayer = tracing_timing::TimingLayer<group::ByName, group::ByMessage>;
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetricsCommand {
     ShowTiming,
 }

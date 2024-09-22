@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum LayoutCommand {
     NextWindow,
     PrevWindow,

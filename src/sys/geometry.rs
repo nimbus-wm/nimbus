@@ -1,5 +1,43 @@
 use core_graphics_types::geometry as cg;
 use icrate::Foundation as ic;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_with::{DeserializeAs, SerializeAs};
+
+/*
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
+pub struct CGRect(#[serde(with = "CGRectDef")] ic::CGRect);
+
+impl Deref for CGRect {
+    type Target = ic::CGRect;
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: repr(transparent)
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+impl DerefMut for CGRect {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: repr(transparent)
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGPoint")]
+pub struct CGPointDef {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGSize")]
+pub struct CGSizeDef {
+    pub width: f64,
+    pub height: f64,
+}
+*/
 
 pub trait ToICrate<T> {
     fn to_icrate(&self) -> T;
@@ -131,3 +169,44 @@ pub trait SameAs: IsWithin + Sized {
 impl SameAs for ic::CGRect {}
 impl SameAs for ic::CGPoint {}
 impl SameAs for ic::CGSize {}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGRect")]
+pub struct CGRectDef {
+    #[serde(with = "CGPointDef")]
+    pub origin: ic::CGPoint,
+    #[serde(with = "CGSizeDef")]
+    pub size: ic::CGSize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGPoint")]
+pub struct CGPointDef {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "ic::CGSize")]
+pub struct CGSizeDef {
+    pub width: f64,
+    pub height: f64,
+}
+
+impl SerializeAs<ic::CGRect> for CGRectDef {
+    fn serialize_as<S>(value: &ic::CGRect, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        CGRectDef::serialize(value, serializer)
+    }
+}
+
+impl<'de> DeserializeAs<'de, ic::CGRect> for CGRectDef {
+    fn deserialize_as<D>(deserializer: D) -> Result<ic::CGRect, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        CGRectDef::deserialize(deserializer)
+    }
+}
