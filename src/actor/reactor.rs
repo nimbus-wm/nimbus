@@ -98,6 +98,7 @@ pub struct Reactor {
     windows: HashMap<WindowId, WindowState>,
     window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     window_ids: HashMap<WindowServerId, WindowId>,
+    visible_windows: Vec<WindowServerId>,
     main_screen: Option<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
@@ -182,6 +183,7 @@ impl Reactor {
             windows: HashMap::new(),
             window_ids: HashMap::new(),
             window_server_info: HashMap::new(),
+            visible_windows: Vec::new(),
             main_screen: None,
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
@@ -216,8 +218,8 @@ impl Reactor {
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
             Event::ApplicationActivated(_, _)
-            | Event::ApplicationGloballyActivated(_)
             | Event::ApplicationDeactivated(_)
+            | Event::ApplicationGloballyActivated(_)
             | Event::ApplicationGloballyDeactivated(_)
             | Event::ApplicationMainWindowChanged(_, _, _) => {
                 // Handled by MainWindowTracker.
@@ -368,6 +370,8 @@ impl Reactor {
                 window.frame_monotonic = info.frame;
             }
         }
+        self.visible_windows.clear();
+        self.visible_windows.extend(ws_info.iter().map(|info| info.id));
         self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
     }
 
@@ -375,17 +379,35 @@ impl Reactor {
         &mut self,
         pid: pid_t,
         new: Vec<(WindowId, WindowInfo)>,
-        known_visible: Vec<WindowId>,
+        _known_visible: Vec<WindowId>,
     ) {
-        // FIXME: There is no synchronization ensuring that these windows
-        // are for the current space. The only way I've found to do that
-        // is to take a "snapshot" using CGWindowListCopyWindowInfo.
-        let mut app_windows = known_visible;
-        app_windows.extend(new.iter().map(|(wid, _)| *wid));
+        // Note that we rely on the window server info, not accessibility, to
+        // tell us which windows are visible.
+        //
+        // The accessibility APIs report that there are no visible windows when
+        // at a login screen, for instance, but there is not a corresponding
+        // system notification to use as context. Even if there were, lining
+        // them up with the responses we get from the app would be unreliable.
+        //
+        // We therefore do not let accessibility `.windows()` results remove
+        // known windows from the visible list. Doing so incorrectly would cause
+        // us to destroy the layout. We do wait for windows to become initially
+        // known to accesibility before adding them to the layout, but that is
+        // not generally problematic.
+        //
+        // TODO: Notice when returning from the login screen and ask again for
+        // undiscovered windows.
         self.window_ids
             .extend(new.iter().flat_map(|(wid, info)| info.sys_id.map(|wsid| (wsid, *wid))));
         self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-        app_windows.retain(|wid| self.window_is_standard(*wid));
+        let app_windows = self
+            .visible_windows
+            .iter()
+            .flat_map(|wsid| self.window_ids.get(wsid))
+            .copied()
+            .filter(|wid| wid.pid == pid)
+            .filter(|wid| self.window_is_standard(*wid))
+            .collect();
         // FIXME: We assume all windows are on the main screen.
         if let Some(space) = self.main_screen_space() {
             // Filter out some noise.
