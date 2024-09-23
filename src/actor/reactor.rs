@@ -353,6 +353,24 @@ impl Reactor {
         self.update_layout(animation_focus_wid, is_resize);
     }
 
+    fn update_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
+        for info in &ws_info {
+            if info.layer != 0 {
+                continue;
+            }
+            if let Some(wid) = self.window_ids.get(&info.id) {
+                let Some(window) = self.windows.get_mut(wid) else {
+                    continue;
+                };
+                // Assume this update comes from after the last write. The window
+                // is on a different space (unless it's on all spaces) and
+                // there's no way to order it with respect to our writes anyway.
+                window.frame_monotonic = info.frame;
+            }
+        }
+        self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
+    }
+
     fn on_windows_discovered(
         &mut self,
         pid: pid_t,
@@ -393,24 +411,6 @@ impl Reactor {
             }
         }
         window.is_ax_standard
-    }
-
-    fn update_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
-        for info in &ws_info {
-            if info.layer != 0 {
-                continue;
-            }
-            if let Some(wid) = self.window_ids.get(&info.id) {
-                let Some(window) = self.windows.get_mut(wid) else {
-                    continue;
-                };
-                // Assume this update comes from after the last write. The window
-                // is on a different space (unless it's on all spaces) and
-                // there's no way to order it with respect to our writes anyway.
-                window.frame_monotonic = info.frame;
-            }
-        }
-        self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
     }
 
     fn send_layout_event(&mut self, event: LayoutEvent) {
