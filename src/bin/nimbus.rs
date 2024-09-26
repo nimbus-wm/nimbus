@@ -1,18 +1,13 @@
-mod actor;
-mod metrics;
-mod model;
-mod sys;
-mod util;
+use nimbus_wm::actor::layout::LayoutManager;
+use nimbus_wm::actor::notification_center::NotificationCenter;
+use nimbus_wm::actor::reactor::Reactor;
+use nimbus_wm::actor::wm_controller::{self, WmController};
+use nimbus_wm::metrics;
+use nimbus_wm::sys::executor::Executor;
 
 use std::path::PathBuf;
 
-use actor::layout::LayoutManager;
-use actor::notification_center::NotificationCenter;
-use actor::reactor::Reactor;
-use actor::wm_controller::{self, WmController};
 use clap::Parser;
-
-use sys::executor::Executor;
 use tokio::join;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tracing_tree::time::UtcDateTime;
