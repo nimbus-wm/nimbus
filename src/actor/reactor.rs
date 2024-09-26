@@ -8,7 +8,12 @@ mod animation;
 mod main_window;
 mod replay;
 
-use std::{collections::HashMap, mem, path::PathBuf, sync, thread};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    path::PathBuf,
+    sync, thread,
+};
 
 use icrate::Foundation::CGRect;
 use main_window::MainWindowTracker;
@@ -46,6 +51,7 @@ pub enum Event {
         is_frontmost: bool,
         main_window: Option<WindowId>,
         visible_windows: Vec<(WindowId, WindowInfo)>,
+        window_server_info: Vec<WindowServerInfo>,
     },
     ApplicationTerminated(pid_t),
     ApplicationThreadTerminated(pid_t),
@@ -98,7 +104,7 @@ pub struct Reactor {
     windows: HashMap<WindowId, WindowState>,
     window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     window_ids: HashMap<WindowServerId, WindowId>,
-    visible_windows: Vec<WindowServerId>,
+    visible_windows: HashSet<WindowServerId>,
     main_screen: Option<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
@@ -183,7 +189,7 @@ impl Reactor {
             windows: HashMap::new(),
             window_ids: HashMap::new(),
             window_server_info: HashMap::new(),
-            visible_windows: Vec::new(),
+            visible_windows: HashSet::new(),
             main_screen: None,
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
@@ -201,11 +207,13 @@ impl Reactor {
                 info,
                 handle,
                 visible_windows,
+                window_server_info,
                 is_frontmost: _,
                 main_window: _,
             } => {
                 // FIXME: We don't get window server info for windows on app launch.
                 self.apps.insert(pid, AppState { info, handle });
+                self.update_partial_window_server_info(window_server_info);
                 self.on_windows_discovered(pid, visible_windows, vec![]);
             }
             Event::ApplicationTerminated(pid) => {
@@ -294,7 +302,7 @@ impl Reactor {
                         self.main_screen.unwrap().frame.size,
                     ));
                 }
-                self.update_window_server_info(ws_info);
+                self.update_complete_window_server_info(ws_info);
                 // FIXME: Update visible windows if space changed
             }
             Event::SpaceChanged(spaces, ws_info) => {
@@ -315,7 +323,7 @@ impl Reactor {
                 if let Some(main_window) = self.main_window() {
                     self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
                 }
-                self.update_window_server_info(ws_info);
+                self.update_complete_window_server_info(ws_info);
                 // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
                 // (see notes for WindowsDiscovered above).
                 for app in self.apps.values_mut() {
@@ -355,7 +363,13 @@ impl Reactor {
         self.update_layout(animation_focus_wid, is_resize);
     }
 
-    fn update_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
+    fn update_complete_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
+        self.visible_windows.clear();
+        self.update_partial_window_server_info(ws_info);
+    }
+
+    fn update_partial_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
+        self.visible_windows.extend(ws_info.iter().map(|info| info.id));
         for info in ws_info.iter().filter(|i| i.layer == 0) {
             let Some(wid) = self.window_ids.get(&info.id) else {
                 continue;
@@ -368,8 +382,6 @@ impl Reactor {
             // there's no way to order it with respect to our writes anyway.
             window.frame_monotonic = info.frame;
         }
-        self.visible_windows.clear();
-        self.visible_windows.extend(ws_info.iter().map(|info| info.id));
         self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
     }
 
@@ -547,7 +559,7 @@ pub mod tests {
         }
 
         pub fn make_app(&mut self, pid: pid_t, windows: Vec<WindowInfo>) -> Vec<Event> {
-            self.make_app_with_opts(pid, windows, None, false)
+            self.make_app_with_opts(pid, windows, None, false, true)
         }
 
         pub fn make_app_with_opts(
@@ -556,6 +568,7 @@ pub mod tests {
             windows: Vec<WindowInfo>,
             main_window: Option<WindowId>,
             is_frontmost: bool,
+            with_ws_info: bool,
         ) -> Vec<Event> {
             let handle = AppThreadHandle::new_for_test(self.0.clone());
             vec![Event::ApplicationLaunched {
@@ -567,6 +580,19 @@ pub mod tests {
                 handle,
                 is_frontmost,
                 main_window,
+                window_server_info: if with_ws_info {
+                    windows
+                        .iter()
+                        .map(|info| WindowServerInfo {
+                            pid,
+                            id: info.sys_id.unwrap(),
+                            layer: 0,
+                            frame: info.frame,
+                        })
+                        .collect()
+                } else {
+                    Default::default()
+                },
                 visible_windows: (1..).map(|idx| WindowId::new(pid, idx)).zip(windows).collect(),
             }]
         }
@@ -863,7 +889,7 @@ pub mod tests {
             }],
         ));
 
-        reactor.handle_events(apps.make_app(1, make_windows(1)));
+        reactor.handle_events(apps.make_app_with_opts(1, make_windows(1), None, true, false));
 
         let (_events, windows) = simulate_events_for_requests(apps.requests());
         assert!(

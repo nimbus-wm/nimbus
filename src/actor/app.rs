@@ -234,16 +234,22 @@ impl State {
         // Process the list and register notifications on all windows.
         self.windows.reserve(initial_window_elements.len() as usize);
         let mut windows = Vec::with_capacity(initial_window_elements.len() as usize);
+        let mut wsids = Vec::with_capacity(initial_window_elements.len() as usize);
         for elem in initial_window_elements.iter() {
             let elem = elem.clone();
+            let wsid = WindowServerId::try_from(&elem).ok();
             let Ok(info) = WindowInfo::try_from(&elem) else {
                 continue;
             };
             let Some(wid) = self.register_window(elem) else {
                 continue;
             };
+            if let Some(wsid) = wsid {
+                wsids.push(wsid.as_u32());
+            }
             windows.push((wid, info));
         }
+        let window_server_info = window_server::get_windows(&wsids);
 
         self.main_window = self.app.main_window().ok().and_then(|w| self.id(&w).ok());
         self.is_frontmost = self.app.frontmost().map(|b| b.into()).unwrap_or(false);
@@ -260,6 +266,7 @@ impl State {
                     is_frontmost: self.is_frontmost,
                     main_window: self.main_window,
                     visible_windows: windows,
+                    window_server_info,
                 },
             ))
             .is_err()

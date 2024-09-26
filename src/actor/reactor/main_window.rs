@@ -148,6 +148,7 @@ mod tests {
             make_windows(2),
             Some(WindowId::new(1, 1)),
             true,
+            true,
         ));
         reactor.handle_events(apps.make_app(2, make_windows(2)));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
@@ -190,6 +191,7 @@ mod tests {
             make_windows(2),
             Some(WindowId::new(3, 1)),
             true,
+            true,
         ));
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
         assert_eq!(
@@ -215,6 +217,7 @@ mod tests {
             1,
             make_windows(2),
             Some(WindowId::new(1, 1)),
+            true,
             true,
         ));
         reactor.handle_events(apps.make_app(2, make_windows(2)));
@@ -296,6 +299,7 @@ mod tests {
             windows,
             Some(WindowId::new(3, 1)),
             false,
+            true,
         ));
 
         reactor.handle_event(SpaceChanged(vec![None], vec![]));

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// Obtaining this from AXUIElement uses a private API and is *not* guaranteed.
 /// Any functionality depending on this should have a backup plan in case it
 /// breaks in the future.
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WindowServerId(CGWindowID);
 
 impl WindowServerId {
@@ -84,14 +84,24 @@ pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInf
     windows.iter().filter_map(|win| make_info(win, layer)).collect::<Vec<_>>()
 }
 
-pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
-    let array = CFArray::from_copyable(&[id]);
-    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe {
+fn get_windows_inner(ids: &[CGWindowID]) -> CFArray<CFDictionary<CFString, CFType>> {
+    let array = CFArray::from_copyable(ids);
+    unsafe {
         CFArray::wrap_under_create_rule(CGWindowListCreateDescriptionFromArray(
             array.as_concrete_TypeRef(),
         ))
-    };
-    make_info(windows.iter().next()?, None)
+    }
+}
+
+pub fn get_windows(ids: &[CGWindowID]) -> Vec<WindowServerInfo> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    get_windows_inner(ids).iter().flat_map(|w| make_info(w, None)).collect()
+}
+
+pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
+    get_windows_inner(&[id]).iter().next().and_then(|w| make_info(w, None))
 }
 
 fn make_info(
