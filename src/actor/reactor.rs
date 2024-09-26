@@ -356,19 +356,17 @@ impl Reactor {
     }
 
     fn update_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
-        for info in &ws_info {
-            if info.layer != 0 {
+        for info in ws_info.iter().filter(|i| i.layer == 0) {
+            let Some(wid) = self.window_ids.get(&info.id) else {
                 continue;
-            }
-            if let Some(wid) = self.window_ids.get(&info.id) {
-                let Some(window) = self.windows.get_mut(wid) else {
-                    continue;
-                };
-                // Assume this update comes from after the last write. The window
-                // is on a different space (unless it's on all spaces) and
-                // there's no way to order it with respect to our writes anyway.
-                window.frame_monotonic = info.frame;
-            }
+            };
+            let Some(window) = self.windows.get_mut(wid) else {
+                continue;
+            };
+            // Assume this update comes from after the last write. The window
+            // is on a different space (unless it's on all spaces) and
+            // there's no way to order it with respect to our writes anyway.
+            window.frame_monotonic = info.frame;
         }
         self.visible_windows.clear();
         self.visible_windows.extend(ws_info.iter().map(|info| info.id));
