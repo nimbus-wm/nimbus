@@ -43,6 +43,39 @@ pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Event {
+    /// The screen layout, including resolution, changed. This is always the
+    /// first event sent on startup.
+    ///
+    /// The first vec is the frame for each screen. The main screen is always
+    /// first in the list.
+    ///
+    /// See the `SpaceChanged` event for an explanation of the other parameters.
+    ScreenParametersChanged(
+        #[serde_as(as = "Vec<CGRectDef>")] Vec<CGRect>,
+        Vec<Option<SpaceId>>,
+        Vec<WindowServerInfo>,
+    ),
+
+    /// The current space changed.
+    ///
+    /// There is one SpaceId per screen in the last ScreenParametersChanged
+    /// event. `None` in the SpaceId vec disables managing windows on that
+    /// screen until the next space change.
+    ///
+    /// A snapshot of visible windows from the window server is also taken and
+    /// sent with this message. This allows us to determine more precisely which
+    /// windows are visible on a given space, since app actor events like
+    /// WindowsDiscovered are not ordered with respect to space events.
+    SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
+
+    /// An application was launched. This event is also sent for every running
+    /// application on startup.
+    ///
+    /// Both WindowInfo (accessibility) and WindowServerInfo are collected for
+    /// any already-open windows when the launch event is sent. Since this
+    /// event isn't ordered with respect to the Space events, it is possible to
+    /// receive this event for a space we just switched off of.. FIXME. The same
+    /// is true of WindowCreated events.
     ApplicationLaunched {
         pid: pid_t,
         info: AppInfo,
@@ -56,9 +89,9 @@ pub enum Event {
     ApplicationTerminated(pid_t),
     ApplicationThreadTerminated(pid_t),
     ApplicationActivated(pid_t, Quiet),
+    ApplicationDeactivated(pid_t),
     ApplicationGloballyActivated(pid_t),
     ApplicationGloballyDeactivated(pid_t),
-    ApplicationDeactivated(pid_t),
     ApplicationMainWindowChanged(pid_t, Option<WindowId>, Quiet),
 
     WindowsDiscovered {
@@ -74,14 +107,6 @@ pub enum Event {
         TransactionId,
         Requested,
     ),
-
-    // None in the SpaceId vec disables managing windows on that screen until the next space change.
-    ScreenParametersChanged(
-        #[serde_as(as = "Vec<CGRectDef>")] Vec<CGRect>,
-        Vec<Option<SpaceId>>,
-        Vec<WindowServerInfo>,
-    ),
-    SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
 
     Command(Command),
 }
