@@ -206,7 +206,7 @@ impl Reactor {
         events_tx
     }
 
-    pub fn new(layout: LayoutManager) -> Reactor {
+    fn new(layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
             apps: HashMap::new(),
@@ -565,6 +565,7 @@ pub mod tests {
     use super::*;
     use crate::{
         actor::{app::Request, layout::LayoutManager},
+        model::Direction,
         sys::window_server::WindowServerId,
     };
 
@@ -624,6 +625,16 @@ pub mod tests {
 
         pub fn requests(&mut self) -> Vec<Request> {
             self.1.try_iter().map(|(_span, rq)| rq).collect()
+        }
+
+        pub fn simulate_until_quiet(&mut self, reactor: &mut Reactor) {
+            let mut requests = self.requests();
+            while !requests.is_empty() {
+                for event in simulate_events_for_requests(requests).0 {
+                    reactor.handle_event(event);
+                }
+                requests = self.requests();
+            }
         }
     }
 
@@ -930,6 +941,84 @@ pub mod tests {
             None,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
+    }
+
+    #[test]
+    fn it_preserves_layout_after_login_screen() {
+        // TODO: This would be better tested with a more complete simulation.
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let space = SpaceId::new(1);
+        let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![Some(space)],
+            vec![],
+        ));
+
+        reactor.handle_events(apps.make_app_with_opts(
+            1,
+            make_windows(3),
+            Some(WindowId::new(1, 1)),
+            true,
+            true,
+        ));
+        reactor.handle_event(Event::ApplicationGloballyActivated(1));
+        apps.simulate_until_quiet(&mut reactor);
+        let default = reactor.layout.calculate_layout(space, full_screen);
+
+        assert!(reactor.layout.selected_window(space).is_some());
+        reactor.handle_event(Event::Command(Command::Layout(LayoutCommand::MoveNode(
+            Direction::Up,
+        ))));
+        apps.simulate_until_quiet(&mut reactor);
+        let modified = reactor.layout.calculate_layout(space, full_screen);
+        assert_ne!(default, modified);
+
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![CGRect::ZERO],
+            vec![None],
+            vec![],
+        ));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![Some(space)],
+            (1..=3)
+                .map(|n| WindowServerInfo {
+                    pid: 1,
+                    id: WindowServerId::new(n),
+                    layer: 0,
+                    frame: CGRect::ZERO,
+                })
+                .collect(),
+        ));
+        let requests = apps.requests();
+        for request in requests {
+            match request {
+                Request::GetVisibleWindows => {
+                    // Simulate the login screen condition: No windows are
+                    // considered visible by the accessibility API, but they are
+                    // from the window server API in the event above.
+                    reactor.handle_event(Event::WindowsDiscovered {
+                        pid: 1,
+                        new: vec![],
+                        known_visible: vec![],
+                    });
+                }
+                req => {
+                    let (events, _) = simulate_events_for_requests(vec![req]);
+                    for event in events {
+                        reactor.handle_event(event);
+                    }
+                }
+            }
+        }
+        apps.simulate_until_quiet(&mut reactor);
+
+        assert_eq!(
+            reactor.layout.calculate_layout(space, full_screen),
+            modified
+        );
     }
 
     #[test]
