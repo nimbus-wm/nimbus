@@ -83,6 +83,9 @@ enum WindowServer {
     List {
         #[arg(short, long)]
         all: bool,
+        /// Whether to show the raw window dictionaries. Implies --all.
+        #[arg(short, long)]
+        raw: bool,
     },
     #[command()]
     Get { id: u32 },
@@ -134,7 +137,10 @@ async fn main() -> anyhow::Result<()> {
             println!("Current space: {:?}", screen::diagnostic::cur_space());
             println!("Visible spaces: {:?}", screen::diagnostic::visible_spaces());
             println!("All spaces: {:?}", screen::diagnostic::all_spaces());
-            println!("{:?}", screen::diagnostic::managed_display_spaces());
+            println!(
+                "Managed display spaces: {:?}",
+                screen::diagnostic::managed_display_spaces()
+            );
 
             dbg!(screen::diagnostic::managed_displays());
             let screens = NSScreen::screens(MainThreadMarker::new().unwrap());
@@ -186,10 +192,16 @@ async fn main() -> anyhow::Result<()> {
             }
             dbg!(main_window.main()?);
         }
-        Command::WindowServer(WindowServer::List { all }) => {
-            let layer = if all { None } else { Some(0) };
-            for window in window_server::get_visible_windows_with_layer(layer) {
-                println!("{window:?}");
+        Command::WindowServer(WindowServer::List { all, raw }) => {
+            if raw {
+                for window in window_server::get_visible_windows_raw().iter() {
+                    println!("{window:?}");
+                }
+            } else {
+                let layer = if all { None } else { Some(0) };
+                for window in window_server::get_visible_windows_with_layer(layer) {
+                    println!("{window:?}");
+                }
             }
         }
         Command::WindowServer(WindowServer::Get { id }) => match window_server::get_window(id) {

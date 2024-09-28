@@ -71,37 +71,25 @@ pub struct WindowServerInfo {
 /// Returns a list of windows visible on the screen, in order starting with the
 /// frontmost.
 pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInfo> {
+    get_visible_windows_raw()
+        .iter()
+        .filter_map(|win| make_info(win, layer))
+        .collect::<Vec<_>>()
+}
+
+/// Returns a list of windows visible on the screen, in order starting with the
+/// frontmost.
+pub fn get_visible_windows_raw() -> CFArray<CFDictionary<CFString, CFType>> {
     // Note that the ordering is not documented. But
     // NSWindow::windowNumbersWithOptions *is* documented to return the windows
     // in order, so we could always combine their information if the behavior
     // changed.
-    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe {
+    unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
             kCGWindowListOptionOnScreenOnly | kCGWindowListOptionExcludeDesktopElements,
             kCGNullWindowID,
         ))
-    };
-    windows.iter().filter_map(|win| make_info(win, layer)).collect::<Vec<_>>()
-}
-
-fn get_windows_inner(ids: &[CGWindowID]) -> CFArray<CFDictionary<CFString, CFType>> {
-    let array = CFArray::from_copyable(ids);
-    unsafe {
-        CFArray::wrap_under_create_rule(CGWindowListCreateDescriptionFromArray(
-            array.as_concrete_TypeRef(),
-        ))
     }
-}
-
-pub fn get_windows(ids: &[CGWindowID]) -> Vec<WindowServerInfo> {
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    get_windows_inner(ids).iter().flat_map(|w| make_info(w, None)).collect()
-}
-
-pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
-    get_windows_inner(&[id]).iter().next().and_then(|w| make_info(w, None))
 }
 
 fn make_info(
@@ -122,6 +110,26 @@ fn make_info(
         layer,
         frame: frame.to_icrate(),
     })
+}
+
+pub fn get_windows(ids: &[CGWindowID]) -> Vec<WindowServerInfo> {
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    get_windows_inner(ids).iter().flat_map(|w| make_info(w, None)).collect()
+}
+
+pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
+    get_windows_inner(&[id]).iter().next().and_then(|w| make_info(w, None))
+}
+
+fn get_windows_inner(ids: &[CGWindowID]) -> CFArray<CFDictionary<CFString, CFType>> {
+    let array = CFArray::from_copyable(ids);
+    unsafe {
+        CFArray::wrap_under_create_rule(CGWindowListCreateDescriptionFromArray(
+            array.as_concrete_TypeRef(),
+        ))
+    }
 }
 
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i64> {
