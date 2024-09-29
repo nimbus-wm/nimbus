@@ -298,11 +298,11 @@ mod tests {
         let mut tree = LayoutTree::new();
         let layout = tree.create_layout();
         let root = tree.root(layout);
-        let _a1 = tree.add_window(layout, root, WindowId::new(1, 1));
+        let _a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
         let a2 = tree.add_container(root, LayoutKind::Vertical);
-        let _b1 = tree.add_window(layout, a2, WindowId::new(1, 2));
-        let _b2 = tree.add_window(layout, a2, WindowId::new(1, 3));
-        let _a3 = tree.add_window(layout, root, WindowId::new(1, 4));
+        let _b1 = tree.add_window_under(layout, a2, WindowId::new(1, 2));
+        let _b2 = tree.add_window_under(layout, a2, WindowId::new(1, 3));
+        let _a3 = tree.add_window_under(layout, root, WindowId::new(1, 4));
 
         let screen = rect(0, 0, 3000, 1000);
         let mut frames = tree.calculate_layout(layout, screen);

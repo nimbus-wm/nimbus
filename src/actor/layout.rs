@@ -213,7 +213,7 @@ impl LayoutManager {
             LayoutEvent::WindowAdded(space, wid) => {
                 self.debug_tree(space);
                 let layout = self.layout(space);
-                self.tree.add_window(layout, self.tree.root(layout), wid);
+                self.tree.add_window_after(layout, self.tree.selection(layout), wid);
             }
             LayoutEvent::WindowRemoved(wid) => {
                 self.tree.remove_window(wid);
@@ -274,11 +274,7 @@ impl LayoutManager {
                 if let Some(space) = space {
                     let layout = self.layout(space);
                     let selection = self.tree.selection(layout);
-                    let node = self.tree.add_window(
-                        layout,
-                        selection.parent(self.tree.map()).unwrap_or(selection),
-                        wid,
-                    );
+                    let node = self.tree.add_window_after(layout, selection, wid);
                     self.tree.select(node);
                     self.active_floating_windows
                         .entry(space)
@@ -472,6 +468,7 @@ impl LayoutManager {
 #[cfg(test)]
 mod tests {
     use icrate::Foundation::CGPoint;
+    use pretty_assertions::assert_eq;
     use test_log::test;
 
     use super::*;
@@ -781,5 +778,152 @@ mod tests {
         if let Some(focus) = response.focus_window {
             _ = mgr.handle_event(WindowFocused(Some(space), focus));
         }
+    }
+
+    #[test]
+    fn it_adds_new_windows_behind_selection() {
+        use LayoutCommand::*;
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+        let windows = make_windows(pid, 5);
+
+        let screen1 = rect(0, 0, 300, 30);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 5)));
+        _ = mgr.handle_command(Some(space), ToggleWindowFloating);
+        _ = mgr.handle_command(Some(space), ToggleFocusFloating);
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_command(Some(space), Split(Orientation::Vertical));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 3)));
+        _ = mgr.handle_command(Some(space), MoveNode(Direction::Left));
+
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 15)),
+                (WindowId::new(pid, 3), rect(100, 15, 100, 15)),
+                (WindowId::new(pid, 4), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        // Add a new window when the left window is selected.
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 75, 30)),
+                (WindowId::new(pid, 2), rect(150, 0, 75, 15)),
+                (WindowId::new(pid, 3), rect(150, 15, 75, 15)),
+                (WindowId::new(pid, 4), rect(225, 0, 75, 30)),
+                (WindowId::new(pid, 6), rect(75, 0, 75, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
+
+        // Add a new window when the top middle is selected.
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 10)),
+                (WindowId::new(pid, 3), rect(100, 20, 100, 10)),
+                (WindowId::new(pid, 4), rect(200, 0, 100, 30)),
+                (WindowId::new(pid, 6), rect(100, 10, 100, 10)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
+
+        // Same thing, but unfloat an existing window instead of making a new one.
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 5)));
+        _ = mgr.handle_command(Some(space), ToggleWindowFloating);
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 10)),
+                (WindowId::new(pid, 3), rect(100, 20, 100, 10)),
+                (WindowId::new(pid, 4), rect(200, 0, 100, 30)),
+                (WindowId::new(pid, 5), rect(100, 10, 100, 10)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+        _ = mgr.handle_command(Some(space), ToggleWindowFloating);
+
+        // Add a new window when the bottom middle is selected.
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 3)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 10)),
+                (WindowId::new(pid, 3), rect(100, 10, 100, 10)),
+                (WindowId::new(pid, 4), rect(200, 0, 100, 30)),
+                (WindowId::new(pid, 6), rect(100, 20, 100, 10)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
+
+        // Add a new window when the right window is selected.
+        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 4)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 75, 30)),
+                (WindowId::new(pid, 2), rect(75, 0, 75, 15)),
+                (WindowId::new(pid, 3), rect(75, 15, 75, 15)),
+                (WindowId::new(pid, 4), rect(150, 0, 75, 30)),
+                (WindowId::new(pid, 6), rect(225, 0, 75, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
+    }
+
+    #[test]
+    fn add_remove_add() {
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+
+        let screen1 = rect(0, 0, 300, 30);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, vec![]));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 3)));
+
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 30)),
+                (WindowId::new(pid, 3), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 3)));
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 3)));
+
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 30)),
+                (WindowId::new(pid, 3), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
     }
 }
