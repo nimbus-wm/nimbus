@@ -1,5 +1,6 @@
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
+use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
 use crate::actor::{
@@ -32,5 +33,21 @@ impl HotkeyManager {
                 events_tx.send((span, WmEvent::Command(cmd.clone()))).unwrap()
             })
             .unwrap();
+    }
+}
+
+/// The state of the left mouse button.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum MouseState {
+    Down,
+    Up,
+}
+
+pub fn get_mouse_state() -> MouseState {
+    let left_button = unsafe { icrate::AppKit::NSEvent::pressedMouseButtons() } & 0x1 != 0;
+    if left_button {
+        MouseState::Down
+    } else {
+        MouseState::Up
     }
 }

@@ -14,7 +14,7 @@ type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 use crate::{
     actor::{self, app::AppInfo, reactor},
     collections::HashSet,
-    sys::{hotkey::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
+    sys::{event::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
 };
 
 #[derive(Debug)]
@@ -173,7 +173,7 @@ impl WmController {
         use crate::{
             metrics::MetricsCommand::*,
             model::{Direction::*, Orientation},
-            sys::hotkey::{KeyCode, Modifiers},
+            sys::event::{KeyCode, Modifiers},
         };
         const ALT: Modifiers = Modifiers::ALT;
         const SHIFT: Modifiers = Modifiers::SHIFT;

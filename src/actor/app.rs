@@ -41,6 +41,7 @@ use crate::{
     collections::HashMap,
     sys::{
         app::running_apps,
+        event,
         geometry::{ToCGType, ToICrate},
         observer::Observer,
         run_loop::WakeupHandle,
@@ -332,6 +333,9 @@ impl State {
                     frame.to_icrate(),
                     txid,
                     Requested(true),
+                    // We don't need to check the mouse state since we know this
+                    // change was requested by the reactor.
+                    None,
                 ));
             }
             &mut Request::SetWindowFrame(wid, frame, txid) => {
@@ -349,6 +353,7 @@ impl State {
                     frame.to_icrate(),
                     txid,
                     Requested(true),
+                    None,
                 ));
             }
             &mut Request::BeginWindowAnimation(wid) => {
@@ -364,6 +369,7 @@ impl State {
                     frame.to_icrate(),
                     last_seen_txid,
                     Requested(true),
+                    None,
                 ));
             }
             &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
@@ -398,7 +404,12 @@ impl State {
                     return;
                 };
                 let window_server_info = window_server::get_window(wid.idx.into());
-                self.send_event(Event::WindowCreated(wid, window, window_server_info));
+                self.send_event(Event::WindowCreated(
+                    wid,
+                    window,
+                    window_server_info,
+                    event::get_mouse_state(),
+                ));
             }
             kAXUIElementDestroyedNotification => {
                 let Some((&wid, _)) = self.windows.iter().find(|(_, w)| w.elem == elem) else {
@@ -425,6 +436,7 @@ impl State {
                     frame.to_icrate(),
                     last_seen,
                     Requested(false),
+                    Some(event::get_mouse_state()),
                 ));
             }
             kAXWindowMiniaturizedNotification => {}
@@ -538,7 +550,12 @@ impl State {
                     return None;
                 };
                 let window_server_info = window_server::get_window(wid.idx.into());
-                self.send_event(Event::WindowCreated(wid, info, window_server_info));
+                self.send_event(Event::WindowCreated(
+                    wid,
+                    info,
+                    window_server_info,
+                    event::get_mouse_state(),
+                ));
                 wid
             }
         };

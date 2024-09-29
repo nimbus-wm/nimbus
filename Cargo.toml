@@ -41,6 +41,7 @@ icrate = { version = "0.1.0", features = [
     "AppKit_NSScreen",
     "Foundation_NSNumber",
     "AppKit_NSWindow",
+    "AppKit_NSEvent",
 ] }
 livesplit-hotkey = "0.7.0"
 rand = "0.8.5"

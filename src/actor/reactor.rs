@@ -27,6 +27,7 @@ use crate::{
     collections::{HashMap, HashSet},
     metrics::{self, MetricsCommand},
     sys::{
+        event::MouseState,
         geometry::{CGRectDef, Round, SameAs},
         screen::SpaceId,
         window_server::{WindowServerId, WindowServerInfo},
@@ -94,14 +95,25 @@ pub enum Event {
         new: Vec<(WindowId, WindowInfo)>,
         known_visible: Vec<WindowId>,
     },
-    WindowCreated(WindowId, WindowInfo, Option<WindowServerInfo>),
+    WindowCreated(WindowId, WindowInfo, Option<WindowServerInfo>, MouseState),
     WindowDestroyed(WindowId),
     WindowFrameChanged(
         WindowId,
         #[serde(with = "CGRectDef")] CGRect,
         TransactionId,
         Requested,
+        Option<MouseState>,
     ),
+
+    /// Left mouse button was released.
+    ///
+    /// Layout changes are suppressed while the button is down so that they
+    /// don't interfere with drags. This event is used to update the layout in
+    /// case updates were supressed while the button was down.
+    ///
+    /// FIXME: This can be interleaved incorrectly with the MouseState in app
+    /// actor events.
+    MouseUp,
 
     Command(Command),
 }
@@ -128,6 +140,7 @@ pub struct Reactor {
     main_screen: Option<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
+    in_drag: bool,
 }
 
 #[derive(Debug)]
@@ -213,6 +226,7 @@ impl Reactor {
             main_screen: None,
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
+            in_drag: false,
         }
     }
 
@@ -255,7 +269,7 @@ impl Reactor {
             Event::WindowsDiscovered { pid, new, known_visible } => {
                 self.on_windows_discovered(pid, new, known_visible);
             }
-            Event::WindowCreated(wid, window, ws_info) => {
+            Event::WindowCreated(wid, window, ws_info, mouse_state) => {
                 // TODO: It's possible for a window to be on multiple spaces
                 // or move spaces. (Add a test)
                 // FIXME: We assume all windows are on the main screen.
@@ -272,13 +286,18 @@ impl Reactor {
                         self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
                     }
                 }
+                if mouse_state == MouseState::Down {
+                    self.in_drag = true;
+                    // Suppress updates while left button is pressed in case
+                    // a drag is in progress.
+                }
             }
             Event::WindowDestroyed(wid) => {
                 self.windows.remove(&wid).unwrap();
                 //animation_focus_wid = self.window_order.last().cloned();
                 self.send_layout_event(LayoutEvent::WindowRemoved(wid));
             }
-            Event::WindowFrameChanged(wid, new_frame, last_seen, requested) => {
+            Event::WindowFrameChanged(wid, new_frame, last_seen, requested, mouse_state) => {
                 let window = self.windows.get_mut(&wid).unwrap();
                 if last_seen != window.last_sent_txid {
                     // Ignore events that happened before the last time we
@@ -300,14 +319,18 @@ impl Reactor {
                 let Some(screen) = self.main_screen else { return };
                 let Some(space) = screen.space else { return };
                 // This event is ignored if the window is not in the layout.
-                self.send_layout_event(LayoutEvent::WindowResized {
-                    space,
-                    screen: screen.frame,
-                    wid,
-                    old_frame,
-                    new_frame,
-                });
-                is_resize = true;
+                if old_frame.size != new_frame.size {
+                    self.send_layout_event(LayoutEvent::WindowResized {
+                        space,
+                        screen: screen.frame,
+                        wid,
+                        old_frame,
+                        new_frame,
+                    });
+                    is_resize = true;
+                } else if mouse_state == Some(MouseState::Down) {
+                    self.in_drag = true;
+                }
             }
             Event::ScreenParametersChanged(frames, spaces, ws_info) => {
                 info!("screen parameters changed");
@@ -352,6 +375,10 @@ impl Reactor {
                     _ = app.handle.send(Request::GetVisibleWindows);
                 }
             }
+            Event::MouseUp => {
+                self.in_drag = false;
+                // Now re-check the layout.
+            }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
                 let response = self.layout.handle_command(self.main_screen_space(), cmd);
@@ -380,7 +407,9 @@ impl Reactor {
                 raised_window,
             ));
         }
-        self.update_layout(animation_focus_wid, is_resize);
+        if !self.in_drag {
+            self.update_layout(animation_focus_wid, is_resize);
+        }
     }
 
     fn update_complete_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {
@@ -673,7 +702,13 @@ pub mod tests {
                     let old_frame = window.frame;
                     window.frame = frame;
                     if !window.animating && !old_frame.same_as(frame) {
-                        events.push(Event::WindowFrameChanged(wid, frame, txid, Requested(true)));
+                        events.push(Event::WindowFrameChanged(
+                            wid,
+                            frame,
+                            txid,
+                            Requested(true),
+                            None,
+                        ));
                     }
                 }
                 Request::SetWindowPos(wid, pos, txid) => {
@@ -687,6 +722,7 @@ pub mod tests {
                             window.frame,
                             txid,
                             Requested(true),
+                            None,
                         ));
                     }
                 }
@@ -701,6 +737,7 @@ pub mod tests {
                         window.frame,
                         window.last_seen_txid,
                         Requested(true),
+                        None,
                     ));
                 }
                 Request::Raise(_, _, _, _) => todo!(),
@@ -803,6 +840,7 @@ pub mod tests {
             ),
             state_1[&wid].last_seen_txid,
             Requested(false),
+            None,
         ));
 
         let requests = apps.requests();
@@ -844,6 +882,7 @@ pub mod tests {
             frame,
             window.last_seen_txid,
             Requested(false),
+            None,
         ));
 
         // Expect the next window to be resized.
@@ -900,6 +939,7 @@ pub mod tests {
             WindowId::new(1, 2),
             make_window(2),
             None,
+            MouseState::Up,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
     }
@@ -934,6 +974,7 @@ pub mod tests {
             WindowId::new(1, 2),
             make_window(2),
             None,
+            MouseState::Up,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
     }

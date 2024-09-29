@@ -4,6 +4,7 @@ use clap::Parser;
 use nimbus_wm::{
     actor::{
         layout::LayoutManager,
+        mouse::Mouse,
         notification_center::NotificationCenter,
         reactor::{self, Reactor},
         wm_controller::{self, WmController},
@@ -74,13 +75,15 @@ fn main() {
         default_disable: opt.default_disable,
         restore_file: restore_file(),
     };
-    let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx);
+    let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx.clone());
     let notification_center = NotificationCenter::new(wm_controller_sender);
+    let mouse = Mouse::new(events_tx);
 
     Executor::run(async move {
         join!(
             wm_controller.run(),
-            notification_center.watch_for_notifications()
+            notification_center.watch_for_notifications(),
+            mouse.run(),
         );
     });
 }

@@ -77,11 +77,12 @@ impl MainWindowTracker {
             }
             Event::ApplicationTerminated(_)
             | Event::WindowsDiscovered { .. }
-            | Event::WindowCreated(_, _, _)
+            | Event::WindowCreated(_, _, _, _)
             | Event::WindowDestroyed(_)
-            | Event::WindowFrameChanged(_, _, _, _)
+            | Event::WindowFrameChanged(_, _, _, _, _)
             | Event::ScreenParametersChanged(_, _, _)
             | Event::SpaceChanged(_, _)
+            | Event::MouseUp
             | Event::Command(_) => return None,
         };
         if Some(event_pid) == self.global_frontmost && quiet_edge == Quiet::No {

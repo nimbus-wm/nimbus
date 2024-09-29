@@ -50,6 +50,8 @@ enum Command {
     WindowServer(WindowServer),
     #[command()]
     Replay(Replay),
+    #[command()]
+    Mouse,
 }
 
 #[derive(Subcommand, Clone)]
@@ -216,6 +218,31 @@ async fn main() -> anyhow::Result<()> {
                     info!(?request);
                 }
             })?;
+        }
+        Command::Mouse => {
+            use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+            use core_graphics::event::{
+                CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+            };
+            let current = CFRunLoop::get_current();
+            match CGEventTap::new(
+                CGEventTapLocation::HID,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::Default,
+                vec![CGEventType::LeftMouseUp],
+                |_a, _b, d| {
+                    println!("{:?}", d.location());
+                    None
+                },
+            ) {
+                Ok(tap) => unsafe {
+                    let loop_source = tap.mach_port().create_runloop_source(0).unwrap();
+                    current.add_source(&loop_source, kCFRunLoopCommonModes);
+                    tap.enable();
+                    CFRunLoop::run_current();
+                },
+                Err(_) => assert!(false),
+            }
         }
     }
     Ok(())
