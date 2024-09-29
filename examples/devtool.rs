@@ -10,8 +10,8 @@ use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{
-        kCGNullWindowID, kCGWindowListOptionExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
+        kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        CGWindowID, CGWindowListCopyWindowInfo,
     },
 };
 use icrate::{
@@ -224,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
 async fn get_windows_with_cg(opt: &Opt, print: bool) {
     let windows: CFArray<CFDictionaryRef> = unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListOptionExcludeDesktopElements,
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
             kCGNullWindowID,
         ))
     };

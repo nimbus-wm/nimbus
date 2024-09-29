@@ -12,8 +12,8 @@ use core_graphics::{
         kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
     },
     window::{
-        kCGWindowBounds, kCGWindowLayer, kCGWindowListOptionExcludeDesktopElements,
-        kCGWindowNumber, kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
+        kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowNumber,
+        kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
     },
 };
 use icrate::Foundation::CGRect;
@@ -86,7 +86,7 @@ pub fn get_visible_windows_raw() -> CFArray<CFDictionary<CFString, CFType>> {
     // changed.
     unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListOptionExcludeDesktopElements,
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
             kCGNullWindowID,
         ))
     }

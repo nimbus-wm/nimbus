@@ -329,7 +329,7 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "core-foundation"
 version = "0.9.4"
-source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#c1f57977e3f803f508af7a7adc3791a32a4d1def"
+source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#8d8993bcaae0b734e8cc81fa81e9599edf2ea767"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -338,7 +338,7 @@ dependencies = [
 [[package]]
 name = "core-foundation-sys"
 version = "0.8.6"
-source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#c1f57977e3f803f508af7a7adc3791a32a4d1def"
+source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#8d8993bcaae0b734e8cc81fa81e9599edf2ea767"
 
 [[package]]
 name = "core-graphics"
@@ -355,9 +355,8 @@ dependencies = [
 
 [[package]]
 name = "core-graphics"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "970a29baf4110c26fedbc7f82107d42c23f7e88e404c4577ed73fe99ff85a212"
+version = "0.23.2"
+source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#8d8993bcaae0b734e8cc81fa81e9599edf2ea767"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation",
@@ -369,8 +368,7 @@ dependencies = [
 [[package]]
 name = "core-graphics-types"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45390e6114f68f718cc7a830514a96f903cccd70d02a8f6d9f643ac4ba45afaf"
+source = "git+https://github.com/tmandry/core-foundation-rs?branch=master#8d8993bcaae0b734e8cc81fa81e9599edf2ea767"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation",
@@ -873,7 +871,7 @@ dependencies = [
  "bitflags 2.4.2",
  "clap",
  "core-foundation",
- "core-graphics 0.23.1",
+ "core-graphics 0.23.2",
  "core-graphics-types",
  "dirs",
  "icrate",
