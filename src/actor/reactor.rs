@@ -15,8 +15,10 @@ use std::{
     sync, thread,
 };
 
+use animation::Animation;
 use icrate::Foundation::CGRect;
 use main_window::MainWindowTracker;
+pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tokio::sync::oneshot;
@@ -34,9 +36,6 @@ use crate::{
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
-use animation::Animation;
-
-pub use replay::{replay, Record};
 
 pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
 

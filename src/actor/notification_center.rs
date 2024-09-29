@@ -14,6 +14,7 @@ use icrate::{
 };
 use tracing::{info_span, trace, warn, Span};
 
+use super::wm_controller::{self, WmEvent};
 use crate::{
     actor::{app::AppInfo, reactor::Event},
     sys::{
@@ -22,8 +23,6 @@ use crate::{
         window_server::{self, WindowServerInfo},
     },
 };
-
-use super::wm_controller::{self, WmEvent};
 
 #[repr(C)]
 struct Instance {

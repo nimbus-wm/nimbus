@@ -1,4 +1,5 @@
 use accessibility::{AXUIElement, AXUIElementAttributes};
+pub use accessibility_sys::pid_t;
 use accessibility_sys::{kAXStandardWindowSubrole, kAXWindowRole};
 use icrate::{
     objc2::{msg_send, rc::Id},
@@ -7,10 +8,10 @@ use icrate::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::geometry::{CGRectDef, ToICrate};
-use super::window_server::WindowServerId;
-
-pub use accessibility_sys::pid_t;
+use super::{
+    geometry::{CGRectDef, ToICrate},
+    window_server::WindowServerId,
+};
 
 pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppInfo)> {
     unsafe { NSWorkspace::sharedWorkspace().runningApplications() }

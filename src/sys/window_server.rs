@@ -1,5 +1,3 @@
-use super::geometry::{CGRectDef, ToICrate};
-
 use accessibility::AXUIElement;
 use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
 use core_foundation::{
@@ -20,6 +18,8 @@ use core_graphics::{
 };
 use icrate::Foundation::CGRect;
 use serde::{Deserialize, Serialize};
+
+use super::geometry::{CGRectDef, ToICrate};
 
 /// The window ID used by the window server.
 ///

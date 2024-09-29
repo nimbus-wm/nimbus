@@ -12,12 +12,11 @@ use std::{
 
 use tracing::Span;
 
+use super::{Event, Reactor};
 use crate::actor::{
     app::{AppThreadHandle, Request},
     layout::LayoutManager,
 };
-
-use super::{Event, Reactor};
 
 thread_local! {
     static DESERIALIZE_THREAD_HANDLE: RefCell<Option<AppThreadHandle>> = RefCell::new(None);

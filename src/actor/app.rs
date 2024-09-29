@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
+pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 use crate::{
     actor::reactor::{Event, Requested, TransactionId},
     sys::{
@@ -46,8 +47,6 @@ use crate::{
         window_server::{self, WindowServerId},
     },
 };
-
-pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 
 /// An identifier representing a window.
 ///

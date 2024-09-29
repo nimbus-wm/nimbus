@@ -79,9 +79,9 @@ impl WmController {
     #[instrument(skip(self))]
     pub fn handle_event(&mut self, event: WmEvent) {
         debug!("handle_event");
-        use self::WmCommand::*;
-        use self::WmEvent::*;
         use reactor::Event;
+
+        use self::{WmCommand::*, WmEvent::*};
         match event {
             AppEventsRegistered => {
                 actor::app::spawn_initial_app_threads(self.events_tx.clone());
@@ -166,14 +166,14 @@ impl WmController {
 
     fn register_hotkeys(&mut self) {
         debug!("register_hotkeys");
-        use crate::metrics::MetricsCommand::*;
-        use crate::model::Direction::*;
-        use crate::model::Orientation;
-        use crate::sys::hotkey::{KeyCode, Modifiers};
-        use actor::layout::LayoutCommand::*;
-        use actor::reactor::Command;
-
+        use actor::{layout::LayoutCommand::*, reactor::Command};
         use KeyCode::*;
+
+        use crate::{
+            metrics::MetricsCommand::*,
+            model::{Direction::*, Orientation},
+            sys::hotkey::{KeyCode, Modifiers},
+        };
         const ALT: Modifiers = Modifiers::ALT;
         const SHIFT: Modifiers = Modifiers::SHIFT;
 

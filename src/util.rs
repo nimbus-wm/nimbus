@@ -1,8 +1,9 @@
-use crate::actor::app::WindowId;
-use crate::sys::app::pid_t;
-use std::borrow::Borrow;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::{
+    borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
+};
+
+use crate::{actor::app::WindowId, sys::app::pid_t};
 
 pub trait BTreeExt {
     fn remove_all_for_pid(&mut self, pid: pid_t) -> Self;

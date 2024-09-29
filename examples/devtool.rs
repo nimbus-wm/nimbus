@@ -20,9 +20,11 @@ use icrate::{
 };
 use nimbus_wm::{
     actor::reactor,
-    sys::app,
-    sys::screen::{self, ScreenCache},
-    sys::window_server::{self, WindowServerId},
+    sys::{
+        app,
+        screen::{self, ScreenCache},
+        window_server::{self, WindowServerId},
+    },
 };
 use tokio::sync::mpsc;
 use tracing::info;

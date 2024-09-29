@@ -1,8 +1,7 @@
-use crate::actor::app::{pid_t, Quiet, WindowId};
-
 use std::collections::HashMap;
 
 use super::Event;
+use crate::actor::app::{pid_t, Quiet, WindowId};
 
 /// Keeps track of the main window.
 #[derive(Default)]
@@ -124,10 +123,13 @@ impl MainWindowTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{make_windows, Apps};
-    use super::super::{Event, LayoutManager, Quiet, Reactor, SpaceId, WindowId};
     use icrate::Foundation::CGRect;
     use test_log::test;
+
+    use super::super::{
+        tests::{make_windows, Apps},
+        Event, LayoutManager, Quiet, Reactor, SpaceId, WindowId,
+    };
 
     #[test]
     fn it_tracks_frontmost_app_and_main_window_correctly() {
