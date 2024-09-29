@@ -26,6 +26,8 @@ use crate::{
     },
 };
 
+use super::mouse;
+
 #[derive(Debug)]
 pub enum WmEvent {
     AppEventsRegistered,
@@ -66,6 +68,7 @@ pub struct Config {
 pub struct WmController {
     config: Config,
     events_tx: reactor::Sender,
+    mouse_tx: mouse::Sender,
     receiver: Receiver,
     sender: WeakSender,
     starting_space: Option<SpaceId>,
@@ -78,11 +81,16 @@ pub struct WmController {
 }
 
 impl WmController {
-    pub fn new(config: Config, events_tx: reactor::Sender) -> (Self, Sender) {
+    pub fn new(
+        config: Config,
+        events_tx: reactor::Sender,
+        mouse_tx: mouse::Sender,
+    ) -> (Self, Sender) {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let this = Self {
             config,
             events_tx,
+            mouse_tx,
             receiver,
             sender: sender.downgrade(),
             starting_space: None,
@@ -128,6 +136,10 @@ impl WmController {
                 self.send_event(Event::SpaceChanged(spaces, windows));
             }
             ReactorEvent(event) => {
+                if let Event::ApplicationGloballyActivated(_) = &event {
+                    // Make sure the mouse cursor stays hidden after app switch.
+                    _ = self.mouse_tx.send((Span::current(), mouse::Request::EnforceHidden));
+                }
                 self.send_event(event);
             }
             Command(Wm(ToggleSpaceActivated)) => {

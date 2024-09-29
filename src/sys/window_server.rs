@@ -1,8 +1,11 @@
+use std::ffi::c_int;
+
 use accessibility::AXUIElement;
 use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
 use core_foundation::{
     array::CFArray,
-    base::{CFType, ItemRef, TCFType},
+    base::{CFType, CFTypeRef, ItemRef, TCFType},
+    boolean::CFBoolean,
     dictionary::CFDictionary,
     number::CFNumber,
     string::{CFString, CFStringRef},
@@ -138,6 +141,12 @@ fn get_num(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i6
     Some(item.to_i64()?)
 }
 
+extern "C" {
+    fn _AXUIElementGetWindow(elem: AXUIElementRef, wid: *mut CGWindowID) -> AXError;
+
+    fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
+}
+
 /// Sets the given window as the key window of the window server.
 pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
     // See https://github.com/Hammerspoon/hammerspoon/issues/370#issuecomment-545545468.
@@ -176,12 +185,6 @@ struct ProcessSerialNumber {
     low: u32,
 }
 
-extern "C" {
-    fn _AXUIElementGetWindow(elem: AXUIElementRef, wid: *mut CGWindowID) -> AXError;
-
-    fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
-}
-
 #[link(name = "SkyLight", kind = "framework")]
 extern "C" {
     fn _SLPSSetFrontProcessWithOptions(
@@ -190,4 +193,39 @@ extern "C" {
         mode: u32,
     ) -> CGError;
     fn SLPSPostEventRecordTo(psn: *const ProcessSerialNumber, bytes: *const u8) -> CGError;
+}
+
+/// This must be called to allow hiding the mouse from a background application.
+///
+/// It relies on a private API, so not guaranteed to continue working, but it is
+/// discussed by Apple engineers on developer forums.
+pub fn allow_hide_mouse() -> Result<(), CGError> {
+    let cid = unsafe { CGSMainConnectionID() };
+    let property = CFString::from_static_string("SetsCursorInBackground");
+    let err = unsafe {
+        CGSSetConnectionProperty(
+            cid,
+            cid,
+            property.as_concrete_TypeRef(),
+            CFBoolean::true_value().as_CFTypeRef(),
+        )
+    };
+    if err == 0 {
+        Ok(())
+    } else {
+        Err(err)
+    }
+}
+
+type CGSConnectionID = c_int;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn CGSMainConnectionID() -> CGSConnectionID;
+    fn CGSSetConnectionProperty(
+        cid: CGSConnectionID,
+        target_cid: CGSConnectionID,
+        key: CFStringRef,
+        value: CFTypeRef,
+    ) -> CGError;
 }

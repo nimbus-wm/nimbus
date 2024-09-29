@@ -23,6 +23,7 @@ use nimbus_wm::{
     sys::{
         self,
         app::WindowInfo,
+        event,
         screen::{self, ScreenCache},
         window_server::{self, WindowServerId},
     },
@@ -51,8 +52,8 @@ enum Command {
     WindowServer(WindowServer),
     #[command()]
     Replay(Replay),
-    #[command()]
-    Mouse,
+    #[command(subcommand)]
+    Mouse(Mouse),
 }
 
 #[derive(Subcommand, Clone)]
@@ -99,6 +100,14 @@ enum WindowServer {
 #[derive(Parser, Clone)]
 struct Replay {
     path: PathBuf,
+}
+
+#[derive(Subcommand, Clone)]
+enum Mouse {
+    #[command()]
+    Clicks,
+    #[command()]
+    Hide,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -220,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .unwrap()?;
         }
-        Command::Mouse => {
+        Command::Mouse(Mouse::Clicks) => {
             use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
             use core_graphics::event::{
                 CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
@@ -244,6 +253,17 @@ async fn main() -> anyhow::Result<()> {
                 },
                 Err(_) => assert!(false),
             }
+        }
+        Command::Mouse(Mouse::Hide) => {
+            window_server::allow_hide_mouse().unwrap();
+            event::hide_mouse().unwrap();
+
+            println!("Press enter to show");
+            std::io::stdin().read_line(&mut String::new())?;
+            event::show_mouse().unwrap();
+
+            println!("Press enter to exit");
+            std::io::stdin().read_line(&mut String::new())?;
         }
     }
     Ok(())

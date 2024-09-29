@@ -80,17 +80,18 @@ fn main() {
         config.clone(),
         layout,
         reactor::Record::new(opt.record.as_deref()),
-        mouse_tx,
+        mouse_tx.clone(),
     );
 
-    let config = wm_controller::Config {
+    let wm_config = wm_controller::Config {
         one_space: opt.one,
         restore_file: restore_file(),
-        config,
+        config: config.clone(),
     };
-    let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx.clone());
+    let (wm_controller, wm_controller_sender) =
+        WmController::new(wm_config, events_tx.clone(), mouse_tx.clone());
     let notification_center = NotificationCenter::new(wm_controller_sender);
-    let mouse = Mouse::new(events_tx, mouse_rx);
+    let mouse = Mouse::new(config.clone(), events_tx, mouse_rx);
 
     Executor::run(async move {
         join!(

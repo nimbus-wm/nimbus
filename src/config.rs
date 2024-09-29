@@ -44,13 +44,16 @@ pub struct Settings {
     pub animate: bool,
     #[serde(default = "yes")]
     pub default_disable: bool,
-    #[serde(default = "no")]
+    #[serde(default = "yes")]
     pub mouse_follows_focus: bool,
+    #[serde(default = "yes")]
+    pub mouse_hides_on_focus: bool,
 }
 
 fn yes() -> bool {
     true
 }
+#[allow(dead_code)]
 fn no() -> bool {
     false
 }

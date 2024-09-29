@@ -14,6 +14,10 @@ default_disable = true
 # Move the mouse to the middle of the window each time the focus changes.
 mouse_follows_focus = true
 
+# Hide the mouse each time a new window is focused. Ignored if
+# mouse_follows_focus is false.
+mouse_hides_on_focus = true
+
 [keys]
 # Modifier and key names must be capitalized.
 
