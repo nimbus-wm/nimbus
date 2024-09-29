@@ -2,9 +2,9 @@ use std::future;
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+    CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
-use tracing::Span;
+use tracing::{debug, error, Span};
 
 use super::reactor::{Event, Sender};
 
@@ -24,9 +24,12 @@ impl Mouse {
             CGEventTapLocation::Session,
             CGEventTapPlacement::HeadInsertEventTap,
             CGEventTapOptions::ListenOnly,
-            vec![CGEventType::LeftMouseUp],
-            move |_, _, _| {
-                _ = tx.send((Span::current().clone(), Event::MouseUp));
+            vec![
+                CGEventType::LeftMouseUp,
+                //CGEventType::MouseMoved
+            ],
+            move |_, event_type, event| {
+                Self::on_event(event_type, event, &tx);
                 None
             },
         )
@@ -39,5 +42,18 @@ impl Mouse {
         // All the work is done in callbacks dispatched by the run loop, which
         // we assume is running once this function is awaited.
         future::pending().await
+    }
+
+    fn on_event(event_type: CGEventType, event: &CGEvent, tx: &Sender) {
+        match event_type {
+            CGEventType::LeftMouseUp => {
+                _ = tx.send((Span::current().clone(), Event::MouseUp));
+            }
+            CGEventType::MouseMoved => {
+                let loc = event.location();
+                debug!("Mouse moved {loc:?}");
+            }
+            other => error!("Unexpected event type {other:?}"),
+        }
     }
 }
