@@ -45,7 +45,7 @@ impl WakeupHandle {
     pub fn for_current_thread<F: Fn() + 'static>(order: CFIndex, handler: F) -> WakeupHandle {
         let handler = Box::into_raw(Box::new(Handler { ref_count: 0, func: handler }));
 
-        extern "C" fn perform<F: Fn() + 'static>(info: *const c_void) {
+        extern "C-unwind" fn perform<F: Fn() + 'static>(info: *const c_void) {
             // SAFETY: Only one thread may call these functions, and the mutable
             // reference lives only during the function call. No other code has
             // access to the handler.
@@ -58,7 +58,7 @@ impl WakeupHandle {
             handler.ref_count += 1;
             info
         }
-        extern "C" fn release<F>(info: *const c_void) {
+        extern "C-unwind" fn release<F>(info: *const c_void) {
             // SAFETY: As above.
             let handler = unsafe { &mut *(info as *mut Handler<F>) };
             handler.ref_count -= 1;
@@ -67,17 +67,32 @@ impl WakeupHandle {
             }
         }
 
+        // SAFETY: Strip the C-unwind ABI from the function pointer types since
+        // the core-foundation crate hasn't been updated with this ABI yet. This
+        // should be sound as long as we don't call the transmuted function
+        // pointer from Rust.
+        let release = unsafe {
+            mem::transmute::<extern "C-unwind" fn(*const c_void), extern "C" fn(*const c_void)>(
+                release::<F>,
+            )
+        };
+        let perform = unsafe {
+            mem::transmute::<extern "C-unwind" fn(*const c_void), extern "C" fn(*const c_void)>(
+                perform::<F>,
+            )
+        };
+
         let mut context = CFRunLoopSourceContext {
             version: 0,
             info: handler as *mut c_void,
             retain: Some(retain::<F>),
-            release: Some(release::<F>),
+            release: Some(release),
             copyDescription: None,
             equal: None,
             hash: None,
             schedule: None,
             cancel: None,
-            perform: perform::<F>,
+            perform,
         };
 
         let source = unsafe {
