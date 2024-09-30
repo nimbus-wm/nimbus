@@ -265,7 +265,7 @@ impl State {
     fn init(&mut self, handle: AppThreadHandle, info: AppInfo) -> bool {
         // Register for notifications on the application element.
         for notif in APP_NOTIFICATIONS {
-            let res = self.observer.add_notification(&self.app, notif);
+            let res = self.observer.add_notification(self.app.inner(), notif);
             if let Err(err) = res {
                 debug!(pid = ?self.pid, ?err, "Watching app failed");
                 return false;
@@ -703,7 +703,7 @@ impl State {
                 _ => return false,
             }
             for notif in WINDOW_NOTIFICATIONS {
-                let res = state.observer.add_notification(win, notif);
+                let res = state.observer.add_notification(win.inner(), notif);
                 if let Err(err) = res {
                     trace!("Watching failed with error {err:?} on window {win:#?}");
                     return false;
@@ -744,7 +744,7 @@ impl State {
 
     fn stop_notifications_for_animation(&self, elem: &AXUIElement) {
         for notif in WINDOW_ANIMATION_NOTIFICATIONS {
-            let res = self.observer.remove_notification(elem, notif);
+            let res = self.observer.remove_notification(elem.inner(), notif);
             if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
                 debug!(
@@ -758,7 +758,7 @@ impl State {
 
     fn restart_notifications_after_animation(&self, elem: &AXUIElement) {
         for notif in WINDOW_ANIMATION_NOTIFICATIONS {
-            let res = self.observer.add_notification(elem, notif);
+            let res = self.observer.add_notification(elem.inner(), notif);
             if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
                 debug!(?notif, ?elem, "Adding notification failed with error {err}");
