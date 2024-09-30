@@ -2,14 +2,17 @@
 
 #![cfg_attr(test, allow(unused_imports))]
 
+mod attribute;
 #[cfg(test)]
 pub mod fake;
 
-use std::{fmt::Debug, mem::transmute, ops::Deref};
+use attribute::AXUIElementAttributes as _;
 
-use accessibility::{AXUIElement as AXUIElementImpl, AXUIElementAttributes as _};
-use accessibility_sys::{kAXStandardWindowSubrole, kAXWindowRole};
-use core_foundation::{array::CFArray, base::ItemRef};
+use std::fmt::Debug;
+
+use accessibility::AXUIElement as AXUIElementImpl;
+use accessibility_sys::{kAXRaiseAction, kAXStandardWindowSubrole, kAXWindowRole};
+use core_foundation::string::CFString;
 use icrate::Foundation::CGRect;
 use serde::{Deserialize, Serialize};
 
@@ -19,9 +22,9 @@ use crate::sys::{
 };
 
 pub mod prelude {
-    pub use accessibility::{AXUIElementActions as _, AXUIElementAttributes as _};
-
-    pub use super::iter::Iterable;
+    pub use super::attribute::AXUIElementAttributes as _;
+    pub use super::attribute::Iterable;
+    pub use super::AXUIElementActions as _;
     pub use crate::sys::app::NSRunningApplicationExt as _;
 }
 
@@ -54,12 +57,24 @@ type AXUIElementInner = fake::FakeAXUIElement;
 #[cfg(not(test))]
 type AXUIElementInner = AXUIElementImpl;
 
-impl Deref for AXUIElement {
-    type Target = AXUIElementInner;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+#[cfg(test)]
+pub type AXAttribute<T> = attribute::FakeAXAttribute<T>;
+#[cfg(not(test))]
+pub type AXAttribute<T> = accessibility::AXAttribute<T>;
+
+#[cfg(test)]
+pub trait TCFType {}
+#[cfg(test)]
+impl<T> TCFType for T {}
+#[cfg(not(test))]
+use core_foundation::base::TCFType;
+
+// impl Deref for AXUIElement {
+//     type Target = AXUIElementInner;
+//     fn deref(&self) -> &Self::Target {
+//         &self.0
+//     }
+// }
 
 impl Into<AXUIElement> for AXUIElementInner {
     fn into(self) -> AXUIElement {
@@ -73,60 +88,38 @@ impl AXUIElement {
         Self(AXUIElementInner::application(pid))
     }
 
-    pub fn windows(&self) -> Result<impl iter::Iterable<Item = Self>> {
-        self.0.windows()
+    pub fn inner(&self) -> &AXUIElementInner {
+        &self.0
     }
 
-    pub fn main_window(&self) -> Result<Self> {
-        self.0.main_window().map(Self)
+    pub fn attribute<T: TCFType + 'static>(&self, attribute: &AXAttribute<T>) -> Result<T> {
+        self.0.attribute(attribute)
     }
 
-    pub fn parent(&self) -> Result<Self> {
-        self.0.parent().map(Self)
+    pub fn set_attribute<T: TCFType + 'static>(
+        &self,
+        attribute: &AXAttribute<T>,
+        value: impl Into<T>,
+    ) -> Result<()> {
+        self.0.set_attribute(attribute, value)
+    }
+
+    pub fn perform_action(&self, name: &CFString) -> Result<()> {
+        self.0.perform_action(name)
+    }
+
+    pub fn set_messaging_timeout(&self, timeout: f32) -> Result<()> {
+        self.0.set_messaging_timeout(timeout)
     }
 }
 
-mod iter {
-    use super::*;
+pub trait AXUIElementActions {
+    fn raise(&self) -> Result<()>;
+}
 
-    pub trait Iterable: Debug {
-        type Item;
-        fn iter(&self) -> impl Iterator<Item = impl Deref<Target = Self::Item>>;
-        fn len(&self) -> usize;
-    }
-
-    impl Iterable for Vec<AXUIElementInner> {
-        type Item = AXUIElement;
-        #[allow(refining_impl_trait)]
-        fn iter(&self) -> impl Iterator<Item = &'_ AXUIElement> {
-            fn map_ref(inner: &AXUIElementInner) -> &AXUIElement {
-                // SAFETY: repr(transparent)
-                unsafe { transmute(inner) }
-            }
-            let slice: &[AXUIElementInner] = &*self;
-            slice.iter().map(map_ref)
-        }
-        fn len(&self) -> usize {
-            Vec::len(self)
-        }
-    }
-
-    #[cfg(not(test))]
-    impl Iterable for CFArray<AXUIElementInner> {
-        type Item = AXUIElement;
-        fn iter(&self) -> impl Iterator<Item = impl Deref<Target = AXUIElement>> {
-            self.iter().map(|elem| {
-                fn convert(elem: ItemRef<AXUIElementInner>) -> ItemRef<AXUIElement> {
-                    // SAFETY: repr(transparent)
-                    unsafe { transmute(elem) }
-                }
-                convert(elem)
-            })
-        }
-
-        fn len(&self) -> usize {
-            CFArray::len(self) as usize
-        }
+impl AXUIElementActions for AXUIElement {
+    fn raise(&self) -> Result<()> {
+        self.perform_action(&CFString::from_static_string(kAXRaiseAction))
     }
 }
 
