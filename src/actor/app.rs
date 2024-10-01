@@ -841,6 +841,14 @@ mod tests {
     use super::*;
     use crate::system::fake::{self, FakeNSRunningApplication, FakeObserver};
 
+    #[cfg(loom)]
+    #[test]
+    fn loom_test() {
+        loom::model(|| {
+            test_app_actor();
+        });
+    }
+
     #[test]
     fn test_app_actor() {
         let pid = 1234;
