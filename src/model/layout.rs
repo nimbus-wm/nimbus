@@ -187,6 +187,10 @@ impl Layout {
         self.info[node].size += share;
     }
 
+    pub(super) fn set_fullscreen(&mut self, node: NodeId, is_fullscreen: bool) {
+        self.info[node].is_fullscreen = is_fullscreen;
+    }
+
     pub(super) fn toggle_fullscreen(&mut self, node: NodeId) -> bool {
         self.info[node].is_fullscreen = !self.info[node].is_fullscreen;
         self.info[node].is_fullscreen

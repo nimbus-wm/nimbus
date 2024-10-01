@@ -226,6 +226,10 @@ impl LayoutTree {
         false
     }
 
+    pub fn set_fullscreen(&mut self, node: NodeId, is_fullscreen: bool) {
+        self.tree.data.layout.set_fullscreen(node, is_fullscreen)
+    }
+
     pub fn toggle_fullscreen(&mut self, node: NodeId) -> bool {
         self.tree.data.layout.toggle_fullscreen(node)
     }

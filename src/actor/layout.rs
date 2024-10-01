@@ -238,7 +238,18 @@ impl LayoutManager {
                 screen,
             } => {
                 let layout = self.layout(space);
-                if let Some(node) = self.tree.window_node(layout, wid) {
+                let Some(node) = self.tree.window_node(layout, wid) else {
+                    return EventResponse::default();
+                };
+                if new_frame == screen {
+                    self.tree.set_fullscreen(node, true);
+                } else if old_frame == screen {
+                    self.tree.set_fullscreen(node, false);
+                    // We don't have an accurate old_frame handy so just ignore
+                    // the actual new size for now. It's probably going back to
+                    // its original size, and if not, it's probably interactive
+                    // and we'll update on the next frame.
+                } else {
                     self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
                 }
             }
@@ -916,6 +927,67 @@ mod tests {
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 1)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 2)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 3)));
+
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 30)),
+                (WindowId::new(pid, 3), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+    }
+
+    #[test]
+    fn resize_to_full_screen_and_back_preserves_layout() {
+        use LayoutEvent::*;
+        let mut mgr = LayoutManager::new();
+        let space = SpaceId::new(1);
+        let pid = 1;
+
+        let screen1 = rect(0, 0, 300, 30);
+        _ = mgr.handle_event(SpaceExposed(space, screen1.size));
+        _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, vec![]));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 3)));
+
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), rect(100, 0, 100, 30)),
+                (WindowId::new(pid, 3), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        _ = mgr.handle_event(WindowResized {
+            space,
+            wid: WindowId::new(pid, 2),
+            old_frame: rect(100, 0, 100, 30),
+            new_frame: screen1,
+            screen: screen1,
+        });
+
+        // Check that the other windows aren't resized (especially to zero);
+        // otherwise, we will lose the layout state as we receive nonconforming
+        // frame changed events.
+        assert_eq!(
+            vec![
+                (WindowId::new(pid, 1), rect(0, 0, 100, 30)),
+                (WindowId::new(pid, 2), screen1),
+                (WindowId::new(pid, 3), rect(200, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space, screen1),
+        );
+
+        _ = mgr.handle_event(WindowResized {
+            space,
+            wid: WindowId::new(pid, 2),
+            old_frame: screen1,
+            new_frame: rect(100, 0, 100, 30),
+            screen: screen1,
+        });
 
         assert_eq!(
             vec![
