@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-
 use super::Event;
-use crate::actor::app::{pid_t, Quiet, WindowId};
+use crate::{
+    actor::app::{pid_t, Quiet, WindowId},
+    collections::HashMap,
+};
 
 /// Keeps track of the main window.
 #[derive(Default)]

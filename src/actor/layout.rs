@@ -1,5 +1,4 @@
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
@@ -11,9 +10,9 @@ use tracing::debug;
 
 use crate::{
     actor::app::{pid_t, WindowId},
+    collections::{hash_map::Entry, BTreeExt, BTreeSet, HashMap, HashSet},
     model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation},
     sys::screen::SpaceId,
-    util::BTreeExt,
 };
 
 #[allow(dead_code)]

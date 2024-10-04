@@ -8,12 +8,7 @@ mod animation;
 mod main_window;
 mod replay;
 
-use std::{
-    collections::{HashMap, HashSet},
-    mem,
-    path::PathBuf,
-    sync, thread,
-};
+use std::{mem, path::PathBuf, sync, thread};
 
 use animation::Animation;
 use icrate::Foundation::CGRect;
@@ -29,6 +24,7 @@ use crate::{
         app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
+    collections::{HashMap, HashSet},
     metrics::{self, MetricsCommand},
     sys::{
         geometry::{CGRectDef, Round, SameAs},
@@ -208,12 +204,12 @@ impl Reactor {
     fn new(layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
-            apps: HashMap::new(),
+            apps: HashMap::default(),
             layout,
-            windows: HashMap::new(),
-            window_ids: HashMap::new(),
-            window_server_info: HashMap::new(),
-            visible_windows: HashSet::new(),
+            windows: HashMap::default(),
+            window_ids: HashMap::default(),
+            window_server_info: HashMap::default(),
+            visible_windows: HashSet::default(),
             main_screen: None,
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),

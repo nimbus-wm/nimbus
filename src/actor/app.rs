@@ -5,7 +5,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fmt::Debug,
     num::NonZeroU32,
     rc::{Rc, Weak},
@@ -39,6 +38,7 @@ use tracing::{debug, error, info, instrument, trace, warn, Span};
 pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 use crate::{
     actor::reactor::{Event, Requested, TransactionId},
+    collections::HashMap,
     sys::{
         app::running_apps,
         geometry::{ToCGType, ToICrate},
@@ -730,7 +730,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) 
             observer,
             events_tx,
             requests_rx,
-            windows: HashMap::new(),
+            windows: HashMap::default(),
             last_window_idx: 0,
             main_window: None,
             last_activated: None,

@@ -7,7 +7,7 @@ use super::{
     tree::{NodeId, NodeMap},
     LayoutId,
 };
-use crate::{actor::app::WindowId, model::layout_tree::TreeEvent, util::BTreeExt};
+use crate::{actor::app::WindowId, collections::BTreeExt, model::layout_tree::TreeEvent};
 
 /// Maintains a two-way mapping between leaf nodes and window ids.
 #[derive(Default, Serialize, Deserialize)]

@@ -2,7 +2,7 @@
 //! window manager on certain spaces and launching app threads. It also
 //! controls hotkey registration.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::path::PathBuf;
 
 use accessibility_sys::pid_t;
 use tracing::{debug, instrument, Span};
@@ -13,6 +13,7 @@ type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use crate::{
     actor::{self, app::AppInfo, reactor},
+    collections::HashSet,
     sys::{hotkey::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
 };
 
@@ -62,8 +63,8 @@ impl WmController {
             sender: sender.downgrade(),
             starting_space: None,
             cur_space: Vec::new(),
-            disabled_spaces: HashSet::new(),
-            enabled_spaces: HashSet::new(),
+            disabled_spaces: HashSet::default(),
+            enabled_spaces: HashSet::default(),
             hotkeys: None,
         };
         (this, sender)

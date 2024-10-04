@@ -1,7 +1,9 @@
-use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::borrow::Borrow;
+pub(crate) use std::collections::{hash_map, BTreeMap, BTreeSet};
+
+// We don't need or want the random state of the default std collections.
+// We also don't need cryptographic hashing, and these are faster.
+pub(crate) use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::{actor::app::WindowId, sys::app::pid_t};
 
