@@ -214,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Replay(Replay { path }) => {
             reactor::replay(&path, |rx| {
-                for (_span, request) in rx.try_iter() {
+                while let Ok((_span, request)) = rx.try_recv() {
                     info!(?request);
                 }
             })?;

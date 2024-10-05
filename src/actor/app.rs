@@ -4,13 +4,10 @@
 //! These APIs support reading and writing window states like position and size.
 
 use std::{
-    cell::RefCell,
     fmt::Debug,
     num::NonZeroU32,
-    rc::{Rc, Weak},
     sync::{
         atomic::{AtomicI32, Ordering},
-        mpsc::{channel, Receiver, Sender},
         Arc, Mutex,
     },
     thread,
@@ -32,19 +29,25 @@ use icrate::{
     Foundation::{CGPoint, CGRect},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use tokio::sync::{
+    mpsc::{
+        unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
+    },
+    oneshot,
+};
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
 use crate::{
-    actor::reactor::{Event, Requested, TransactionId},
+    actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
         app::running_apps,
         event,
+        executor::Executor,
         geometry::{ToCGType, ToICrate},
         observer::Observer,
-        run_loop::WakeupHandle,
         window_server::{self, WindowServerId},
     },
 };
@@ -72,21 +75,16 @@ impl WindowId {
 #[derive(Clone)]
 pub struct AppThreadHandle {
     requests_tx: Sender<(Span, Request)>,
-    wakeup: WakeupHandle,
 }
 
 impl AppThreadHandle {
     pub(crate) fn new_for_test(requests_tx: Sender<(Span, Request)>) -> Self {
-        let this = AppThreadHandle {
-            requests_tx,
-            wakeup: WakeupHandle::for_current_thread(0, || {}),
-        };
+        let this = AppThreadHandle { requests_tx };
         this
     }
 
-    pub fn send(&self, req: Request) -> Result<(), std::sync::mpsc::SendError<(Span, Request)>> {
+    pub fn send(&self, req: Request) -> anyhow::Result<()> {
         self.requests_tx.send((Span::current(), req))?;
-        self.wakeup.wake();
         Ok(())
     }
 }
@@ -157,13 +155,13 @@ impl RaiseToken {
     }
 }
 
-pub fn spawn_initial_app_threads(events_tx: Sender<(Span, Event)>) {
+pub fn spawn_initial_app_threads(events_tx: reactor::Sender) {
     for (pid, info) in running_apps(None) {
         spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 
-pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
+pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     thread::Builder::new()
         .name(format!(
             "{}({pid})",
@@ -179,8 +177,7 @@ struct State {
     running_app: Id<NSRunningApplication>,
     app: AXUIElement,
     observer: Observer,
-    events_tx: Sender<(Span, Event)>,
-    requests_rx: Receiver<(Span, Request)>,
+    events_tx: reactor::Sender,
     windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
     main_window: Option<WindowId>,
@@ -213,6 +210,48 @@ const WINDOW_ANIMATION_NOTIFICATIONS: &[&str] =
     &[kAXWindowMovedNotification, kAXWindowResizedNotification];
 
 impl State {
+    async fn run(
+        mut self,
+        info: AppInfo,
+        requests_tx: Sender<(Span, Request)>,
+        requests_rx: Receiver<(Span, Request)>,
+        notifications_rx: Receiver<(AXUIElement, String)>,
+    ) {
+        let handle = AppThreadHandle { requests_tx };
+        if !self.init(handle, info) {
+            return;
+        }
+
+        pub enum Incoming {
+            Notification((AXUIElement, String)),
+            Request((Span, Request)),
+        }
+
+        let mut merged = StreamExt::merge(
+            UnboundedReceiverStream::new(requests_rx).map(Incoming::Request),
+            UnboundedReceiverStream::new(notifications_rx).map(Incoming::Notification),
+        );
+
+        while let Some(incoming) = merged.next().await {
+            match incoming {
+                Incoming::Request((span, mut request)) => {
+                    let _guard = span.enter();
+                    debug!(?self.bundle_id, ?self.pid, ?request, "Got request");
+                    match self.handle_request(&mut request) {
+                        Ok(should_terminate) if should_terminate => break,
+                        Ok(_) => (),
+                        Err(err) => {
+                            error!(?self.bundle_id, ?self.pid, ?request, "Error handling request: {err}");
+                        }
+                    }
+                }
+                Incoming::Notification((elem, notif)) => {
+                    self.handle_notification(elem, &notif);
+                }
+            }
+        }
+    }
+
     #[instrument(skip_all, fields(?info))]
     #[must_use]
     fn init(&mut self, handle: AppThreadHandle, info: AppInfo) -> bool {
@@ -278,12 +317,14 @@ impl State {
         true
     }
 
+    /// Handles a request. Returns whether the actor should terminate.
     #[instrument(skip_all, fields(app = ?self.app, ?request))]
-    fn handle_request(&mut self, request: &mut Request) -> Result<(), accessibility::Error> {
+    fn handle_request(&mut self, request: &mut Request) -> Result<bool, accessibility::Error> {
         match request {
             Request::Terminate => {
                 CFRunLoop::get_current().stop();
                 self.send_event(Event::ApplicationThreadTerminated(self.pid));
+                return Ok(true);
             }
             Request::GetVisibleWindows => {
                 let window_elems = match self.app.windows() {
@@ -376,7 +417,7 @@ impl State {
                 self.handle_raise_request(wid, token, done, quiet)?;
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
@@ -718,72 +759,39 @@ impl State {
     }
 }
 
-fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: Sender<(Span, Event)>) {
+fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     let app = AXUIElement::application(pid);
     let running_app: Id<NSRunningApplication> = unsafe {
         // For some reason this binding isn't generated in icrate.
         msg_send_id![class!(NSRunningApplication), runningApplicationWithProcessIdentifier:pid]
     };
-    let (requests_tx, requests_rx) = channel();
+
+    // Set up the observer callback.
     let Ok(observer) = Observer::new(pid) else {
         debug!(?pid, "Making observer failed; exiting app thread");
         return;
     };
+    let (notifications_tx, notifications_rx) = channel();
+    let observer =
+        observer.install(move |elem, notif| _ = notifications_tx.send((elem, notif.to_owned())));
 
-    // Create our app state and set up the observer callback.
-    let state = Rc::new_cyclic(|weak: &Weak<RefCell<State>>| {
-        let weak = weak.clone();
-        let observer = observer.install(move |elem, notif| {
-            if let Some(state) = weak.upgrade() {
-                state.borrow_mut().handle_notification(elem, notif)
-            }
-        });
+    // Create our app state.
+    let state = State {
+        pid,
+        running_app,
+        bundle_id: info.bundle_id.clone(),
+        app: app.clone(),
+        observer,
+        events_tx,
+        windows: HashMap::default(),
+        last_window_idx: 0,
+        main_window: None,
+        last_activated: None,
+        is_frontmost: false,
+    };
 
-        RefCell::new(State {
-            pid,
-            running_app,
-            bundle_id: info.bundle_id.clone(),
-            app: app.clone(),
-            observer,
-            events_tx,
-            requests_rx,
-            windows: HashMap::default(),
-            last_window_idx: 0,
-            main_window: None,
-            last_activated: None,
-            is_frontmost: false,
-        })
-    });
-
-    // Set up our request handler.
-    let st = state.clone();
-    let wakeup = WakeupHandle::for_current_thread(0, move || handle_requests(&st));
-    let handle = AppThreadHandle { requests_tx, wakeup };
-
-    // Initialize the app.
-    if !state.borrow_mut().init(handle, info) {
-        return;
-    }
-
-    // Finally, invoke the run loop to handle events.
-    CFRunLoop::run_current();
-
-    fn handle_requests(state: &Rc<RefCell<State>>) {
-        // Multiple source wakeups can be collapsed into one, so we have to make
-        // sure all pending events are handled eventually. For now just handle
-        // them all.
-        let mut state = state.borrow_mut();
-        while let Ok((span, mut request)) = state.requests_rx.try_recv() {
-            let _guard = span.enter();
-            debug!(?state.bundle_id, ?state.pid, ?request, "Got request");
-            match state.handle_request(&mut request) {
-                Ok(()) => (),
-                Err(err) => {
-                    error!(?state.bundle_id, ?state.pid, ?request, "Error handling request: {err}");
-                }
-            }
-        }
-    }
+    let (requests_tx, requests_rx) = channel();
+    Executor::run(state.run(info, requests_tx, requests_rx, notifications_rx));
 }
 
 fn trace<T>(

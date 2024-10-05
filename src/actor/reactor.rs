@@ -8,7 +8,7 @@ mod animation;
 mod main_window;
 mod replay;
 
-use std::{mem, path::PathBuf, sync, thread};
+use std::{mem, path::PathBuf, thread};
 
 use animation::Animation;
 use icrate::Foundation::CGRect;
@@ -16,7 +16,7 @@ use main_window::MainWindowTracker;
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc::unbounded_channel, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
@@ -28,13 +28,15 @@ use crate::{
     metrics::{self, MetricsCommand},
     sys::{
         event::MouseState,
+        executor::Executor,
         geometry::{CGRectDef, Round, SameAs},
         screen::SpaceId,
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
 
-pub type Sender = std::sync::mpsc::Sender<(Span, Event)>;
+pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Event)>;
+type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, Event)>;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug)]
@@ -196,25 +198,18 @@ impl From<WindowInfo> for WindowState {
 }
 
 impl Reactor {
-    pub fn spawn(layout: LayoutManager, mut record: Record) -> Sender {
-        let (events_tx, events) = sync::mpsc::channel::<(Span, Event)>();
+    pub fn spawn(layout: LayoutManager, record: Record) -> Sender {
+        let (events_tx, events) = unbounded_channel();
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
-                let record = &mut record;
-                record.start(&layout);
-                let mut this = Reactor::new(layout);
-                for (span, event) in events {
-                    let _guard = span.enter();
-                    record.on_event(&event);
-                    this.handle_event(event);
-                }
+                Executor::run(Reactor::new(layout).run(events, record));
             })
             .unwrap();
         events_tx
     }
 
-    fn new(layout: LayoutManager) -> Reactor {
+    pub fn new(layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
             apps: HashMap::default(),
@@ -230,7 +225,17 @@ impl Reactor {
         }
     }
 
-    pub fn handle_event(&mut self, event: Event) {
+    pub async fn run(mut self, mut events: Receiver, mut record: Record) {
+        let record = &mut record;
+        record.start(&self.layout);
+        while let Some((span, event)) = events.recv().await {
+            let _guard = span.enter();
+            record.on_event(&event);
+            self.handle_event(event);
+        }
+    }
+
+    fn handle_event(&mut self, event: Event) {
         debug!(?event, "Event");
         let mut animation_focus_wid = None;
         let mut is_resize = false;
@@ -578,13 +583,11 @@ impl Reactor {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::mpsc::{channel, Receiver, Sender},
-    };
+    use std::collections::BTreeMap;
 
     use icrate::Foundation::{CGPoint, CGSize};
     use test_log::test;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     use super::*;
     use crate::{
@@ -601,10 +604,13 @@ pub mod tests {
         }
     }
 
-    pub struct Apps(Sender<(Span, Request)>, Receiver<(Span, Request)>);
+    pub struct Apps(
+        UnboundedSender<(Span, Request)>,
+        UnboundedReceiver<(Span, Request)>,
+    );
     impl Apps {
         pub fn new() -> Apps {
-            let (tx, rx) = channel();
+            let (tx, rx) = unbounded_channel();
             Apps(tx, rx)
         }
 
@@ -648,7 +654,11 @@ pub mod tests {
         }
 
         pub fn requests(&mut self) -> Vec<Request> {
-            self.1.try_iter().map(|(_span, rq)| rq).collect()
+            let mut requests = Vec::new();
+            while let Ok((_, req)) = self.1.try_recv() {
+                requests.push(req);
+            }
+            requests
         }
 
         pub fn simulate_until_quiet(&mut self, reactor: &mut Reactor) {

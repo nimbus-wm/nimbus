@@ -7,9 +7,9 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Write},
     path::Path,
-    sync::mpsc::{channel, Receiver},
 };
 
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tracing::Span;
 
 use super::{Event, Reactor};
@@ -53,10 +53,10 @@ impl Record {
 
 pub fn replay(
     path: &Path,
-    mut on_event: impl FnMut(&mut Receiver<(Span, Request)>),
+    mut on_event: impl FnMut(&mut UnboundedReceiver<(Span, Request)>),
 ) -> anyhow::Result<()> {
     let file = BufReader::new(File::open(path)?);
-    let (tx, mut rx) = channel();
+    let (tx, mut rx) = unbounded_channel();
     let handle = AppThreadHandle::new_for_test(tx);
     DESERIALIZE_THREAD_HANDLE.with(|h| h.borrow_mut().replace(handle));
     let mut lines = file.lines();

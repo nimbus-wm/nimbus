@@ -52,6 +52,7 @@ serde_with = "3.9.0"
 slotmap = { version = "1.0.7", features = ["serde"] }
 static_assertions = "1.1.0"
 tokio = { version = "1.35.1", features = ["macros", "sync"] }
+tokio-stream = "0.1.16"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 tracing-timing = { version = "0.6.0", features = ["layer"] }
