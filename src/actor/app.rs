@@ -838,8 +838,16 @@ fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
+    use icrate::Foundation::CGSize;
+    use reactor::{Reactor, Record};
+    use test_log::test;
+
     use super::*;
-    use crate::system::fake::{self, FakeNSRunningApplication, FakeObserver};
+    use crate::{
+        actor::layout::LayoutManager,
+        sys::screen::SpaceId,
+        system::fake::{self, FakeNSRunningApplication, FakeObserver},
+    };
 
     #[cfg(loom)]
     #[test]
@@ -849,12 +857,135 @@ mod tests {
         });
     }
 
+    #[cfg(loom)]
+    #[test]
+    fn loom_test2() {
+        loom::model(|| {
+            loom::thread::spawn(move || {
+                loom::thread::park();
+            });
+        });
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn loom_test3() {
+        loom::model(|| {
+            use loom::sync::{Arc, Mutex};
+            let m1 = Arc::new(Mutex::new(0));
+            let m2 = Arc::new(Mutex::new(0));
+            let (n1, n2) = (m1.clone(), m2.clone());
+            loom::thread::spawn(move || {
+                for _ in 0..3 {
+                    let mut l1 = m1.lock().unwrap();
+                    *l1 += 1;
+                    *m2.lock().unwrap() += 1;
+                }
+            });
+            loom::thread::spawn(move || {
+                for _ in 0..3 {
+                    let mut l1 = n2.lock().unwrap();
+                    *l1 += 1;
+                    *n1.lock().unwrap() += 1;
+                }
+            });
+        });
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn loom_test4() {
+        loom::model(|| {
+            loom::thread::spawn(move || loom::future::block_on(std::future::pending::<()>()));
+        });
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn loom_test_move_window() {
+        println!("test");
+        loom::model(test_move_window);
+    }
+
+    mod thread {
+        #[cfg(not(loom))]
+        pub use std::thread::spawn;
+
+        #[cfg(loom)]
+        pub fn spawn<T: Send + 'static>(
+            f: impl FnOnce() -> T + Send + 'static,
+        ) -> loom::thread::JoinHandle<T> {
+            loom::thread::Builder::new().stack_size(0x2000).spawn(f).unwrap()
+        }
+    }
+
+    #[test]
+    fn test_move_window() {
+        let pid = 1234;
+        let (events_tx, events_rx) = channel();
+        let (requests_tx, requests_rx) = channel();
+        let (notifications_tx, notifications_rx) = channel();
+
+        let observer = FakeObserver::new(notifications_tx);
+        let app = fake::Application::new(observer.clone());
+        let running_app = Id::new(FakeNSRunningApplication);
+
+        let app_actor = State {
+            pid,
+            running_app,
+            bundle_id: Some("com.example.test".to_string()),
+            app: app.clone().into(),
+            observer: observer.clone(),
+            events_tx: events_tx.clone(),
+            windows: HashMap::default(),
+            last_window_idx: 0,
+            main_window: None,
+            last_activated: None,
+            is_frontmost: false,
+        };
+
+        _ = thread::spawn(move || {
+            let reactor = Reactor::new(LayoutManager::new());
+            Executor::run(reactor.run(events_rx, Record::new(None)));
+        });
+
+        let screen_frame = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        _ = events_tx.send((
+            Span::current(),
+            Event::ScreenParametersChanged(vec![screen_frame], vec![Some(SpaceId::new(1))], vec![]),
+        ));
+
+        let win: AXUIElement = app.mk_window().into();
+
+        let info = AppInfo {
+            bundle_id: Some("dev.myapp".into()),
+            localized_name: Some("MyApp".into()),
+        };
+        let rtx = requests_tx.clone();
+        _ = thread::spawn(move || {
+            Executor::run(app_actor.run(info, rtx, requests_rx, notifications_rx));
+        });
+
+        Executor::run(async {
+            let mut updates = observer.updates_rx().unwrap();
+            while let Some(()) = updates.recv().await {
+                if dbg!(win.frame().unwrap().to_icrate()) == screen_frame {
+                    break;
+                }
+            }
+        });
+
+        _ = requests_tx.send((Span::current(), Request::Terminate));
+        // _ = events_tx.send((Span::current(), Event::Command(reactor::Command::Exit)));
+    }
+
     #[test]
     fn test_app_actor() {
         let pid = 1234;
         let (events_tx, mut events_rx) = channel();
+        let (notifications_tx, _notifications_rx) = channel();
 
-        let observer = FakeObserver::new();
+        let observer = FakeObserver::new(notifications_tx);
         let app = fake::Application::new(observer.clone());
         let running_app = Id::new(FakeNSRunningApplication);
 

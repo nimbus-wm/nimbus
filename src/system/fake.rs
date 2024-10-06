@@ -8,7 +8,7 @@ use std::{
     ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex, MutexGuard,
     },
 };
 
@@ -18,26 +18,29 @@ use accessibility_sys::{
     kAXErrorCannotComplete, kAXErrorIllegalArgument, kAXErrorNoValue, kAXFrameAttribute,
     kAXFrontmostAttribute, kAXMainWindowAttribute, kAXParentAttribute, kAXPositionAttribute,
     kAXRaiseAction, kAXRoleAttribute, kAXSizeAttribute, kAXStandardWindowSubrole,
-    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowCreatedNotification, kAXWindowRole,
-    kAXWindowsAttribute,
+    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowCreatedNotification,
+    kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole, kAXWindowsAttribute,
 };
 use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
 use core_graphics::display::{CGPoint, CGRect, CGSize};
 use icrate::AppKit::NSApplicationActivationOptions;
+use tokio::sync::mpsc::{
+    unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
+};
 
 use super::{pid_t, AXAttribute, AXUIElement, Error, Result, WindowServerId};
 
 macro_rules! forward {
     ($(pub fn $name:ident(&self) -> $ret:ty;)*) => { $(
         pub fn $name(&self) -> $ret {
-            let this = self.elem.borrow();
+            let this = self.elem.lock();
             this.connection().check()?;
             this.$name()
         }
     )* };
     ($(pub fn $name:ident(&mut self, $arg:ident: $argt:ty) -> $ret:ty;)*) => { $(
         pub fn $name(&self, $arg: $argt) -> $ret {
-            let mut this = self.elem.borrow_mut();
+            let mut this = self.elem.lock();
             this.connection().check()?;
             this.$name($arg)
         }
@@ -47,6 +50,18 @@ macro_rules! forward {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FakeAXUIElement {
     elem: Ptr<dyn Element>,
+}
+
+trait AnyExt {
+    fn expect_cast<T: 'static>(self) -> T;
+}
+
+impl AnyExt for Box<dyn Any> {
+    fn expect_cast<T: 'static>(self) -> T {
+        *self
+            .downcast()
+            .unwrap_or_else(|_| panic!("wrong type; expected {}", std::any::type_name::<T>()))
+    }
 }
 
 // trait Any: std::any::Any + 'static {
@@ -66,12 +81,10 @@ pub struct FakeAXUIElement {
 
 impl FakeAXUIElement {
     pub fn attribute<T: 'static>(&self, attribute: &AXAttribute<T>) -> Result<T> {
-        let this = self.elem.borrow();
+        let this = self.elem.lock();
         this.connection().check()?;
         let val = this.attribute(attribute.as_str())?;
-        Ok(*val
-            .downcast()
-            .unwrap_or_else(|_| panic!("wrong type: expected {}", std::any::type_name::<T>(),)))
+        Ok(val.expect_cast())
     }
 
     pub fn set_attribute<T: 'static>(
@@ -79,13 +92,13 @@ impl FakeAXUIElement {
         attribute: &AXAttribute<T>,
         value: impl Into<T>,
     ) -> Result<()> {
-        let mut this = self.elem.borrow_mut();
+        let mut this = self.elem.lock();
         this.connection().check()?;
-        this.set_attribute(attribute.as_str(), Box::new(value.into()))
+        this.set_attribute(attribute.as_str(), Box::new(value.into()), &self)
     }
 
     pub fn role(&self) -> Result<CFString> {
-        Ok(CFString::from_static_string(self.elem.borrow().role()))
+        Ok(CFString::from_static_string(self.elem.lock().role()))
     }
     forward! {
         pub fn subrole(&self) -> Result<CFString>;
@@ -115,7 +128,7 @@ impl Deref for FakeAXUIElement {
 
 #[derive(Debug)]
 pub struct Application {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     main_window: Option<FakeAXUIElement>,
     windows: Vec<Ptr<Window>>,
     frontmost_id: Option<WindowServerId>,
@@ -135,9 +148,9 @@ impl Application {
 
 impl Ptr<Application> {
     pub fn mk_window(&self) -> Ptr<Window> {
-        let mut this = self.borrow_mut();
+        let mut this = self.lock();
         let win = Ptr::new(Window {
-            parent: Arc::downgrade(&self.0),
+            parent: Ptr::downgrade(self),
             frame: CGRect::default(),
             id: WindowServerId::new(1),
             connection: this.connection.clone(),
@@ -150,7 +163,7 @@ impl Ptr<Application> {
     }
 
     pub fn terminate_abruptly(&self) {
-        self.borrow().connection.terminate()
+        self.lock().connection.terminate()
     }
 }
 
@@ -164,7 +177,7 @@ pub struct Window {
 
 impl Ptr<Window> {
     pub fn id(&self) -> u32 {
-        self.borrow().id.as_u32()
+        self.lock().id.as_u32()
     }
 }
 
@@ -179,13 +192,19 @@ macro_rules! provide_stubs {
 }
 
 #[allow(unused_variables)]
-trait Element: Debug {
+trait Element: Debug + Send {
     // Required methods.
     fn connection(&self) -> &Connection;
     fn role(&self) -> &'static str;
 
     fn attribute(&self, attribute: &'static str) -> Result<Box<dyn Any>>;
-    fn set_attribute(&mut self, attribute: &'static str, _value: Box<dyn Any>) -> Result<()>;
+    fn set_attribute(
+        &mut self,
+        attribute: &'static str,
+        value: Box<dyn Any>,
+        this: &FakeAXUIElement,
+    ) -> Result<()>;
+    #[expect(dead_code)]
     fn perform_action(&mut self, action: &'static str) -> Result<()>;
 
     // Provided stubs.
@@ -223,7 +242,7 @@ impl Element for Application {
         let Some(id) = self.frontmost_id else {
             return Err(Error::Ax(kAXErrorNoValue));
         };
-        let Some(win) = self.windows.iter().find(|w| w.borrow().id == id) else {
+        let Some(win) = self.windows.iter().find(|w| w.lock().id == id) else {
             return Err(Error::Ax(kAXErrorNoValue));
         };
         Ok(win.clone().into())
@@ -239,11 +258,18 @@ impl Element for Application {
             kAXRoleAttribute => Box::new(CFString::from_static_string(self.role())),
             kAXMainWindowAttribute => Box::new(self.main_window()?),
             kAXWindowsAttribute => Box::new(self.windows()?),
-            _ => todo!(),
+            // TODO
+            kAXFrontmostAttribute => Box::new(CFBoolean::false_value()),
+            other => todo!("{other}"),
         })
     }
 
-    fn set_attribute(&mut self, _attribute: &'static str, _value: Box<dyn Any>) -> Result<()> {
+    fn set_attribute(
+        &mut self,
+        _attribute: &'static str,
+        _value: Box<dyn Any>,
+        _this: &FakeAXUIElement,
+    ) -> Result<()> {
         todo!()
     }
 
@@ -268,7 +294,7 @@ impl Element for Window {
     fn parent(&self) -> Result<FakeAXUIElement> {
         self.parent
             .upgrade()
-            .map(|kind| FakeAXUIElement { elem: Ptr(kind).into() })
+            .map(|kind| FakeAXUIElement { elem: kind.into() })
             .ok_or(Error::Ax(kAXErrorCannotComplete))
     }
 
@@ -280,7 +306,7 @@ impl Element for Window {
         let Some(parent) = self.parent.upgrade() else {
             return Err(Error::Ax(kAXErrorCannotComplete));
         };
-        let same = parent.borrow().frontmost_id == Some(self.id);
+        let same = parent.lock().frontmost_id == Some(self.id);
         Ok(same.into())
     }
 
@@ -302,7 +328,7 @@ impl Element for Window {
         let Some(parent) = self.parent.upgrade() else {
             return Err(Error::Ax(kAXErrorCannotComplete));
         };
-        parent.borrow_mut().frontmost_id = Some(self.id);
+        parent.lock().frontmost_id = Some(self.id);
         Ok(())
     }
 
@@ -323,13 +349,25 @@ impl Element for Window {
         })
     }
 
-    fn set_attribute(&mut self, attribute: &'static str, value: Box<dyn Any>) -> Result<()> {
+    fn set_attribute(
+        &mut self,
+        attribute: &'static str,
+        value: Box<dyn Any>,
+        this: &FakeAXUIElement,
+    ) -> Result<()> {
         #[allow(non_upper_case_globals)]
         match attribute {
-            kAXPositionAttribute => self.set_position(*value.downcast().expect("wrong type")),
-            kAXSizeAttribute => self.set_size(*value.downcast().expect("wrong type")),
+            kAXPositionAttribute => {
+                self.frame.origin = value.expect_cast();
+                self.connection.observer.notify(this, kAXWindowMovedNotification, this.into());
+            }
+            kAXSizeAttribute => {
+                self.frame.size = value.expect_cast();
+                self.connection.observer.notify(this, kAXWindowResizedNotification, this.into());
+            }
             _ => todo!(),
         }
+        Ok(())
     }
 
     fn perform_action(&mut self, action: &'static str) -> Result<()> {
@@ -398,20 +436,23 @@ impl Connection {
 }
 
 #[derive(Debug)]
-pub struct Ptr<T: ?Sized>(Arc<RefCell<T>>);
-type Weak<T> = std::sync::Weak<RefCell<T>>;
+pub struct Ptr<T: ?Sized>(Arc<Mutex<T>>);
+#[derive(Debug)]
+struct Weak<T: ?Sized>(std::sync::Weak<Mutex<T>>);
 
 impl<T> Ptr<T> {
     fn new(inner: T) -> Self {
-        Self(Arc::new(RefCell::new(inner)))
+        Self(Arc::new(Mutex::new(inner)))
     }
 }
+
 impl<T: ?Sized> Ptr<T> {
-    fn borrow(&self) -> Ref<T> {
-        self.0.borrow()
+    fn lock(&self) -> MutexGuard<'_, T> {
+        self.0.lock().unwrap()
     }
-    fn borrow_mut(&self) -> RefMut<T> {
-        self.0.borrow_mut()
+
+    fn downgrade(this: &Self) -> Weak<T> {
+        Weak(Arc::downgrade(&this.0))
     }
 }
 
@@ -431,6 +472,18 @@ impl<T: ?Sized> Eq for Ptr<T> {}
 impl<T: ?Sized> Hash for Ptr<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_usize(Arc::as_ptr(&self.0) as *const u8 as usize)
+    }
+}
+
+impl<T> Weak<T> {
+    fn upgrade(&self) -> Option<Ptr<T>> {
+        self.0.upgrade().map(Ptr)
+    }
+}
+
+impl<T: ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        Self(std::sync::Weak::clone(&self.0))
     }
 }
 
@@ -465,17 +518,25 @@ impl Hash for ElementKey {
 }
 
 #[derive(Debug, Clone)]
-pub struct FakeObserver(Arc<RefCell<FakeObserverInner>>);
+pub struct FakeObserver(Arc<Mutex<FakeObserverInner>>);
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct FakeObserverInner {
     subscriptions: HashMap<FakeAXUIElement, HashSet<&'static str>>,
-    pending_notifs: Vec<(AXUIElement, &'static str)>,
+    notifications_tx: Sender<(AXUIElement, String)>,
+    updates_tx: Sender<()>,
+    updates_rx: Option<Receiver<()>>,
 }
 
 impl FakeObserver {
-    pub fn new() -> Self {
-        Self(Arc::new(RefCell::new(FakeObserverInner::default())))
+    pub fn new(notifications_tx: Sender<(AXUIElement, String)>) -> Self {
+        let (updates_tx, updates_rx) = channel();
+        Self(Arc::new(Mutex::new(FakeObserverInner {
+            subscriptions: HashMap::default(),
+            notifications_tx,
+            updates_tx,
+            updates_rx: Some(updates_rx),
+        })))
     }
 
     pub fn add_notification(
@@ -483,7 +544,7 @@ impl FakeObserver {
         elem: &FakeAXUIElement,
         notification: &'static str,
     ) -> Result<()> {
-        self.0.borrow_mut().subscriptions_for(elem.clone()).insert(notification);
+        self.lock().subscriptions_for(elem.clone()).insert(notification);
         Ok(())
     }
 
@@ -492,12 +553,12 @@ impl FakeObserver {
         elem: &FakeAXUIElement,
         notification: &'static str,
     ) -> Result<()> {
-        self.0.borrow_mut().subscriptions_for(elem.clone()).remove(notification);
+        self.lock().subscriptions_for(elem.clone()).remove(notification);
         Ok(())
     }
 
-    pub fn pending_notifications(&self) -> Vec<(AXUIElement, &'static str)> {
-        std::mem::take(&mut self.0.borrow_mut().pending_notifs)
+    pub fn updates_rx(&self) -> Option<Receiver<()>> {
+        self.lock().updates_rx.take()
     }
 
     fn notify(
@@ -506,12 +567,28 @@ impl FakeObserver {
         notification: &'static str,
         target: &FakeAXUIElement,
     ) {
-        let mut this = self.0.borrow_mut();
+        let this = self.lock();
         if let Some(subscriptions) = this.subscriptions.get(borrow::Borrow::borrow(elem)) {
             if subscriptions.contains(&notification) {
-                this.pending_notifs.push((target.clone().into(), notification));
+                _ = this.notifications_tx.send((target.clone().into(), notification.to_owned()));
             }
         }
+        _ = this.updates_tx.send(());
+    }
+
+    fn lock(&self) -> MutexGuard<'_, FakeObserverInner> {
+        self.0.lock().unwrap()
+    }
+
+    fn pending_notifications(
+        &self,
+        notifications_rx: &mut Receiver<(AXUIElement, String)>,
+    ) -> Vec<(AXUIElement, String)> {
+        let mut notifs = Vec::new();
+        while let Ok(notif) = notifications_rx.try_recv() {
+            notifs.push(notif)
+        }
+        notifs
     }
 }
 
@@ -551,7 +628,8 @@ mod tests {
 
     #[test]
     fn mk_window() {
-        let observer = FakeObserver::new();
+        let (notifications_tx, mut notifications_rx) = channel();
+        let observer = FakeObserver::new(notifications_tx);
         let app = Application::new(observer.clone());
         let app_elem: AXUIElement = app.clone().into();
         observer
@@ -559,21 +637,22 @@ mod tests {
             .unwrap();
         assert_eq!(app_elem.windows().unwrap().len(), 0);
         assert_err(app_elem.main_window(), kAXErrorNoValue);
-        assert!(observer.pending_notifications().is_empty());
+        assert!(observer.pending_notifications(&mut notifications_rx).is_empty());
         let win = app.mk_window();
         let win_elem: AXUIElement = win.clone().into();
         assert_eq!(app_elem.windows().unwrap().len(), 1);
         assert_err(app_elem.main_window(), kAXErrorNoValue);
         assert_eq!(win_elem.parent().expect("no parent"), app_elem);
         assert_eq!(
-            observer.pending_notifications(),
-            vec![(win_elem, kAXWindowCreatedNotification)]
+            observer.pending_notifications(&mut notifications_rx),
+            vec![(win_elem, kAXWindowCreatedNotification.to_owned())]
         );
     }
 
     #[test]
     fn terminate_abruptly() {
-        let observer = FakeObserver::new();
+        let (notifications_tx, _notifications_rx) = channel();
+        let observer = FakeObserver::new(notifications_tx);
         let app = Application::new(observer.clone());
         let app_elem: AXUIElement = app.clone().into();
         let win = app.mk_window();
