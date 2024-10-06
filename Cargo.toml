@@ -15,8 +15,9 @@ test = false
 # However, since panic-abort-tests is not stable yet, we will always build test
 # deps with panic=unwind. Therefore dev builds continue to use panic=unwind
 # with a panic hook that aborts so we can reuse dependency builds.
-[profile]
-release.panic = "abort"
+[profile.release]
+panic = "abort"
+debug = "line-tables-only"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
@@ -67,7 +68,7 @@ tokio = { version = "1.35.1", features = ["rt", "sync", "macros"] }
 test-log = { version = "0.2.16", default-features = false, features = [
     "trace",
 ] }
-loom = "0.7.2"
+loom = { version = "0.7.2", features = ["futures"] }
 
 [patch.crates-io]
 core-foundation = { git = "https://github.com/tmandry/core-foundation-rs", branch = "master" }

@@ -130,6 +130,7 @@ pub enum Command {
     Debug,
     Serialize,
     SaveAndExit(PathBuf),
+    Exit,
 }
 
 pub struct Reactor {
@@ -231,11 +232,13 @@ impl Reactor {
         while let Some((span, event)) = events.recv().await {
             let _guard = span.enter();
             record.on_event(&event);
-            self.handle_event(event);
+            if self.handle_event(event) {
+                break;
+            }
         }
     }
 
-    fn handle_event(&mut self, event: Event) {
+    fn handle_event(&mut self, event: Event) -> bool {
         debug!(?event, "Event");
         let mut animation_focus_wid = None;
         let mut is_resize = false;
@@ -309,20 +312,20 @@ impl Reactor {
                     // changed the size or position of this window. Otherwise
                     // we would update the layout model incorrectly.
                     debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
-                    return;
+                    return false;
                 }
                 if requested.0 {
                     // TODO: If the size is different from requested, applying a
                     // correction to the model can result in weird feedback
                     // loops, so we ignore these for now.
-                    return;
+                    return false;
                 }
                 let old_frame = mem::replace(&mut window.frame_monotonic, new_frame);
                 if old_frame == new_frame {
-                    return;
+                    return false;
                 }
-                let Some(screen) = self.main_screen else { return };
-                let Some(space) = screen.space else { return };
+                let Some(screen) = self.main_screen else { return false };
+                let Some(space) = screen.space else { return false };
                 // This event is ignored if the window is not in the layout.
                 if old_frame.size != new_frame.size {
                     self.send_layout_event(LayoutEvent::WindowResized {
@@ -356,13 +359,13 @@ impl Reactor {
             Event::SpaceChanged(spaces, ws_info) => {
                 info!("space changed");
                 let Some(screen) = self.main_screen.as_mut() else {
-                    return;
+                    return false;
                 };
                 screen.space =
                     *spaces.first().expect("Spaces should be non-empty if there is a main screen");
                 let Some(space) = self.main_screen_space() else {
                     // Either the space is disabled or there is no main screen.
-                    return;
+                    return false;
                 };
                 self.send_layout_event(LayoutEvent::SpaceExposed(
                     space,
@@ -405,6 +408,7 @@ impl Reactor {
                     std::process::exit(3);
                 }
             },
+            Event::Command(Command::Exit) => return true,
         }
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(
@@ -415,6 +419,8 @@ impl Reactor {
         if !self.in_drag {
             self.update_layout(animation_focus_wid, is_resize);
         }
+        self.update_layout(animation_focus_wid, is_resize);
+        false
     }
 
     fn update_complete_window_server_info(&mut self, ws_info: Vec<WindowServerInfo>) {

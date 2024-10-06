@@ -21,6 +21,7 @@ thread_local! {
 #[allow(dead_code)]
 pub struct Executor;
 
+#[cfg(not(loom))]
 impl Executor {
     #[allow(dead_code)]
     pub fn run(task: impl Future<Output = ()>) {
@@ -54,6 +55,13 @@ impl Executor {
                 CFRunLoop::run_current();
             }
         })
+    }
+}
+
+#[cfg(loom)]
+impl Executor {
+    pub fn run(task: impl Future<Output = ()>) {
+        loom::future::block_on(task)
     }
 }
 
