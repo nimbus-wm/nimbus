@@ -61,6 +61,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 tracing-timing = { version = "0.6.0", features = ["layer"] }
 tracing-tree = { version = "0.3.0", features = ["time"] }
+loom = { version = "0.7.2", features = ["futures"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
@@ -68,7 +69,6 @@ tokio = { version = "1.35.1", features = ["rt", "sync", "macros"] }
 test-log = { version = "0.2.16", default-features = false, features = [
     "trace",
 ] }
-loom = { version = "0.7.2", features = ["futures"] }
 
 [patch.crates-io]
 core-foundation = { git = "https://github.com/tmandry/core-foundation-rs", branch = "master" }

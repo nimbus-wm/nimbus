@@ -38,17 +38,17 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 pub use crate::system::pid_t;
+use crate::system::WindowServer;
 #[allow(unused_imports)]
 use crate::{
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
         app::{running_apps, NSRunningApplicationExt},
-        event,
         executor::Executor,
         geometry::{ToCGType, ToICrate},
         run_loop::WakeupHandle,
-        window_server::{self, WindowServerId},
+        window_server::WindowServerId,
     },
     system::{prelude::*, AXAttribute, AXUIElement, Id, NSRunningApplication, Observer},
 };
@@ -184,6 +184,7 @@ struct State {
     running_app: Id<NSRunningApplication>,
     app: AXUIElement,
     observer: Observer,
+    window_server: WindowServer,
     events_tx: reactor::Sender,
     windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
@@ -293,7 +294,7 @@ impl State {
             }
             windows.push((wid, info));
         }
-        let window_server_info = window_server::get_windows(&wsids);
+        let window_server_info = self.window_server.get_windows(&wsids);
 
         self.main_window = self.app.main_window().ok().and_then(|w| self.id(&w).ok());
         self.is_frontmost = self.app.frontmost().map(|b| b.into()).unwrap_or(false);
@@ -443,12 +444,12 @@ impl State {
                 let Some((window, wid)) = self.register_window(elem) else {
                     return;
                 };
-                let window_server_info = window_server::get_window(wid.idx.into());
+                let window_server_info = self.window_server.get_window(wid.idx.into());
                 self.send_event(Event::WindowCreated(
                     wid,
                     window,
                     window_server_info,
-                    event::get_mouse_state(),
+                    self.window_server.get_mouse_state(),
                 ));
             }
             kAXUIElementDestroyedNotification => {
@@ -476,7 +477,7 @@ impl State {
                     frame.to_icrate(),
                     last_seen,
                     Requested(false),
-                    Some(event::get_mouse_state()),
+                    Some(self.window_server.get_mouse_state()),
                 ));
             }
             kAXWindowMiniaturizedNotification => {}
@@ -586,12 +587,12 @@ impl State {
                     warn!(?self.pid, "Got MainWindowChanged on unknown window");
                     return None;
                 };
-                let window_server_info = window_server::get_window(wid.idx.into());
+                let window_server_info = self.window_server.get_window(wid.idx.into());
                 self.send_event(Event::WindowCreated(
                     wid,
                     info,
                     window_server_info,
-                    event::get_mouse_state(),
+                    self.window_server.get_mouse_state(),
                 ));
                 wid
             }
@@ -798,6 +799,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         bundle_id: info.bundle_id.clone(),
         app: app.clone(),
         observer,
+        window_server: WindowServer::new(),
         events_tx,
         windows: HashMap::default(),
         last_window_idx: 0,
@@ -926,8 +928,9 @@ mod tests {
         let (requests_tx, requests_rx) = channel();
         let (notifications_tx, notifications_rx) = channel();
 
+        let server = fake::WindowServer::new();
         let observer = FakeObserver::new(notifications_tx);
-        let app = fake::Application::new(observer.clone());
+        let app = fake::Application::new(pid, server.clone(), observer.clone());
         let running_app = Id::new(FakeNSRunningApplication);
 
         let app_actor = State {
@@ -936,6 +939,7 @@ mod tests {
             bundle_id: Some("com.example.test".to_string()),
             app: app.clone().into(),
             observer: observer.clone(),
+            window_server: server,
             events_tx: events_tx.clone(),
             windows: HashMap::default(),
             last_window_idx: 0,
@@ -944,7 +948,7 @@ mod tests {
             is_frontmost: false,
         };
 
-        _ = thread::spawn(move || {
+        let reactor_thread = thread::spawn(move || {
             let reactor = Reactor::new(LayoutManager::new());
             Executor::run(reactor.run(events_rx, Record::new(None)));
         });
@@ -969,13 +973,17 @@ mod tests {
         Executor::run(async {
             let mut updates = observer.updates_rx().unwrap();
             while let Some(()) = updates.recv().await {
-                if dbg!(win.frame().unwrap().to_icrate()) == screen_frame {
+                if win.frame().unwrap().to_icrate() == screen_frame {
                     break;
                 }
             }
         });
 
         _ = requests_tx.send((Span::current(), Request::Terminate));
+        drop(events_tx);
+        reactor_thread.join().unwrap();
+
+        assert_eq!(win.frame().unwrap().to_icrate(), screen_frame);
         // _ = events_tx.send((Span::current(), Event::Command(reactor::Command::Exit)));
     }
 
@@ -985,8 +993,9 @@ mod tests {
         let (events_tx, mut events_rx) = channel();
         let (notifications_tx, _notifications_rx) = channel();
 
+        let server = fake::WindowServer::new();
         let observer = FakeObserver::new(notifications_tx);
-        let app = fake::Application::new(observer.clone());
+        let app = fake::Application::new(pid, server.clone(), observer.clone());
         let running_app = Id::new(FakeNSRunningApplication);
 
         let state = Rc::new(RefCell::new(State {
@@ -995,6 +1004,7 @@ mod tests {
             bundle_id: Some("com.example.test".to_string()),
             app: app.clone().into(),
             observer,
+            window_server: server,
             events_tx,
             windows: HashMap::default(),
             last_window_idx: 0,

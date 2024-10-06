@@ -36,7 +36,10 @@ impl<'a> Animation<'a> {
         Animation {
             start: now, // + interval, // not necessary, provide one extra frame to get things going
             interval,
+            #[cfg(not(loom))]
             frames: (DURATION * FPS).round() as u32,
+            #[cfg(loom)]
+            frames: 2,
             windows: vec![],
         }
     }
@@ -59,7 +62,7 @@ impl<'a> Animation<'a> {
         }
 
         for &(handle, wid, from, to, is_focus, txid) in &self.windows {
-            handle.send(Request::BeginWindowAnimation(wid)).unwrap();
+            _ = handle.send(Request::BeginWindowAnimation(wid));
             // Resize new windows immediately.
             if is_focus {
                 let frame = CGRect {
@@ -84,7 +87,10 @@ impl<'a> Animation<'a> {
             if duration < Duration::ZERO {
                 continue;
             }
+            #[cfg(not(loom))]
             thread::sleep(duration);
+            #[cfg(loom)]
+            loom::thread::yield_now();
 
             for (&(handle, wid, _, to, _, txid), rect) in self.windows.iter().zip(&next_frames) {
                 let mut rect = *rect;
@@ -93,15 +99,15 @@ impl<'a> Animation<'a> {
                 // clipped during the animation.
                 if frame * 2 == self.frames || frame == self.frames {
                     rect.size = to.size;
-                    handle.send(Request::SetWindowFrame(wid, rect, txid)).unwrap();
+                    _ = handle.send(Request::SetWindowFrame(wid, rect, txid));
                 } else {
-                    handle.send(Request::SetWindowPos(wid, rect.origin, txid)).unwrap();
+                    _ = handle.send(Request::SetWindowPos(wid, rect.origin, txid));
                 }
             }
         }
 
         for &(handle, wid, _, _, _, _) in &self.windows {
-            handle.send(Request::EndWindowAnimation(wid)).unwrap();
+            _ = handle.send(Request::EndWindowAnimation(wid));
         }
     }
 
