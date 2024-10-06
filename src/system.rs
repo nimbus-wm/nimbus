@@ -7,6 +7,7 @@ mod attribute;
 pub mod fake;
 
 use attribute::AXUIElementAttributes as _;
+use core_graphics::display::CGWindowID;
 
 use std::fmt::Debug;
 
@@ -17,8 +18,10 @@ use icrate::Foundation::CGRect;
 use serde::{Deserialize, Serialize};
 
 use crate::sys::{
+    self,
+    event::MouseState,
     geometry::{CGRectDef, ToICrate},
-    window_server::WindowServerId,
+    window_server::{WindowServerId, WindowServerInfo},
 };
 
 pub mod prelude {
@@ -156,5 +159,28 @@ impl TryFrom<&AXUIElement> for WindowInfo {
             frame: element.frame()?.to_icrate(),
             sys_id: WindowServerId::try_from(element).ok(),
         })
+    }
+}
+
+pub use crate::sys::window_server;
+
+#[cfg(not(test))]
+pub struct WindowServer;
+#[cfg(test)]
+pub type WindowServer = fake::FakeWindowServer;
+
+#[cfg(not(test))]
+impl WindowServer {
+    pub fn new() -> Self {
+        Self
+    }
+    pub fn get_window(&self, id: CGWindowID) -> Option<WindowServerInfo> {
+        sys::window_server::get_window(id)
+    }
+    pub fn get_windows(&self, ids: &[CGWindowID]) -> Vec<WindowServerInfo> {
+        sys::window_server::get_windows(ids)
+    }
+    pub fn get_mouse_state(&self) -> MouseState {
+        sys::event::get_mouse_state()
     }
 }
