@@ -36,15 +36,12 @@ use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 pub use crate::system::pid_t;
 use crate::system::WindowServer;
-#[allow(unused_imports)]
 use crate::{
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
-        app::{running_apps, NSRunningApplicationExt},
         executor::Executor,
         geometry::{ToCGType, ToICrate},
-        run_loop::WakeupHandle,
         window_server::WindowServerId,
     },
     system::sync::{
@@ -162,7 +159,7 @@ impl RaiseToken {
 
 #[cfg(not(test))]
 pub fn spawn_initial_app_threads(events_tx: reactor::Sender) {
-    for (pid, info) in running_apps(None) {
+    for (pid, info) in crate::sys::app::running_apps(None) {
         spawn_app_thread(pid, info, events_tx.clone());
     }
 }
