@@ -41,6 +41,11 @@ pub type Id<T> = icrate::objc2::rc::Id<T>;
 #[cfg(test)]
 pub type Id<T> = std::sync::Arc<T>;
 
+#[cfg(loom)]
+pub use loom::sync;
+#[cfg(not(loom))]
+pub use std::sync;
+
 #[cfg(not(test))]
 pub type NSRunningApplication = icrate::AppKit::NSRunningApplication;
 #[cfg(test)]

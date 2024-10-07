@@ -8,10 +8,7 @@ use std::{
     hash::Hash,
     ops::Deref,
     panic::Location,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+    sync::Arc,
 };
 
 use accessibility::value::{AXValue, AXValueKind};
@@ -32,6 +29,10 @@ use tokio::sync::mpsc::{
 use tracing::info;
 
 use crate::sys::{event::MouseState, geometry::ToICrate};
+use crate::system::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, MutexGuard,
+};
 
 use super::{
     pid_t, window_server::WindowServerInfo, AXAttribute, AXUIElement, Error, Result, WindowServerId,
