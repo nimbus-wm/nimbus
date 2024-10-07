@@ -7,10 +7,7 @@
 use std::{
     fmt::Debug,
     num::NonZeroU32,
-    sync::{
-        atomic::{AtomicI32, Ordering},
-        Arc, Mutex,
-    },
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -49,6 +46,10 @@ use crate::{
         geometry::{ToCGType, ToICrate},
         run_loop::WakeupHandle,
         window_server::WindowServerId,
+    },
+    system::sync::{
+        atomic::{AtomicI32, Ordering},
+        Mutex,
     },
     system::{prelude::*, AXAttribute, AXUIElement, Id, NSRunningApplication, Observer},
 };
