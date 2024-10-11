@@ -84,6 +84,8 @@ impl MainWindowTracker {
             | Event::SpaceChanged(_, _)
             | Event::MouseUp
             | Event::Command(_) => return None,
+            #[cfg(test)]
+            Event::Flushed(_, _) => return None,
         };
         if Some(event_pid) == self.global_frontmost && quiet_edge == Quiet::No {
             if let Some(wid) = self.main_window() {

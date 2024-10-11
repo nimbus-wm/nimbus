@@ -16,7 +16,10 @@ use main_window::MainWindowTracker;
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use tokio::sync::{mpsc::unbounded_channel, oneshot};
+use tokio::sync::{
+    mpsc::{self, unbounded_channel},
+    oneshot,
+};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
@@ -35,8 +38,8 @@ use crate::{
     },
 };
 
-pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Event)>;
-type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, Event)>;
+pub type Sender = mpsc::UnboundedSender<(Span, Event)>;
+type Receiver = mpsc::UnboundedReceiver<(Span, Event)>;
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug)]
@@ -118,6 +121,9 @@ pub enum Event {
     MouseUp,
 
     Command(Command),
+
+    #[cfg(test)]
+    Flushed(pid_t, #[serde(skip)] Option<mpsc::UnboundedSender<pid_t>>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -131,6 +137,9 @@ pub enum Command {
     Serialize,
     SaveAndExit(PathBuf),
     Exit,
+
+    #[cfg(test)]
+    Flush(pid_t, #[serde(skip)] Option<mpsc::UnboundedSender<pid_t>>),
 }
 
 pub struct Reactor {
@@ -409,6 +418,12 @@ impl Reactor {
                 }
             },
             Event::Command(Command::Exit) => return true,
+            #[cfg(test)]
+            Event::Command(Command::Flush(pid, sender)) => {
+                self.apps[&pid].handle.send(Request::Flush(pid, sender)).unwrap();
+            }
+            #[cfg(test)]
+            Event::Flushed(pid, sender) => sender.unwrap().send(pid).unwrap(),
         }
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(
@@ -757,6 +772,7 @@ pub mod tests {
                     ));
                 }
                 Request::Raise(_, _, _, _) => todo!(),
+                Request::Flush(_, _) => todo!(),
             }
         }
 

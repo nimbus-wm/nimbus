@@ -24,7 +24,7 @@ use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
 use core_graphics::display::{CGPoint, CGRect, CGSize};
 use icrate::AppKit::NSApplicationActivationOptions;
 use tokio::sync::mpsc::{
-    unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
+    self, unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
 };
 use tracing::info;
 
@@ -40,9 +40,11 @@ use super::{
 
 pub type FakeWindowServer = Ptr<WindowServer>;
 
+pub const FLUSH_NOTIFICATION: &'static str = "Flush";
+
 #[derive(Default, Debug)]
 pub struct WindowServer {
-    apps: Vec<Weak<Application>>,
+    apps: HashMap<pid_t, Weak<Application>>,
     windows: HashMap<u32, Weak<Window>>,
     last_id: u32,
 }
@@ -82,6 +84,10 @@ impl FakeWindowServer {
 
     pub fn get_mouse_state(&self) -> MouseState {
         MouseState::Up
+    }
+
+    pub fn flush(&self, pid: pid_t, tx: Sender<pid_t>) {
+        self.lock().apps[&pid].upgrade().unwrap().flush(tx)
     }
 }
 
@@ -211,7 +217,7 @@ impl Application {
             frontmost_id: None,
             connection: Connection::new(server.clone(), observer),
         });
-        server.lock().apps.push(Ptr::downgrade(&this));
+        server.lock().apps.insert(pid, Ptr::downgrade(&this));
         this
     }
 }
@@ -238,6 +244,11 @@ impl Ptr<Application> {
 
     pub fn terminate_abruptly(&self) {
         self.lock().connection.terminate()
+    }
+
+    pub fn flush(&self, tx: Sender<pid_t>) {
+        let this = self.lock();
+        this.connection.observer.flush(tx, &self.clone().into())
     }
 }
 
@@ -616,13 +627,15 @@ pub struct FakeObserver(Arc<Mutex<FakeObserverInner>>);
 struct FakeObserverInner {
     // TODO: Arc cycle
     subscriptions: HashMap<ElementId, HashSet<&'static str>>,
-    notifications_tx: Sender<(AXUIElement, String)>,
+    notifications_tx: Sender<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
     updates_tx: Sender<()>,
     updates_rx: Option<Receiver<()>>,
 }
 
 impl FakeObserver {
-    pub fn new(notifications_tx: Sender<(AXUIElement, String)>) -> Self {
+    pub fn new(
+        notifications_tx: Sender<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
+    ) -> Self {
         let (updates_tx, updates_rx) = channel();
         Self(Arc::new(Mutex::new(FakeObserverInner {
             subscriptions: HashMap::default(),
@@ -658,10 +671,23 @@ impl FakeObserver {
         let this = self.lock();
         if let Some(subscriptions) = this.subscriptions.get(&elem.id()) {
             if subscriptions.contains(&notification) {
-                _ = this.notifications_tx.send((target.clone().into(), notification.to_owned()));
+                _ = this.notifications_tx.send((
+                    target.clone().into(),
+                    notification.to_owned(),
+                    None,
+                ));
             }
         }
         _ = this.updates_tx.send(());
+    }
+
+    fn flush(&self, tx: Sender<pid_t>, target: &FakeAXUIElement) {
+        let this = self.lock();
+        _ = this.notifications_tx.send((
+            target.clone().into(),
+            FLUSH_NOTIFICATION.to_owned(),
+            Some(tx),
+        ));
     }
 
     fn lock(&self) -> MutexGuard<'_, FakeObserverInner> {
@@ -670,11 +696,15 @@ impl FakeObserver {
 
     fn pending_notifications(
         &self,
-        notifications_rx: &mut Receiver<(AXUIElement, String)>,
+        notifications_rx: &mut Receiver<(
+            AXUIElement,
+            String,
+            Option<mpsc::UnboundedSender<pid_t>>,
+        )>,
     ) -> Vec<(AXUIElement, String)> {
         let mut notifs = Vec::new();
-        while let Ok(notif) = notifications_rx.try_recv() {
-            notifs.push(notif)
+        while let Ok((elem, notif, _)) = notifications_rx.try_recv() {
+            notifs.push((elem, notif))
         }
         notifs
     }

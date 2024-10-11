@@ -27,7 +27,8 @@ use icrate::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{
     mpsc::{
-        unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
+        self, unbounded_channel as channel, UnboundedReceiver as Receiver,
+        UnboundedSender as Sender,
     },
     oneshot,
 };
@@ -117,6 +118,9 @@ pub enum Request {
     /// Events attributed to this request will have the [`Quiet`] parameter
     /// attached to them.
     Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>, Quiet),
+
+    #[cfg(test)]
+    Flush(pid_t, Option<Sender<pid_t>>),
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -222,7 +226,7 @@ impl State {
         info: AppInfo,
         requests_tx: Sender<(Span, Request)>,
         requests_rx: Receiver<(Span, Request)>,
-        notifications_rx: Receiver<(AXUIElement, String)>,
+        notifications_rx: Receiver<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
     ) {
         let handle = AppThreadHandle { requests_tx };
         if !self.init(handle, info) {
@@ -230,7 +234,7 @@ impl State {
         }
 
         pub enum Incoming {
-            Notification((AXUIElement, String)),
+            Notification((AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)),
             Request((Span, Request)),
         }
 
@@ -252,8 +256,8 @@ impl State {
                         }
                     }
                 }
-                Incoming::Notification((elem, notif)) => {
-                    self.handle_notification(elem, &notif);
+                Incoming::Notification((elem, notif, flusher)) => {
+                    self.handle_notification(elem, &notif, flusher);
                 }
             }
         }
@@ -417,12 +421,22 @@ impl State {
             &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
                 self.handle_raise_request(wid, token, done, quiet)?;
             }
+            #[cfg(test)]
+            Request::Flush(pid, sender) => {
+                // This is an endpoint because all fakes have been updated synchronously.
+                sender.as_mut().unwrap().send(*pid).unwrap();
+            }
         }
         Ok(false)
     }
 
     #[instrument(skip_all, fields(app = ?self.app, ?notif))]
-    fn handle_notification(&mut self, elem: AXUIElement, notif: &str) {
+    fn handle_notification(
+        &mut self,
+        elem: AXUIElement,
+        notif: &str,
+        _flusher: Option<mpsc::UnboundedSender<pid_t>>,
+    ) {
         trace!(?notif, ?elem, "Got notification");
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
@@ -481,6 +495,10 @@ impl State {
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}
             kAXTitleChangedNotification => {}
+            #[cfg(test)]
+            crate::system::fake::FLUSH_NOTIFICATION => {
+                self.send_event(Event::Flushed(self.pid, _flusher));
+            }
             _ => {
                 error!("Unhandled notification {notif:?} on {elem:#?}");
             }
@@ -787,8 +805,9 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         return;
     };
     let (notifications_tx, notifications_rx) = channel();
-    let observer = observer
-        .install(move |elem, notif| _ = notifications_tx.send((elem.into(), notif.to_owned())));
+    let observer = observer.install(move |elem, notif| {
+        _ = notifications_tx.send((elem.into(), notif.to_owned(), None))
+    });
 
     // Create our app state.
     let state = State {
