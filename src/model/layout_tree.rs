@@ -25,36 +25,6 @@ pub struct LayoutTree {
     layout_roots: slotmap::SlotMap<LayoutId, OwnedNode>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct Components {
-    selection: Selection,
-    layout: Layout,
-    window: Window,
-}
-
-#[derive(Copy, Clone)]
-pub(super) enum TreeEvent {
-    /// A node was added to the forest.
-    AddedToForest(NodeId),
-    /// A node was added to its parent. Note that the node may have existed in
-    /// the tree previously under a different parent.
-    AddedToParent(NodeId),
-    /// A node has been copied from one tree to another.
-    ///
-    /// The destination node will have the same number of parents, siblings,
-    /// and children as the source. No other events will fire on this node
-    /// until the tree structure changes.
-    Copied {
-        src: NodeId,
-        dest: NodeId,
-        dest_layout: LayoutId,
-    },
-    /// A node will be removed from its parent.
-    RemovingFromParent(NodeId),
-    /// A node was removed from the forest.
-    RemovedFromForest(NodeId),
-}
-
 slotmap::new_key_type! {
     pub struct LayoutId;
 }
@@ -555,6 +525,36 @@ impl Drop for LayoutTree {
             mem::forget(node);
         }
     }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct Components {
+    selection: Selection,
+    layout: Layout,
+    window: Window,
+}
+
+#[derive(Copy, Clone)]
+pub(super) enum TreeEvent {
+    /// A node was added to the forest.
+    AddedToForest(NodeId),
+    /// A node was added to its parent. Note that the node may have existed in
+    /// the tree previously under a different parent.
+    AddedToParent(NodeId),
+    /// A node has been copied from one tree to another.
+    ///
+    /// The destination node will have the same number of parents, siblings,
+    /// and children as the source. No other events will fire on this node
+    /// until the tree structure changes.
+    Copied {
+        src: NodeId,
+        dest: NodeId,
+        dest_layout: LayoutId,
+    },
+    /// A node will be removed from its parent.
+    RemovingFromParent(NodeId),
+    /// A node was removed from the forest.
+    RemovedFromForest(NodeId),
 }
 
 impl Components {
