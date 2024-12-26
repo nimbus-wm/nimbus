@@ -22,10 +22,10 @@ impl<O: Observer> Tree<O> {
         Tree { map: NodeMap::new(), data }
     }
 
-    pub fn mk_node(&mut self) -> DetachedNode<O> {
+    pub fn mk_node(&mut self) -> UnattachedNode<O> {
         let id = self.map.map.insert(Node::default());
         self.data.added_to_forest(&self.map, id);
-        DetachedNode { id, tree: self }
+        UnattachedNode { id, tree: self }
     }
 }
 
@@ -98,14 +98,18 @@ impl OwnedNode {
     }
 
     #[track_caller]
-    pub fn remove(&mut self, map: &mut Tree<impl Observer>) {
-        self.0.take().unwrap().detach(map).remove()
+    pub fn remove(&mut self, tree: &mut Tree<impl Observer>) {
+        UnattachedNode {
+            id: self.0.take().unwrap(),
+            tree,
+        }
+        .remove()
     }
 
     #[track_caller]
-    pub fn replace<'a, O>(&mut self, new: DetachedNode<'a, O>) -> DetachedNode<'a, O> {
+    pub fn replace<'a, O>(&mut self, new: UnattachedNode<'a, O>) -> UnattachedNode<'a, O> {
         let id = self.0.replace(new.id).expect("Can't replace removed node");
-        DetachedNode { id, ..new }
+        UnattachedNode { id, ..new }
     }
 }
 
@@ -202,7 +206,7 @@ impl NodeId {
     ///
     /// This method does not call observer events on the created nodes.
     #[track_caller]
-    pub fn deep_copy<O: Observer>(self, tree: &mut Tree<O>) -> DetachedNode<O> {
+    pub fn deep_copy<O: Observer>(self, tree: &mut Tree<O>) -> UnattachedNode<O> {
         let new_root = tree.mk_node().id;
         let mut stack = vec![(self, new_root)];
         let preorder = self.traverse_preorder(&tree.map).skip(1).collect::<Vec<_>>();
@@ -214,7 +218,7 @@ impl NodeId {
             let new = tree.mk_node().push_back(parent);
             stack.push((old, new));
         }
-        DetachedNode { id: new_root, tree }
+        UnattachedNode { id: new_root, tree }
     }
 
     #[track_caller]
@@ -262,34 +266,76 @@ impl Observer for () {
     fn removed_from_forest(&mut self, _forest: &NodeMap, _node: NodeId) {}
 }
 
-#[must_use = "Detached nodes should be inserted into the tree or created as a root with OwnedNode"]
-pub struct DetachedNode<'a, O> {
+#[must_use = "Unattached nodes should be inserted into the tree or created as a root with OwnedNode"]
+pub struct UnattachedNode<'a, O> {
     // Nothing prevents this from being public, just haven't needed it yet.
     id: NodeId,
     tree: &'a mut Tree<O>,
 }
 
-impl<'a, O: Observer> DetachedNode<'a, O> {
+impl<'a, O: Observer> UnattachedNode<'a, O> {
     pub(super) fn make_root(self, name: &'static str) -> OwnedNode {
         OwnedNode::own(self.id, name)
     }
+}
+
+impl<'a, O: Observer> UnattachedNode<'a, O> {
+    #[track_caller]
+    pub(super) fn push_back(self, parent: NodeId) -> NodeId {
+        self.attach_with(|this| this.id.link_under_back(parent, &mut this.tree.map))
+    }
 
     #[track_caller]
-    pub(super) fn push_back(mut self, parent: NodeId) -> NodeId {
+    pub(super) fn push_front(self, parent: NodeId) -> NodeId {
+        self.attach_with(|this| this.id.link_under_front(parent, &mut this.tree.map))
+    }
+
+    #[track_caller]
+    pub(super) fn insert_before(self, sibling: NodeId) -> NodeId {
+        self.attach_with(|this| this.id.link_before(sibling, &mut this.tree.map))
+    }
+
+    #[track_caller]
+    pub(super) fn insert_after(self, sibling: NodeId) -> NodeId {
+        self.attach_with(|this| this.id.link_after(sibling, &mut this.tree.map))
+    }
+
+    #[track_caller]
+    pub(super) fn remove(self) {
+        debug_assert!(self.id.parent(&self.tree.map).is_none());
+        self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree, self.id);
+    }
+
+    fn attach_with(mut self, attach: impl FnOnce(&mut Self)) -> NodeId {
+        attach(&mut self);
+        self.tree.data.added_to_parent(&self.tree.map, self.id);
+        self.id
+    }
+}
+
+#[must_use = "Detached nodes should be reattached to the tree or removed"]
+pub struct DetachedNode<'a, O> {
+    id: NodeId,
+    tree: &'a mut Tree<O>,
+}
+
+impl<'a, O: Observer> DetachedNode<'a, O> {
+    #[track_caller]
+    pub(super) fn push_back(self, parent: NodeId) -> ReattachedNode<'a, O> {
         self.attach_with(parent, |this| {
             this.id.link_under_back(parent, &mut this.tree.map)
         })
     }
 
     #[track_caller]
-    pub(super) fn push_front(mut self, parent: NodeId) -> NodeId {
+    pub(super) fn push_front(self, parent: NodeId) -> ReattachedNode<'a, O> {
         self.attach_with(parent, |this| {
             this.id.link_under_front(parent, &mut this.tree.map)
         })
     }
 
     #[track_caller]
-    pub(super) fn insert_before(mut self, sibling: NodeId) -> NodeId {
+    pub(super) fn insert_before(self, sibling: NodeId) -> ReattachedNode<'a, O> {
         let new_parent =
             sibling.parent(&self.tree.map).expect("cannot make a sibling of a root node");
         self.attach_with(new_parent, |this| {
@@ -298,7 +344,7 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
     }
 
     #[track_caller]
-    pub(super) fn insert_after(mut self, sibling: NodeId) -> NodeId {
+    pub(super) fn insert_after(self, sibling: NodeId) -> ReattachedNode<'a, O> {
         let new_parent =
             sibling.parent(&self.tree.map).expect("cannot make a sibling of a root node");
         self.attach_with(new_parent, |this| {
@@ -308,35 +354,58 @@ impl<'a, O: Observer> DetachedNode<'a, O> {
 
     #[track_caller]
     pub(super) fn remove(self) {
-        let parent = self.id.parent(&self.tree.map);
-        if parent.is_some() {
-            self.tree.data.removing_from_parent(&self.tree.map, self.id);
-        }
+        let parent = self.id.parent(&self.tree.map).unwrap();
+        self.tree.data.removing_from_parent(&self.tree.map, self.id);
         self.tree.map.unlink(self.id);
-        if let Some(parent) = parent {
-            O::removed_child(self.tree, parent);
-        }
+        O::removed_child(self.tree, parent);
         self.tree.map.map.remove(self.id).unwrap().delete_recursive(self.tree, self.id);
     }
 
     fn attach_with(
-        &mut self,
+        mut self,
         new_parent: NodeId,
-        attach: impl FnOnce(&mut DetachedNode<O>),
-    ) -> NodeId {
-        let old_parent = self.id.parent(&self.tree.map);
-        if old_parent.is_some() && old_parent != Some(new_parent) {
+        attach: impl FnOnce(&mut Self),
+    ) -> ReattachedNode<'a, O> {
+        let old_parent = self.id.parent(&self.tree.map).unwrap();
+        if old_parent != new_parent {
             self.tree.data.removing_from_parent(&self.tree.map, self.id);
         }
         self.tree.map.unlink(self.id);
-        attach(self);
-        if old_parent != Some(new_parent) {
+        attach(&mut self);
+        if old_parent != new_parent {
             self.tree.data.added_to_parent(&self.tree.map, self.id);
-            if let Some(parent) = old_parent {
-                O::removed_child(self.tree, parent);
-            }
         }
-        self.id
+        ReattachedNode {
+            detached: self,
+            old_parent,
+            new_parent,
+        }
+    }
+}
+
+pub struct ReattachedNode<'a, O: Observer> {
+    detached: DetachedNode<'a, O>,
+    old_parent: NodeId,
+    new_parent: NodeId,
+}
+
+impl<'a, O: Observer> ReattachedNode<'a, O> {
+    pub(super) fn with(self, f: impl FnOnce(NodeId, &mut Tree<O>)) -> Self {
+        f(self.detached.id, self.detached.tree);
+        self
+    }
+
+    pub(super) fn finish(self) -> NodeId {
+        self.detached.id
+        // self is dropped at the end of the scope.
+    }
+}
+
+impl<'a, O: Observer> Drop for ReattachedNode<'a, O> {
+    fn drop(&mut self) {
+        if self.old_parent != self.new_parent {
+            O::removed_child(self.detached.tree, self.old_parent);
+        }
     }
 }
 
@@ -655,12 +724,12 @@ mod tests {
 
         #[track_caller]
         fn assert_events_are<const N: usize>(&mut self, events: [TreeEvent; N]) {
-            self.assert_events_are_inner(&events);
+            Self::assert_events_are_inner(&mut self.tree, &events);
         }
 
         #[track_caller]
-        fn assert_events_are_inner(&mut self, events: &[TreeEvent]) {
-            let actual: Vec<_> = self.tree.data.0.drain(..).collect();
+        fn assert_events_are_inner(tree: &mut Tree<Events>, events: &[TreeEvent]) {
+            let actual: Vec<_> = tree.data.0.drain(..).collect();
             pretty_assertions::assert_eq!(events, actual);
         }
 
@@ -916,14 +985,22 @@ mod tests {
         t.assert_children_are([t.child1, t.child2, t.child3], t.root);
         t.assert_events_are([]);
 
-        t.child2.detach(&mut t.tree).push_back(t.child1);
-        t.assert_children_are([t.child1, t.child3], t.root);
-        t.assert_children_are([t.child2], t.child1);
+        t.child2.detach(&mut t.tree).push_back(t.child1).with(|_id, tree| {
+            TestTree::assert_events_are_inner(
+                tree,
+                &[
+                    // These events happen before the operation is finished.
+                    RemovingFromParent(t.child2, t.root),
+                    AddedToParent(t.child2),
+                ],
+            );
+        });
         t.assert_events_are([
-            RemovingFromParent(t.child2, t.root),
-            AddedToParent(t.child2),
+            // Only added after the operation is finished.
             RemovedChild(t.root),
         ]);
+        t.assert_children_are([t.child1, t.child3], t.root);
+        t.assert_children_are([t.child2], t.child1);
 
         t.child2.detach(&mut t.tree).insert_after(t.child1);
         t.assert_children_are([t.child1, t.child2, t.child3], t.root);

@@ -579,11 +579,25 @@ impl tree::Observer for Components {
     }
 
     fn removed_child(tree: &mut Tree<Self>, parent: NodeId) {
-        // parent must be a container, or it wouldn't have had a child in the first place.
-        // Cull it if it's empty.
-        // Don't cull the root node, which would require extra bookkeeping.
-        if parent.is_empty(&tree.map) && parent.parent(&tree.map).is_some() {
-            parent.detach(tree).remove()
+        // Decide whether to cull the parent node (which must be a container).
+        if parent.parent(&tree.map).is_none() {
+            // Don't cull the root node, which would require extra bookkeeping.
+            return;
+        }
+        if parent.is_empty(&tree.map) {
+            parent.detach(tree).remove();
+        } else if parent.first_child(&tree.map) == parent.last_child(&tree.map) {
+            // Promote the only remaining child of the parent node.
+            let child = parent.first_child(&tree.map).unwrap();
+            child
+                .detach(tree)
+                .insert_after(parent)
+                .with(|child_id, tree| {
+                    // Assume the size of the parent before culling it.
+                    tree.data.layout.assume_size_of(child_id, parent, &tree.map)
+                })
+                // Notify that the child was removed; this will cull the parent.
+                .finish();
         }
     }
 
@@ -781,16 +795,88 @@ mod tests {
         tree.move_node(layout, b1, Direction::Up);
         let (old_root, root) = (root, tree.root(layout));
         tree.assert_children_are([b1, old_root], root);
-        tree.assert_children_are([b2, a2, a3, a1], old_root);
+        tree.assert_children_are([b2, b3, a3, a1], old_root);
         assert_eq!(LayoutKind::Vertical, tree.layout(root));
         assert_eq!(a3, tree.selection(layout));
         assert_eq!(Some(b1), tree.window_node(layout, WindowId::new(2, 1)));
 
-        // a2 is culled when its last child moves out of it.
-        tree.move_node(layout, b3, Direction::Right);
-        tree.assert_children_are([b2, b3, a3, a1], old_root);
-
         assert!(!tree.move_node(layout, root, Direction::Right));
+    }
+
+    #[test]
+    fn move_node_removes_unnecessary_containers() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
+        let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
+        let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
+        tree.assert_children_are([a1, a2, a3], root);
+
+        // Ths resize should not affect the final size, because when the b nodes
+        // are reparented they lose their original size.
+        tree.resize(b2, 0.10, Direction::Left);
+
+        tree.move_node(layout, b2, Direction::Right);
+        tree.assert_children_are([a1, b1, b2, a3], root);
+        let screen = rect(0, 0, 1000, 1000);
+        assert_frames_are(
+            tree.calculate_layout(layout, screen),
+            vec![
+                (WindowId::new(1, 1), rect(0, 0, 250, 1000)),
+                (WindowId::new(2, 1), rect(250, 0, 250, 1000)),
+                (WindowId::new(2, 2), rect(500, 0, 250, 1000)),
+                (WindowId::new(1, 3), rect(750, 0, 250, 1000)),
+            ],
+        );
+    }
+
+    #[test]
+    fn move_node_removes_empty_containers() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
+        let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
+        tree.assert_children_are([a1, a2, a3], root);
+
+        tree.move_node(layout, b1, Direction::Right);
+        tree.assert_children_are([a1, b1, a3], root);
+    }
+
+    #[test]
+    fn remove_window_removes_unnecessary_containers() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
+        let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
+        let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
+        tree.assert_children_are([a1, a2, a3], root);
+
+        tree.remove_window(WindowId::new(2, 1));
+        tree.assert_children_are([a1, b2, a3], root);
+    }
+
+    #[test]
+    fn remove_window_removes_empty_containers() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
+        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
+        let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
+        tree.assert_children_are([a1, a2, a3], root);
+
+        tree.remove_window(WindowId::new(2, 1));
+        tree.assert_children_are([a1, a3], root);
     }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
