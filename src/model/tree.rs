@@ -674,6 +674,7 @@ mod tests {
         AddedToForest(NodeId),
         AddedToParent(NodeId),
         RemovingFromParent(NodeId, NodeId),
+        RemovedChild(NodeId),
         RemovedFromForest(NodeId),
     }
     use TreeEvent::*;
@@ -690,8 +691,8 @@ mod tests {
         fn removing_from_parent(&mut self, map: &NodeMap, node: NodeId) {
             self.0.push(RemovingFromParent(node, node.parent(map).unwrap()))
         }
-        fn removed_child(_tree: &mut Tree<Self>, _parent: NodeId) {
-            // TODO
+        fn removed_child(tree: &mut Tree<Self>, parent: NodeId) {
+            tree.data.0.push(RemovedChild(parent))
         }
         fn removed_from_forest(&mut self, _map: &NodeMap, node: NodeId) {
             self.0.push(RemovedFromForest(node))
@@ -869,6 +870,7 @@ mod tests {
         assert!(!t.tree.map.map.contains_key(t.gc1));
         t.assert_events_are([
             RemovingFromParent(t.child2, t.root),
+            RemovedChild(t.root),
             RemovedFromForest(t.child2),
             RemovedFromForest(t.gc1),
         ]);
@@ -878,6 +880,7 @@ mod tests {
         assert!(!t.tree.map.map.contains_key(t.child3));
         t.assert_events_are([
             RemovingFromParent(t.child3, t.root),
+            RemovedChild(t.root),
             RemovedFromForest(t.child3),
         ]);
 
@@ -886,6 +889,7 @@ mod tests {
         assert!(!t.tree.map.map.contains_key(t.child1));
         t.assert_events_are([
             RemovingFromParent(t.child1, t.root),
+            RemovedChild(t.root),
             RemovedFromForest(t.child1),
         ]);
 
@@ -918,6 +922,7 @@ mod tests {
         t.assert_events_are([
             RemovingFromParent(t.child2, t.root),
             AddedToParent(t.child2),
+            RemovedChild(t.root),
         ]);
 
         t.child2.detach(&mut t.tree).insert_after(t.child1);
@@ -926,6 +931,7 @@ mod tests {
         t.assert_events_are([
             RemovingFromParent(t.child2, t.child1),
             AddedToParent(t.child2),
+            RemovedChild(t.child1),
         ]);
 
         t.child3.detach(&mut t.tree).push_back(t.child2);
@@ -934,6 +940,7 @@ mod tests {
         t.assert_events_are([
             RemovingFromParent(t.child3, t.root),
             AddedToParent(t.child3),
+            RemovedChild(t.root),
         ]);
 
         t.child3.detach(&mut t.tree).insert_after(t.child2);
@@ -942,6 +949,7 @@ mod tests {
         t.assert_events_are([
             RemovingFromParent(t.child3, t.child2),
             AddedToParent(t.child3),
+            RemovedChild(t.child2),
         ]);
     }
 }
