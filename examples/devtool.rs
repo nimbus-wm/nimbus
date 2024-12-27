@@ -288,9 +288,10 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     let (sender, mut receiver) = mpsc::unbounded_channel();
     for (pid, bundle_id) in app::running_apps(opt.bundle.clone()) {
         let sender = sender.clone();
+        let verbose = opt.verbose;
         let task = move || {
             let app = AXUIElement::application(pid);
-            let windows = get_windows_for_app(app);
+            let windows = get_windows_for_app(app, verbose);
             sender.send((bundle_id, windows)).unwrap()
         };
         if serial {
@@ -305,8 +306,11 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
         match windows {
             Ok(windows) => {
                 if print {
-                    for win in windows {
+                    for (win, dbg) in windows {
                         println!("{win:?} from {}", info.bundle_id.as_deref().unwrap_or("?"));
+                        if opt.verbose {
+                            println!("=> {dbg}");
+                        }
                     }
                 }
             }
@@ -315,11 +319,22 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     }
 }
 
-fn get_windows_for_app(app: AXUIElement) -> Result<Vec<app::WindowInfo>, accessibility::Error> {
+fn get_windows_for_app(
+    app: AXUIElement,
+    verbose: bool,
+) -> Result<Vec<(app::WindowInfo, String)>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
-    windows.into_iter().map(|win| app::WindowInfo::try_from(&*win)).collect()
+    windows
+        .into_iter()
+        .map(|win| {
+            Ok((
+                app::WindowInfo::try_from(&*win)?,
+                verbose.then(|| format!("{:#?}", &*win)).unwrap_or_default(),
+            ))
+        })
+        .collect()
 }
 
 fn get_apps(opt: &Opt) {
