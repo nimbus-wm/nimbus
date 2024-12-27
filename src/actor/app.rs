@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
+use accessibility::{AXAttribute, AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
     kAXMainWindowChangedNotification, kAXTitleChangedNotification,
@@ -22,7 +22,7 @@ use accessibility_sys::{
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
 };
-use core_foundation::runloop::CFRunLoop;
+use core_foundation::{runloop::CFRunLoop, string::CFString};
 use icrate::{
     objc2::{class, msg_send_id, rc::Id},
     AppKit::{NSApplicationActivationOptions, NSRunningApplication},
@@ -277,10 +277,7 @@ impl State {
         for elem in initial_window_elements.iter() {
             let elem = elem.clone();
             let wsid = WindowServerId::try_from(&elem).ok();
-            let Ok(info) = WindowInfo::try_from(&elem) else {
-                continue;
-            };
-            let Some(wid) = self.register_window(elem) else {
+            let Some((info, wid)) = self.register_window(elem) else {
                 continue;
             };
             if let Some(wsid) = wsid {
@@ -348,10 +345,7 @@ impl State {
                         known_visible.push(id);
                         continue;
                     }
-                    let Ok(info) = WindowInfo::try_from(&elem) else {
-                        continue;
-                    };
-                    let Some(wid) = self.register_window(elem) else {
+                    let Some((info, wid)) = self.register_window(elem) else {
                         continue;
                     };
                     new.push((wid, info));
@@ -438,10 +432,7 @@ impl State {
                     // We already registered this window because of an earlier event.
                     return;
                 }
-                let Ok(window) = WindowInfo::try_from(&elem) else {
-                    return;
-                };
-                let Some(wid) = self.register_window(elem) else {
+                let Some((window, wid)) = self.register_window(elem) else {
                     return;
                 };
                 let window_server_info = window_server::get_window(wid.idx.into());
@@ -583,10 +574,7 @@ impl State {
         let wid = match self.id(&elem).ok() {
             Some(wid) => wid,
             None => {
-                let Ok(info) = WindowInfo::try_from(&elem) else {
-                    return None;
-                };
-                let Some(wid) = self.register_window(elem) else {
+                let Some((info, wid)) = self.register_window(elem) else {
                     warn!(?self.pid, "Got MainWindowChanged on unknown window");
                     return None;
                 };
@@ -662,7 +650,23 @@ impl State {
     }
 
     #[must_use]
-    fn register_window(&mut self, elem: AXUIElement) -> Option<WindowId> {
+    fn register_window(&mut self, elem: AXUIElement) -> Option<(WindowInfo, WindowId)> {
+        let Ok(mut info) = WindowInfo::try_from(&elem) else {
+            return None;
+        };
+
+        // HACK: Ignore hotkey iTerm2 windows.
+        // Obviously this should be done with some configurable feature.
+        if self.bundle_id.as_deref() == Some("com.googlecode.iterm2")
+            && elem
+                .attribute(&AXAttribute::new(&CFString::from_static_string(
+                    "AXTitleUIElement",
+                )))
+                .is_err()
+        {
+            info.is_standard = false;
+        }
+
         if !register_notifs(&elem, self) {
             return None;
         }
@@ -686,7 +690,7 @@ impl State {
             },
         );
         assert!(old.is_none(), "Duplicate window id {wid:?}");
-        return Some(wid);
+        return Some((info, wid));
 
         fn register_notifs(win: &AXUIElement, state: &State) -> bool {
             // Filter out elements that aren't regular windows.
