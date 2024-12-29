@@ -21,7 +21,8 @@ use icrate::{
 use nimbus_wm::{
     actor::reactor,
     sys::{
-        app,
+        self,
+        app::WindowInfo,
         screen::{self, ScreenCache},
         window_server::{self, WindowServerId},
     },
@@ -286,7 +287,7 @@ async fn get_windows_with_ns(_opt: &Opt, print: bool) {
 
 async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
     let (sender, mut receiver) = mpsc::unbounded_channel();
-    for (pid, bundle_id) in app::running_apps(opt.bundle.clone()) {
+    for (pid, bundle_id) in sys::app::running_apps(opt.bundle.clone()) {
         let sender = sender.clone();
         let verbose = opt.verbose;
         let task = move || {
@@ -322,15 +323,15 @@ async fn get_windows_with_ax(opt: &Opt, serial: bool, print: bool) {
 fn get_windows_for_app(
     app: AXUIElement,
     verbose: bool,
-) -> Result<Vec<(app::WindowInfo, String)>, accessibility::Error> {
+) -> Result<Vec<(WindowInfo, String)>, accessibility::Error> {
     let Ok(windows) = &app.windows() else {
         return Err(accessibility::Error::NotFound);
     };
     windows
-        .into_iter()
+        .iter()
         .map(|win| {
             Ok((
-                app::WindowInfo::try_from(&*win)?,
+                WindowInfo::try_from(&*win)?,
                 verbose.then(|| format!("{:#?}", &*win)).unwrap_or_default(),
             ))
         })
@@ -338,7 +339,7 @@ fn get_windows_for_app(
 }
 
 fn get_apps(opt: &Opt) {
-    for (pid, _bundle_id) in app::running_apps(opt.bundle.clone()) {
+    for (pid, _bundle_id) in sys::app::running_apps(opt.bundle.clone()) {
         let app = AXUIElement::application(pid);
         println!("{app:#?}");
     }
