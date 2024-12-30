@@ -287,10 +287,10 @@ trait Element: Debug + Send {
     fn role(&self) -> &'static str;
     fn id(&self) -> ElementId;
 
-    fn attribute(&self, attribute: &'static str) -> Result<Box<dyn Any>>;
+    fn attribute(&self, attribute: &str) -> Result<Box<dyn Any>>;
     fn set_attribute(
         &mut self,
-        attribute: &'static str,
+        attribute: &str,
         value: Box<dyn Any>,
         this: &FakeAXUIElement,
     ) -> Result<()>;
@@ -346,7 +346,7 @@ impl Element for Application {
         Ok(self.windows.iter().cloned().map(Into::into).collect())
     }
 
-    fn attribute(&self, attribute: &'static str) -> Result<Box<dyn Any>> {
+    fn attribute(&self, attribute: &str) -> Result<Box<dyn Any>> {
         #[allow(non_upper_case_globals)]
         Ok(match attribute {
             kAXRoleAttribute => Box::new(CFString::from_static_string(self.role())),
@@ -360,7 +360,7 @@ impl Element for Application {
 
     fn set_attribute(
         &mut self,
-        _attribute: &'static str,
+        _attribute: &str,
         _value: Box<dyn Any>,
         _this: &FakeAXUIElement,
     ) -> Result<()> {
@@ -434,7 +434,7 @@ impl Element for Window {
         Ok(self.wsid)
     }
 
-    fn attribute(&self, attribute: &'static str) -> Result<Box<dyn Any>> {
+    fn attribute(&self, attribute: &str) -> Result<Box<dyn Any>> {
         #[allow(non_upper_case_globals)]
         Ok(match attribute {
             kAXRoleAttribute => Box::new(CFString::from_static_string(self.role())),
@@ -449,7 +449,7 @@ impl Element for Window {
 
     fn set_attribute(
         &mut self,
-        attribute: &'static str,
+        attribute: &str,
         value: Box<dyn Any>,
         this: &FakeAXUIElement,
     ) -> Result<()> {

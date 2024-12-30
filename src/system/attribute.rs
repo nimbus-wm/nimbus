@@ -49,7 +49,7 @@ impl<T> FakeAXAttribute<T> {
         CFString::from_static_string(self.0)
     }
 
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         self.0
     }
 }
