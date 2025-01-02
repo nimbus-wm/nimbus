@@ -1,5 +1,5 @@
 pub mod actor;
-pub mod metrics;
+pub mod log;
 pub mod model;
 pub mod sys;
 

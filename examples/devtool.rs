@@ -104,15 +104,8 @@ struct Replay {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
+        .with(nimbus_wm::log::tree_layer())
         .with(EnvFilter::from_default_env())
-        .with(
-            tracing_tree::HierarchicalLayer::default()
-                .with_indent_amount(2)
-                .with_indent_lines(true)
-                .with_deferred_spans(true)
-                .with_span_retrace(true)
-                .with_targets(true),
-        )
         .init();
     let opt: Opt = Parser::parse();
 

@@ -1,19 +1,41 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::{
+    layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
+};
 use tracing_timing::{group, Histogram};
+use tracing_tree::time::UtcDateTime;
 
-pub type TimingLayer = tracing_timing::TimingLayer<group::ByName, group::ByMessage>;
+pub fn init_logging() {
+    tracing_subscriber::registry()
+        .with(tree_layer())
+        .with(timing_layer())
+        .with(EnvFilter::from_default_env())
+        .init();
+}
+
+pub fn tree_layer() -> impl Layer<Registry> {
+    tracing_tree::HierarchicalLayer::default()
+        .with_indent_amount(2)
+        .with_indent_lines(true)
+        .with_deferred_spans(true)
+        .with_span_retrace(true)
+        .with_targets(true)
+        .with_timer(UtcDateTime::default())
+}
+
+type TimingLayer = tracing_timing::TimingLayer<group::ByName, group::ByMessage>;
+
+fn timing_layer() -> TimingLayer {
+    tracing_timing::Builder::default()
+        //.events(group::ByName)
+        .layer(|| Histogram::new_with_max(100_000_000, 2).unwrap())
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum MetricsCommand {
     ShowTiming,
-}
-
-pub fn timing_layer() -> TimingLayer {
-    tracing_timing::Builder::default()
-        //.events(group::ByName)
-        .layer(|| Histogram::new_with_max(100_000_000, 2).unwrap())
 }
 
 pub fn handle_command(command: MetricsCommand) {

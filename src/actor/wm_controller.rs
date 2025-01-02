@@ -171,7 +171,7 @@ impl WmController {
         use KeyCode::*;
 
         use crate::{
-            metrics::MetricsCommand::*,
+            log::MetricsCommand::*,
             model::{Direction::*, Orientation},
             sys::event::{KeyCode, Modifiers},
         };

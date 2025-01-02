@@ -25,7 +25,7 @@ use crate::{
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
     collections::{HashMap, HashSet},
-    metrics::{self, MetricsCommand},
+    log::{self, MetricsCommand},
     sys::{
         event::MouseState,
         executor::Executor,
@@ -389,7 +389,7 @@ impl Reactor {
                 let response = self.layout.handle_command(self.main_screen_space(), cmd);
                 self.handle_layout_response(response);
             }
-            Event::Command(Command::Metrics(cmd)) => metrics::handle_command(cmd),
+            Event::Command(Command::Metrics(cmd)) => log::handle_command(cmd),
             Event::Command(Command::Debug) => {
                 if let Some(space) = self.main_screen_space() {
                     self.layout.debug_tree_desc(space, "", true);

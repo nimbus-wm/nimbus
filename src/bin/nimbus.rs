@@ -9,12 +9,10 @@ use nimbus_wm::{
         reactor::{self, Reactor},
         wm_controller::{self, WmController},
     },
-    metrics,
+    log,
     sys::executor::Executor,
 };
 use tokio::join;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use tracing_tree::time::UtcDateTime;
 
 #[derive(Parser)]
 struct Cli {
@@ -43,19 +41,7 @@ fn main() {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(metrics::timing_layer())
-        .with(
-            tracing_tree::HierarchicalLayer::default()
-                .with_indent_amount(2)
-                .with_indent_lines(true)
-                .with_deferred_spans(true)
-                .with_span_retrace(true)
-                .with_targets(true)
-                .with_timer(UtcDateTime::default()),
-        )
-        .init();
+    log::init_logging();
     install_panic_hook();
 
     if opt.validate {
