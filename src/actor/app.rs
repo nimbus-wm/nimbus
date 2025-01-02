@@ -24,7 +24,7 @@ use accessibility_sys::{
 };
 use core_foundation::{runloop::CFRunLoop, string::CFString};
 use icrate::{
-    objc2::{class, msg_send_id, rc::Id},
+    objc2::rc::Id,
     AppKit::{NSApplicationActivationOptions, NSRunningApplication},
     Foundation::{CGPoint, CGRect},
 };
@@ -43,7 +43,7 @@ use crate::{
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
-        app::running_apps,
+        app::{running_apps, NSRunningApplicationExt},
         event,
         executor::Executor,
         geometry::{ToCGType, ToICrate},
@@ -765,9 +765,12 @@ impl State {
 
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     let app = AXUIElement::application(pid);
-    let running_app: Id<NSRunningApplication> = unsafe {
-        // For some reason this binding isn't generated in icrate.
-        msg_send_id![class!(NSRunningApplication), runningApplicationWithProcessIdentifier:pid]
+    let Some(running_app) = NSRunningApplication::with_process_id(pid) else {
+        debug!(
+            ?pid,
+            "Making NSRunningApplication failed; exiting app thread"
+        );
+        return;
     };
 
     // Set up the observer callback.

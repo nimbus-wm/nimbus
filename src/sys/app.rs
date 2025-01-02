@@ -2,7 +2,7 @@ use accessibility::{AXUIElement, AXUIElementAttributes};
 pub use accessibility_sys::pid_t;
 use accessibility_sys::{kAXStandardWindowSubrole, kAXWindowRole};
 use icrate::{
-    objc2::{msg_send, rc::Id},
+    objc2::{class, msg_send, msg_send_id, rc::Id},
     AppKit::{NSRunningApplication, NSWorkspace},
     Foundation::{CGRect, NSString},
 };
@@ -28,12 +28,19 @@ pub fn running_apps(bundle: Option<String>) -> impl Iterator<Item = (pid_t, AppI
 }
 
 pub trait NSRunningApplicationExt {
+    fn with_process_id(pid: pid_t) -> Option<Id<Self>>;
     fn pid(&self) -> pid_t;
     fn bundle_id(&self) -> Option<Id<NSString>>;
     fn localized_name(&self) -> Option<Id<NSString>>;
 }
 
 impl NSRunningApplicationExt for NSRunningApplication {
+    fn with_process_id(pid: pid_t) -> Option<Id<Self>> {
+        unsafe {
+            // For some reason this binding isn't generated in icrate.
+            msg_send_id![class!(NSRunningApplication), runningApplicationWithProcessIdentifier:pid]
+        }
+    }
     fn pid(&self) -> pid_t {
         unsafe { msg_send![self, processIdentifier] }
     }
