@@ -226,7 +226,12 @@ impl State {
         info: AppInfo,
         requests_tx: Sender<(Span, Request)>,
         requests_rx: Receiver<(Span, Request)>,
-        notifications_rx: Receiver<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
+        notifications_rx: Receiver<(
+            AXUIElement,
+            String,
+            Option<mpsc::UnboundedSender<pid_t>>,
+            Option<Span>,
+        )>,
     ) {
         let handle = AppThreadHandle { requests_tx };
         if !self.init(handle, info) {
@@ -234,7 +239,14 @@ impl State {
         }
 
         pub enum Incoming {
-            Notification((AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)),
+            Notification(
+                (
+                    AXUIElement,
+                    String,
+                    Option<mpsc::UnboundedSender<pid_t>>,
+                    Option<Span>,
+                ),
+            ),
             Request((Span, Request)),
         }
 
@@ -256,7 +268,8 @@ impl State {
                         }
                     }
                 }
-                Incoming::Notification((elem, notif, flusher)) => {
+                Incoming::Notification((elem, notif, flusher, span)) => {
+                    let _span_guard = span.as_ref().map(|sp| sp.enter());
                     self.handle_notification(elem, &notif, flusher);
                 }
             }
@@ -806,7 +819,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     };
     let (notifications_tx, notifications_rx) = channel();
     let observer = observer.install(move |elem, notif| {
-        _ = notifications_tx.send((elem.into(), notif.to_owned(), None))
+        _ = notifications_tx.send((elem.into(), notif.to_owned(), None, None))
     });
 
     // Create our app state.

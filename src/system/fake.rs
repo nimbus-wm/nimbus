@@ -26,7 +26,7 @@ use icrate::AppKit::NSApplicationActivationOptions;
 use tokio::sync::mpsc::{
     self, unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
 };
-use tracing::info;
+use tracing::{trace, Span};
 
 use crate::sys::{event::MouseState, geometry::ToICrate};
 use crate::system::sync::{
@@ -627,14 +627,24 @@ pub struct FakeObserver(Arc<Mutex<FakeObserverInner>>);
 struct FakeObserverInner {
     // TODO: Arc cycle
     subscriptions: HashMap<ElementId, HashSet<&'static str>>,
-    notifications_tx: Sender<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
+    notifications_tx: Sender<(
+        AXUIElement,
+        String,
+        Option<mpsc::UnboundedSender<pid_t>>,
+        Option<Span>,
+    )>,
     updates_tx: Sender<()>,
     updates_rx: Option<Receiver<()>>,
 }
 
 impl FakeObserver {
     pub fn new(
-        notifications_tx: Sender<(AXUIElement, String, Option<mpsc::UnboundedSender<pid_t>>)>,
+        notifications_tx: Sender<(
+            AXUIElement,
+            String,
+            Option<mpsc::UnboundedSender<pid_t>>,
+            Option<Span>,
+        )>,
     ) -> Self {
         let (updates_tx, updates_rx) = channel();
         Self(Arc::new(Mutex::new(FakeObserverInner {
@@ -671,12 +681,21 @@ impl FakeObserver {
         let this = self.lock();
         if let Some(subscriptions) = this.subscriptions.get(&elem.id()) {
             if subscriptions.contains(&notification) {
+                trace!("Sending {notification}");
                 _ = this.notifications_tx.send((
                     target.clone().into(),
                     notification.to_owned(),
                     None,
+                    Some(Span::current()),
                 ));
+            } else {
+                trace!(
+                    ?subscriptions,
+                    "Skipping notification {notification} because it is not subscribed on the element",
+                );
             }
+        } else {
+            trace!("Skipping notification {notification} because there are no subscriptions for the element");
         }
         _ = this.updates_tx.send(());
     }
@@ -687,6 +706,7 @@ impl FakeObserver {
             target.clone().into(),
             FLUSH_NOTIFICATION.to_owned(),
             Some(tx),
+            Some(Span::current()),
         ));
     }
 
@@ -700,10 +720,11 @@ impl FakeObserver {
             AXUIElement,
             String,
             Option<mpsc::UnboundedSender<pid_t>>,
+            Option<Span>,
         )>,
     ) -> Vec<(AXUIElement, String)> {
         let mut notifs = Vec::new();
-        while let Ok((elem, notif, _)) = notifications_rx.try_recv() {
+        while let Ok((elem, notif, _, _)) = notifications_rx.try_recv() {
             notifs.push((elem, notif))
         }
         notifs
