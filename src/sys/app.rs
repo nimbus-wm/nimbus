@@ -83,7 +83,7 @@ impl TryFrom<&AXUIElement> for WindowInfo {
         Ok(WindowInfo {
             is_standard: element.role()? == kAXWindowRole
                 && element.subrole()? == kAXStandardWindowSubrole,
-            title: element.title()?.to_string(),
+            title: element.title().map(|t| t.to_string()).unwrap_or_default(),
             frame: element.frame()?.to_icrate(),
             sys_id: WindowServerId::try_from(element).ok(),
         })
