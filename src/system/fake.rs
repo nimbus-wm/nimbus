@@ -17,8 +17,9 @@ use accessibility_sys::{
     kAXErrorCannotComplete, kAXErrorIllegalArgument, kAXErrorNoValue, kAXFrameAttribute,
     kAXFrontmostAttribute, kAXMainWindowAttribute, kAXParentAttribute, kAXPositionAttribute,
     kAXRaiseAction, kAXRoleAttribute, kAXSizeAttribute, kAXStandardWindowSubrole,
-    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowCreatedNotification,
-    kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole, kAXWindowsAttribute,
+    kAXSubroleAttribute, kAXTitleAttribute, kAXUIElementDestroyedNotification,
+    kAXWindowCreatedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification,
+    kAXWindowRole, kAXWindowsAttribute,
 };
 use core_foundation::{base::TCFType, boolean::CFBoolean, string::CFString};
 use core_graphics::display::{CGPoint, CGRect, CGSize};
@@ -108,9 +109,15 @@ macro_rules! forward {
     )* };
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct FakeAXUIElement {
     elem: Ptr<dyn Element>,
+}
+
+impl Debug for FakeAXUIElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeAXUIElement").finish()
+    }
 }
 
 trait AnyExt {
@@ -242,6 +249,17 @@ impl Ptr<Application> {
         win
     }
 
+    fn rm_window(&self, win: &Ptr<Window>) {
+        let mut this = self.lock();
+        this.windows.retain(|w| w != win);
+        // TODO mark element as invalid
+        this.connection.observer.notify(
+            &*win.lock(),
+            kAXUIElementDestroyedNotification,
+            &win.clone().into(),
+        );
+    }
+
     pub fn terminate_abruptly(&self) {
         self.lock().connection.terminate()
     }
@@ -265,6 +283,13 @@ impl Ptr<Window> {
     pub fn id(&self) -> u32 {
         self.lock().wsid.as_u32()
     }
+
+    pub fn destroy(&self) {
+        let parent = self.lock().parent.clone();
+        if let Some(parent) = parent.upgrade() {
+            parent.rm_window(self);
+        }
+    }
 }
 
 macro_rules! provide_stubs {
@@ -284,6 +309,7 @@ pub struct ElementId(pid_t, i32);
 trait Element: Debug + Send {
     // Required methods.
     fn connection(&self) -> &Connection;
+    // fn is_valid(&self) -> bool;
     fn role(&self) -> &'static str;
     fn id(&self) -> ElementId;
 

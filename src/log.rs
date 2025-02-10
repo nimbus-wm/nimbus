@@ -15,6 +15,13 @@ pub fn init_logging() {
         .init();
 }
 
+pub fn init_logging_for_test() {
+    let _ = tracing_subscriber::registry()
+        .with(tree_layer().with_filter(EnvFilter::from_default_env()))
+        .with(span_tracker::SpanTracker::default())
+        .try_init();
+}
+
 pub fn tree_layer() -> impl Layer<Registry> {
     tracing_tree::HierarchicalLayer::default()
         .with_indent_amount(2)
@@ -69,4 +76,81 @@ fn print_histograms(timing_layer: &TimingLayer) {
         }
         println!();
     });
+}
+
+pub mod span_tracker {
+    use crate::system::sync::{Condvar, Mutex};
+
+    use rustc_hash::FxHashSet;
+    use tracing::{span, Subscriber};
+    use tracing_subscriber::Layer;
+
+    #[derive(Default)]
+    pub struct SpanTracker {
+        spans: Mutex<FxHashSet<span::Id>>,
+        empty: Condvar,
+    }
+
+    pub fn wait_for_spans() {
+        tracing::dispatcher::get_default(|d| {
+            let tracker = d.downcast_ref::<SpanTracker>().unwrap();
+            tracker.wait_on(|| ())
+        })
+    }
+
+    #[track_caller]
+    pub fn wait_on<R>(f: impl FnOnce() -> R) -> R {
+        let mut f = Some(f); // work around weird FnMut requirement on get_default
+        tracing::dispatcher::get_default(|d| {
+            let tracker = d.downcast_ref::<SpanTracker>().unwrap();
+            if !tracker.spans.lock().unwrap().is_empty() {
+                panic!("called wait_on with live spans");
+            }
+            tracker.wait_on(f.take().unwrap())
+        })
+    }
+
+    impl<S: Subscriber> Layer<S> for SpanTracker {
+        fn on_new_span(
+            &self,
+            _attrs: &span::Attributes<'_>,
+            id: &span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.spans.lock().unwrap().insert(id.clone());
+        }
+
+        fn on_id_change(
+            &self,
+            _old: &span::Id,
+            _new: &span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            // It's not clear what to do in this situation.
+            panic!("unimplemented")
+        }
+
+        fn on_close(&self, id: span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+            let mut spans = self.spans.lock().unwrap();
+            if !spans.remove(&id) {
+                panic!("unknown span id closed: {id:?}");
+            }
+            if spans.is_empty() {
+                self.empty.notify_all();
+            }
+        }
+    }
+
+    impl SpanTracker {
+        fn wait_on<R>(&self, f: impl FnOnce() -> R) -> R {
+            let result = f();
+
+            let mut spans = self.spans.lock().unwrap();
+            while !spans.is_empty() {
+                spans = self.empty.wait(spans).unwrap();
+            }
+
+            result
+        }
+    }
 }

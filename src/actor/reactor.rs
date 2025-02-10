@@ -323,14 +323,14 @@ impl Reactor {
                     debug!(?last_seen, ?window.last_sent_txid, "Ignoring resize");
                     return false;
                 }
+                let old_frame = mem::replace(&mut window.frame_monotonic, new_frame);
+                if old_frame == new_frame {
+                    return false;
+                }
                 if requested.0 {
                     // TODO: If the size is different from requested, applying a
                     // correction to the model can result in weird feedback
                     // loops, so we ignore these for now.
-                    return false;
-                }
-                let old_frame = mem::replace(&mut window.frame_monotonic, new_frame);
-                if old_frame == new_frame {
                     return false;
                 }
                 let Some(screen) = self.main_screen else { return false };
@@ -421,9 +421,13 @@ impl Reactor {
             #[cfg(test)]
             Event::Command(Command::Flush(pid, sender)) => {
                 self.apps[&pid].handle.send(Request::Flush(pid, sender)).unwrap();
+                return false;
             }
             #[cfg(test)]
-            Event::Flushed(pid, sender) => sender.unwrap().send(pid).unwrap(),
+            Event::Flushed(pid, sender) => {
+                sender.unwrap().send(pid).unwrap();
+                return false;
+            }
         }
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(
@@ -590,7 +594,7 @@ impl Reactor {
             let is_new = Some(wid) == new_wid;
             let txid = window.next_txid();
             anim.add_window(handle, wid, current_frame, target_frame, is_new, txid);
-            window.frame_monotonic = target_frame;
+            //window.frame_monotonic = target_frame;
         }
         if is_resize {
             // If the user is doing something with the mouse we don't want to
@@ -822,15 +826,28 @@ pub mod tests {
         assert!(!state_1.is_empty());
 
         for event in events_1 {
-            reactor.handle_event(event);
+            reactor.handle_event(dbg!(event));
         }
-        assert!(apps.requests().is_empty());
+        assert!(dbg!(apps.requests()).is_empty());
 
-        reactor.handle_events(apps.make_app(2, make_windows(1)));
+        // reactor.handle_events(apps.make_app(2, make_windows(1)));
+        reactor.handle_event(Event::WindowCreated(
+            WindowId::new(1, 3),
+            make_window(3),
+            Some(WindowServerInfo {
+                pid: 1,
+                id: WindowServerId::new(3),
+                layer: 0,
+                frame: CGRect::ZERO,
+            }),
+            MouseState::Up,
+        ));
         let (_events_2, _state_2) = simulate_events_for_requests(apps.requests());
         dbg!(_state_2);
 
-        reactor.handle_event(Event::WindowDestroyed(WindowId::new(2, 1)));
+        // Destroy the third window before receiving any events from the last resize.
+        // reactor.handle_event(Event::WindowDestroyed(WindowId::new(2, 1)));
+        reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 3)));
         let (_events_3, state_3) = simulate_events_for_requests(apps.requests());
 
         // These should be the same, because we should have resized the first

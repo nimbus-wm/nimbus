@@ -747,6 +747,7 @@ impl State {
         }
     }
 
+    #[track_caller]
     fn send_event(&self, event: Event) {
         self.events_tx.send((Span::current(), event)).unwrap();
     }
@@ -871,8 +872,9 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use icrate::Foundation::CGSize;
-    use reactor::{Reactor, Record};
-    use test_log::test;
+    use reactor::{Command, Reactor, Record};
+    use tracing::info_span;
+    // use test_log::test;
 
     use super::*;
     use crate::{
@@ -932,13 +934,6 @@ mod tests {
         });
     }
 
-    #[cfg(loom)]
-    #[test]
-    fn loom_test_move_window() {
-        println!("test");
-        loom::model(test_move_window);
-    }
-
     mod thread {
         #[cfg(not(loom))]
         pub use std::thread::spawn;
@@ -951,8 +946,16 @@ mod tests {
         }
     }
 
+    #[cfg(loom)]
     #[test]
-    fn test_move_window() {
+    fn test_move_window_loom() {
+        loom::model(no_loom_test_move_window);
+    }
+
+    #[test]
+    fn no_loom_test_move_window() {
+        crate::log::init_logging_for_test();
+
         let pid = 1234;
         let (events_tx, events_rx) = channel();
         let (requests_tx, requests_rx) = channel();
@@ -969,7 +972,7 @@ mod tests {
             bundle_id: Some("com.example.test".to_string()),
             app: app.clone().into(),
             observer: observer.clone(),
-            window_server: server,
+            window_server: server.clone(),
             events_tx: events_tx.clone(),
             windows: HashMap::default(),
             last_window_idx: 0,
@@ -977,6 +980,8 @@ mod tests {
             last_activated: None,
             is_frontmost: false,
         };
+
+        let init = info_span!("init").entered();
 
         let reactor_thread = thread::spawn(move || {
             let reactor = Reactor::new(LayoutManager::new());
@@ -989,7 +994,8 @@ mod tests {
             Event::ScreenParametersChanged(vec![screen_frame], vec![Some(SpaceId::new(1))], vec![]),
         ));
 
-        let win: AXUIElement = app.mk_window().into();
+        let win1 = app.mk_window();
+        let win2 = app.mk_window();
 
         let info = AppInfo {
             bundle_id: Some("dev.myapp".into()),
@@ -1000,21 +1006,107 @@ mod tests {
             Executor::run(app_actor.run(info, rtx, requests_rx, notifications_rx));
         });
 
+        drop(init);
+        crate::log::span_tracker::wait_for_spans();
+        info!("init finished");
+
+        // Wait until the next update to the app to reduce the state space.
+        // let mut updates = observer.updates_rx().unwrap();
+        // Executor::run(async { updates.recv().await.unwrap() });
+
+        // Flush window server -> reactor and then back.
+        // let (flush_tx, mut flush_rx) = channel();
+        // server.flush(pid, flush_tx);
+        // Executor::run(async {
+        //     flush_rx.recv().await;
+        // });
+        // let (flush_tx, mut flush_rx) = channel();
+        // events_tx
+        //     .send((
+        //         Span::current(),
+        //         Event::Command(Command::Flush(pid, Some(flush_tx))),
+        //     ))
+        //     .unwrap();
+        // Executor::run(async {
+        //     flush_rx.recv().await;
+        // });
+
+        // Capture the state.
+        let state1 = server.get_windows(&[win1.id(), win2.id()]);
+
+        let span = info_span!("make window").entered();
+        let win3 = app.mk_window();
+        drop(span);
+        crate::log::span_tracker::wait_for_spans();
+
+        let span = info_span!("destroy window").entered();
+        win3.destroy();
+        drop(span);
+        crate::log::span_tracker::wait_for_spans();
+
+        // Flush window server -> reactor and then back.
+        // loop {
+        //     let (flush_tx, mut flush_rx) = channel();
+        //     server.flush(pid, flush_tx);
+        //     Executor::run(async {
+        //         flush_rx.recv().await;
+        //     });
+        //     let (flush_tx, mut flush_rx) = channel();
+        //     events_tx
+        //         .send((
+        //             Span::current(),
+        //             Event::Command(Command::Flush(pid, Some(flush_tx))),
+        //         ))
+        //         .unwrap();
+        //     Executor::run(async {
+        //         flush_rx.recv().await;
+        //     });
+
+        //     // If quiescent, stop.
+        //     // Is this correct?
+        //     // Not quite... we need to make sure the
+        //     if updates.try_recv().is_err() {
+        //         break;
+        //     }
+        //     while updates.try_recv().is_ok() {}
+        // }
+
+        // Flush reactor -> app actor -> window server.
+        let (flush_tx, mut flush_rx) = channel();
+        events_tx
+            .send((
+                Span::current(),
+                Event::Command(Command::Flush(pid, Some(flush_tx))),
+            ))
+            .unwrap();
         Executor::run(async {
-            let mut updates = observer.updates_rx().unwrap();
-            while let Some(()) = updates.recv().await {
-                if win.frame().unwrap().to_icrate() == screen_frame {
-                    break;
-                }
-            }
+            flush_rx.recv().await;
         });
 
-        _ = requests_tx.send((Span::current(), Request::Terminate));
-        drop(events_tx);
-        reactor_thread.join().unwrap();
+        // Check that the state is the same as the original captured state.
+        let state2 = server.get_windows(&[win1.id(), win2.id()]);
+        assert_eq!(state1, state2);
 
-        assert_eq!(win.frame().unwrap().to_icrate(), screen_frame);
-        // _ = events_tx.send((Span::current(), Event::Command(reactor::Command::Exit)));
+        // TODO: Need a way to flush events the other way, from the fake app /
+        // system to the reactor.
+        // (We need a way to flush from the reactor too.. the current way only
+        // gives us the first update.)
+
+        // Executor::run(async {
+        //     let mut updates = observer.updates_rx().unwrap();
+        //     while let Some(()) = updates.recv().await {
+        //         if win.frame().unwrap().to_icrate() == screen_frame {
+        //             break;
+        //         }
+        //     }
+        // });
+
+        // _ = requests_tx.send((Span::current(), Request::Terminate));
+        // drop(events_tx);
+        // reactor_thread.join().unwrap();
+
+        // assert_eq!(win.frame().unwrap().to_icrate(), screen_frame);
+        // // _ = events_tx.send((Span::current(), Event::Command(reactor::Command::Exit)));
     }
 
     #[test]

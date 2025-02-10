@@ -36,9 +36,9 @@ impl<'a> Animation<'a> {
         Animation {
             start: now, // + interval, // not necessary, provide one extra frame to get things going
             interval,
-            #[cfg(not(loom))]
+            #[cfg(not(test))]
             frames: (DURATION * FPS).round() as u32,
-            #[cfg(loom)]
+            #[cfg(test)]
             frames: 2,
             windows: vec![],
         }
