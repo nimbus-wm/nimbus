@@ -14,5 +14,5 @@ Nimbus is in early development and is not recommended for use.
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
 
-[GitHub Actions]: https://github.com/rust-lang/impl-trait-utils/actions
-[GHA Status]: https://github.com/rust-lang/impl-trait-utils/actions/workflows/rust.yml/badge.svg
+[GitHub Actions]: https://github.com/nimbus-wm/nimbus/actions
+[GHA Status]: https://github.com/nimbus-wm/nimbus/actions/workflows/rust.yml/badge.svg
