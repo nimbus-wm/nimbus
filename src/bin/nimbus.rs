@@ -9,6 +9,7 @@ use nimbus_wm::{
         reactor::{self, Reactor},
         wm_controller::{self, WmController},
     },
+    config::{config_file, restore_file, Config},
     log,
     sys::executor::Executor,
 };
@@ -44,6 +45,12 @@ fn main() {
     log::init_logging();
     install_panic_hook();
 
+    let config = if config_file().exists() {
+        Config::read(&config_file()).unwrap()
+    } else {
+        Config::default()
+    };
+
     if opt.validate {
         LayoutManager::load(restore_file()).unwrap();
         return;
@@ -60,6 +67,7 @@ fn main() {
         one_space: opt.one,
         default_disable: opt.default_disable,
         restore_file: restore_file(),
+        config,
     };
     let (wm_controller, wm_controller_sender) = WmController::new(config, events_tx.clone());
     let notification_center = NotificationCenter::new(wm_controller_sender);
@@ -72,14 +80,6 @@ fn main() {
             mouse.run(),
         );
     });
-}
-
-fn config_dir() -> PathBuf {
-    dirs::home_dir().unwrap().join(".nimbus")
-}
-
-fn restore_file() -> PathBuf {
-    config_dir().join("layout.ron")
 }
 
 #[cfg(panic = "unwind")]

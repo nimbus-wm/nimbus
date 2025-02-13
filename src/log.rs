@@ -34,6 +34,7 @@ fn timing_layer() -> TimingLayer {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
 pub enum MetricsCommand {
     ShowTiming,
 }

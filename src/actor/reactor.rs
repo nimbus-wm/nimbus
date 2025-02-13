@@ -8,7 +8,7 @@ mod animation;
 mod main_window;
 mod replay;
 
-use std::{mem, path::PathBuf, thread};
+use std::{mem, thread};
 
 use animation::Animation;
 use icrate::Foundation::CGRect;
@@ -124,12 +124,19 @@ pub enum Event {
 pub struct Requested(pub bool);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
 pub enum Command {
     Layout(LayoutCommand),
     Metrics(MetricsCommand),
+    Reactor(ReactorCommand),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum ReactorCommand {
     Debug,
     Serialize,
-    SaveAndExit(PathBuf),
+    SaveAndExit,
 }
 
 pub struct Reactor {
@@ -390,21 +397,23 @@ impl Reactor {
                 self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => log::handle_command(cmd),
-            Event::Command(Command::Debug) => {
+            Event::Command(Command::Reactor(ReactorCommand::Debug)) => {
                 if let Some(space) = self.main_screen_space() {
                     self.layout.debug_tree_desc(space, "", true);
                 }
             }
-            Event::Command(Command::Serialize) => {
+            Event::Command(Command::Reactor(ReactorCommand::Serialize)) => {
                 println!("{}", self.layout.serialize_to_string());
             }
-            Event::Command(Command::SaveAndExit(path)) => match self.layout.save(path) {
-                Ok(()) => std::process::exit(0),
-                Err(e) => {
-                    error!("Could not save layout: {e}");
-                    std::process::exit(3);
+            Event::Command(Command::Reactor(ReactorCommand::SaveAndExit)) => {
+                match self.layout.save(crate::config::restore_file()) {
+                    Ok(()) => std::process::exit(0),
+                    Err(e) => {
+                        error!("Could not save layout: {e}");
+                        std::process::exit(3);
+                    }
                 }
-            },
+            }
         }
         if let Some(raised_window) = raised_window {
             self.send_layout_event(LayoutEvent::WindowFocused(

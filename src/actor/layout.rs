@@ -17,10 +17,11 @@ use crate::{
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
 pub enum LayoutCommand {
     NextWindow,
     PrevWindow,
-    MoveFocus(Direction),
+    MoveFocus(#[serde(rename = "direction")] Direction),
     Ascend,
     Descend,
     MoveNode(Direction),

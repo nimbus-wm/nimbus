@@ -17,6 +17,7 @@ pub struct Layout {
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LayoutKind {
     #[default]
     Horizontal,
@@ -42,6 +43,7 @@ impl LayoutKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Orientation {
     Horizontal,
     Vertical,
@@ -67,6 +69,7 @@ impl LayoutKind {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Direction {
     Left,
     Right,

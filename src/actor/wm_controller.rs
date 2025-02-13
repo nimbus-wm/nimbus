@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use accessibility_sys::pid_t;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, Span};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
@@ -25,10 +26,17 @@ pub enum WmEvent {
     Command(WmCommand),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum WmCommand {
-    ToggleSpaceActivated,
+    Wm(WmCmd),
     ReactorCommand(reactor::Command),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WmCmd {
+    ToggleSpaceActivated,
 }
 
 pub struct Config {
@@ -39,6 +47,7 @@ pub struct Config {
     /// Whether new spaces are disabled by default.
     pub default_disable: bool,
     pub restore_file: PathBuf,
+    pub config: crate::config::Config,
 }
 
 pub struct WmController {
@@ -82,7 +91,7 @@ impl WmController {
         debug!("handle_event");
         use reactor::Event;
 
-        use self::{WmCommand::*, WmEvent::*};
+        use self::{WmCmd::*, WmCommand::*, WmEvent::*};
         match event {
             AppEventsRegistered => {
                 actor::app::spawn_initial_app_threads(self.events_tx.clone());
@@ -99,7 +108,7 @@ impl WmController {
                 }
                 self.send_event(event);
             }
-            Command(ToggleSpaceActivated) => {
+            Command(Wm(ToggleSpaceActivated)) => {
                 let toggle_set = if self.config.default_disable {
                     &mut self.enabled_spaces
                 } else {
@@ -167,52 +176,10 @@ impl WmController {
 
     fn register_hotkeys(&mut self) {
         debug!("register_hotkeys");
-        use actor::{layout::LayoutCommand::*, reactor::Command};
-        use KeyCode::*;
-
-        use crate::{
-            log::MetricsCommand::*,
-            model::{Direction::*, Orientation},
-            sys::event::{KeyCode, Modifiers},
-        };
-        const ALT: Modifiers = Modifiers::ALT;
-        const SHIFT: Modifiers = Modifiers::SHIFT;
-
         let mgr = HotkeyManager::new(self.sender.upgrade().unwrap());
-        //mgr.register(ALT, KeyS, Command::Layout(Shuffle));
-        mgr.register(ALT, KeyA, Command::Layout(Ascend));
-        mgr.register(ALT, KeyD, Command::Layout(Descend));
-        mgr.register(ALT, KeyH, Command::Layout(MoveFocus(Left)));
-        mgr.register(ALT, KeyJ, Command::Layout(MoveFocus(Down)));
-        mgr.register(ALT, KeyK, Command::Layout(MoveFocus(Up)));
-        mgr.register(ALT, KeyL, Command::Layout(MoveFocus(Right)));
-        mgr.register(ALT | SHIFT, KeyH, Command::Layout(MoveNode(Left)));
-        mgr.register(ALT | SHIFT, KeyJ, Command::Layout(MoveNode(Down)));
-        mgr.register(ALT | SHIFT, KeyK, Command::Layout(MoveNode(Up)));
-        mgr.register(ALT | SHIFT, KeyL, Command::Layout(MoveNode(Right)));
-        mgr.register(ALT, Equal, Command::Layout(Split(Orientation::Vertical)));
-        mgr.register(
-            ALT,
-            Backslash,
-            Command::Layout(Split(Orientation::Horizontal)),
-        );
-        mgr.register(ALT, KeyS, Command::Layout(Group(Orientation::Vertical)));
-        mgr.register(ALT, KeyT, Command::Layout(Group(Orientation::Horizontal)));
-        mgr.register(ALT, KeyE, Command::Layout(Ungroup));
-        mgr.register(ALT, Space, Command::Layout(ToggleFocusFloating));
-        mgr.register(ALT | SHIFT, Space, Command::Layout(ToggleWindowFloating));
-        mgr.register(ALT, KeyF, Command::Layout(ToggleFullscreen));
-
-        mgr.register(ALT, KeyM, Command::Metrics(ShowTiming));
-        mgr.register(ALT | SHIFT, KeyD, Command::Debug);
-        mgr.register(ALT | SHIFT, KeyS, Command::Serialize);
-        mgr.register(
-            ALT | SHIFT,
-            KeyE,
-            Command::SaveAndExit(self.config.restore_file.clone()),
-        );
-        mgr.register_wm(ALT, KeyZ, WmCommand::ToggleSpaceActivated);
-
+        for (key, cmd) in &self.config.config.keys {
+            mgr.register_wm(key.modifiers, key.key_code, cmd.clone());
+        }
         self.hotkeys = Some(mgr);
     }
 

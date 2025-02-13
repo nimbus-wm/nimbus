@@ -1,0 +1,69 @@
+# This is the default configuration. Nimbus will load this file if you do not
+# have a .nimbus.toml file in your home directory. You should copy this file
+# to $HOME and modify it to suit your needs.
+
+[keys]
+
+# Modifier and key names must be capitalized.
+
+# Toggle whether the current space is managed by Nimbus.
+"Alt + Z" = "toggle_space_activated"
+
+# Focus the window in the specified direction.
+"Alt + H" = { move_focus = "left" }
+"Alt + J" = { move_focus = "down" }
+"Alt + K" = { move_focus = "up" }
+"Alt + L" = { move_focus = "right" }
+
+# Move the focused window in the specified direction.
+"Alt + Shift + H" = { move_node = "left" }
+"Alt + Shift + J" = { move_node = "down" }
+"Alt + Shift + K" = { move_node = "up" }
+"Alt + Shift + L" = { move_node = "right" }
+
+# Move up or down the tree hieararchy, selecting a parent or child node
+# respectively.
+"Alt + A" = "ascend"
+"Alt + D" = "descend"
+
+# Create a container above the current node in the specified orientation.
+# This has the effect of "splitting" the current window/node once a new node
+# is added.
+"Alt + Backslash" = { split = "horizontal" }
+"Alt + Equal" = { split = "vertical" }
+
+# Change the parent node to a horizontal or vertical group, also known as
+# "tabbed" and "stacked" respectively.
+"Alt + T" = { group = "horizontal" }
+"Alt + S" = { group = "vertical" }
+"Alt + E" = "ungroup"
+
+# Float the current node. Floating windows are allowed to overlap and keep
+# whatever size and position you give them. Note that they do not actually
+# float on top of other windows, as that would require disabling security
+# protection on your machine.
+"Alt + Shift + Space" = "toggle_window_floating"
+
+# Toggle between focusing floating nodes. When switching to floating mode
+# this will put all floating windows on top, and when switching away it will
+# hide floating windows.
+"Alt + Space" = "toggle_focus_floating"
+
+# Toggle whether the focused node takes up the whole screen.
+"Alt + F" = "toggle_fullscreen"
+
+#
+# Developer commands
+#
+
+# Save the current state to the restore file and exit.
+# Restore this with the --restore option when starting nimbus.
+# Note that the restore file is only useful when upgrading or restarting
+# nimbus itself; it is not valid after the user logs out or restarts.
+"Alt + Shift + E" = "save_and_exit"
+
+# Print the current layout in the logs.
+"Alt + Shift + D" = "debug"
+
+"Alt + M" = "show_timing"
+"Alt + Shift + S" = "serialize"
