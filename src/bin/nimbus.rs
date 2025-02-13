@@ -22,6 +22,8 @@ struct Cli {
     one: bool,
 
     /// Disable new spaces by default.
+    ///
+    /// Ignored if --one is used.
     #[arg(long)]
     default_disable: bool,
 
@@ -45,11 +47,12 @@ fn main() {
     log::init_logging();
     install_panic_hook();
 
-    let config = if config_file().exists() {
+    let mut config = if config_file().exists() {
         Config::read(&config_file()).unwrap()
     } else {
         Config::default()
     };
+    config.settings.default_disable |= opt.default_disable;
 
     if opt.validate {
         LayoutManager::load(restore_file()).unwrap();
@@ -65,7 +68,6 @@ fn main() {
 
     let config = wm_controller::Config {
         one_space: opt.one,
-        default_disable: opt.default_disable,
         restore_file: restore_file(),
         config,
     };

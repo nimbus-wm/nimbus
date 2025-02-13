@@ -25,12 +25,26 @@ pub fn config_file() -> PathBuf {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigFile {
+    settings: Settings,
     keys: FxHashMap<String, WmCommand>,
 }
 
 pub struct Config {
+    pub settings: Settings,
     pub keys: Vec<(Hotkey, WmCommand)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Settings {
+    #[serde(default = "yes")]
+    pub default_disable: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Config {
@@ -53,7 +67,7 @@ impl Config {
             };
             keys.push((key, cmd));
         }
-        Ok(Config { keys })
+        Ok(Config { settings: c.settings, keys })
     }
 }
 
@@ -62,5 +76,13 @@ mod tests {
     #[test]
     fn default_config_parses() {
         super::Config::default();
+    }
+
+    #[test]
+    fn default_settings_match_unspecified_setting_values() {
+        assert_eq!(
+            super::Config::default().settings,
+            toml::from_str("").unwrap()
+        );
     }
 }

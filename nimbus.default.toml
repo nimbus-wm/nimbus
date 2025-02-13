@@ -2,8 +2,13 @@
 # have a .nimbus.toml file in your home directory. You should copy this file
 # to $HOME and modify it to suit your needs.
 
-[keys]
+[settings]
 
+# Whether to disable each space by default. When this is set, Use the
+# toggle_space_activated command to enable a space.
+default_disable = true
+
+[keys]
 # Modifier and key names must be capitalized.
 
 # Toggle whether the current space is managed by Nimbus.

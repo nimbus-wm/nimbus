@@ -44,8 +44,6 @@ pub struct Config {
     ///
     /// This can be useful for development.
     pub one_space: bool,
-    /// Whether new spaces are disabled by default.
-    pub default_disable: bool,
     pub restore_file: PathBuf,
     pub config: crate::config::Config,
 }
@@ -109,7 +107,7 @@ impl WmController {
                 self.send_event(event);
             }
             Command(Wm(ToggleSpaceActivated)) => {
-                let toggle_set = if self.config.default_disable {
+                let toggle_set = if self.config.config.settings.default_disable {
                     &mut self.enabled_spaces
                 } else {
                     &mut self.disabled_spaces
@@ -161,7 +159,7 @@ impl WmController {
                 Some(_) if self.config.one_space && *space != self.starting_space => false,
                 Some(sp) if self.disabled_spaces.contains(sp) => false,
                 Some(sp) if self.enabled_spaces.contains(sp) => true,
-                _ if self.config.default_disable => false,
+                _ if self.config.config.settings.default_disable => false,
                 _ => true,
             };
             if !enabled {
