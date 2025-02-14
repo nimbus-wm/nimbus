@@ -484,13 +484,10 @@ impl Reactor {
         // FIXME: We assume all windows are on the main screen.
         if let Some(space) = self.main_screen_space() {
             // Filter out some noise.
-            if self.windows.iter().any(|(wid, _)| wid.pid == pid) {
-                self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
-                    space,
-                    pid,
-                    app_windows,
-                ));
+            if !self.windows.iter().any(|(wid, _)| wid.pid == pid) {
+                return;
             }
+            self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
         }
     }
 
