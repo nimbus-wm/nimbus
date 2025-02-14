@@ -40,14 +40,14 @@ impl Record {
 
     pub(super) fn start(&mut self, layout: &LayoutManager) {
         let Some(file) = &mut self.0 else { return };
-        ron::ser::to_writer(file.by_ref(), &layout).unwrap();
-        file.write_all(&[b'\n']).unwrap();
+        let line = ron::ser::to_string(&layout).unwrap();
+        write!(file, "{line}\n").unwrap();
     }
 
     pub(super) fn on_event(&mut self, event: &Event) {
         let Some(file) = &mut self.0 else { return };
-        ron::ser::to_writer(file.by_ref(), &event).unwrap();
-        file.write_all(&[b'\n']).unwrap();
+        let line = ron::ser::to_string(&event).unwrap();
+        write!(file, "{line}\n").unwrap();
     }
 }
 
