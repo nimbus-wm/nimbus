@@ -624,7 +624,7 @@ pub mod tests {
         reactor.handle_events(apps.make_app(1, make_windows(2)));
         let requests = apps.requests();
         assert!(!requests.is_empty());
-        let (events_1, _) = simulate_events_for_requests(requests);
+        let events_1 = apps.simulate_events_for_requests(requests);
 
         reactor.handle_events(apps.make_app(2, make_windows(2)));
         assert!(!apps.requests().is_empty());
@@ -650,7 +650,8 @@ pub mod tests {
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
-        let (events_1, state_1) = simulate_events_for_requests(apps.requests());
+        let events_1 = apps.simulate_events();
+        let state_1 = apps.windows.clone();
         assert!(!state_1.is_empty());
 
         for event in events_1 {
@@ -659,11 +660,11 @@ pub mod tests {
         assert!(apps.requests().is_empty());
 
         reactor.handle_events(apps.make_app(2, make_windows(1)));
-        let (_events_2, _state_2) = simulate_events_for_requests(apps.requests());
-        dbg!(_state_2);
+        let _events_2 = apps.simulate_events();
 
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(2, 1)));
-        let (_events_3, state_3) = simulate_events_for_requests(apps.requests());
+        let _events_3 = apps.simulate_events();
+        let state_3 = apps.windows;
 
         // These should be the same, because we should have resized the first
         // two windows both at the beginning, and at the end when the third
@@ -685,7 +686,8 @@ pub mod tests {
         ));
 
         reactor.handle_events(apps.make_app(1, make_windows(2)));
-        let (events_1, state_1) = simulate_events_for_requests(apps.requests());
+        let events_1 = apps.simulate_events();
+        let state_1 = apps.windows.clone();
         assert!(!state_1.is_empty());
 
         for event in events_1 {
@@ -709,8 +711,8 @@ pub mod tests {
 
         let requests = apps.requests();
         assert!(!requests.is_empty());
-        let (_events_2, state_2) = simulate_events_for_requests(requests);
-        assert_eq!(state_2[&wid].frame, old_frame);
+        let _events_2 = apps.simulate_events_for_requests(requests);
+        assert_eq!(apps.windows[&wid].frame, old_frame);
     }
 
     #[test]
@@ -725,7 +727,8 @@ pub mod tests {
 
         reactor.handle_events(apps.make_app(1, make_windows(3)));
 
-        let (events, windows) = simulate_events_for_requests(apps.requests());
+        let events = apps.simulate_events();
+        let windows = apps.windows.clone();
         for event in events {
             reactor.handle_event(event);
         }
@@ -736,7 +739,7 @@ pub mod tests {
 
         // Resize the right edge of the middle window.
         let resizing = WindowId::new(1, 2);
-        let window = &windows[&resizing];
+        let window = &apps.windows[&resizing];
         let frame = CGRect::new(
             window.frame.origin,
             CGSize::new(window.frame.size.width + 10., window.frame.size.height),
@@ -754,8 +757,8 @@ pub mod tests {
         let old_frame = windows[&next].frame;
         let requests = apps.requests();
         assert!(!requests.is_empty());
-        let (_events, windows) = simulate_events_for_requests(requests);
-        assert_ne!(old_frame, windows[&next].frame);
+        let _events = apps.simulate_events_for_requests(requests);
+        assert_ne!(old_frame, apps.windows[&next].frame);
     }
 
     #[test]
@@ -771,10 +774,10 @@ pub mod tests {
 
         reactor.handle_events(apps.make_app(1, make_windows(1)));
 
-        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        let _events = apps.simulate_events();
         assert_eq!(
             full_screen,
-            windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+            apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
         );
     }
 
@@ -791,9 +794,10 @@ pub mod tests {
 
         reactor.handle_events(apps.make_app(1, make_windows(1)));
 
-        let (_events, windows) = simulate_events_for_requests(apps.requests());
-        assert!(
-            windows.get(&WindowId::new(1, 1)).is_none(),
+        let state_before = apps.windows.clone();
+        let _events = apps.simulate_events();
+        assert_eq!(
+            state_before, apps.windows,
             "Window should not have been moved",
         );
 
@@ -826,9 +830,10 @@ pub mod tests {
 
         reactor.handle_events(apps.make_app_with_opts(1, make_windows(1), None, true, false));
 
-        let (_events, windows) = simulate_events_for_requests(apps.requests());
-        assert!(
-            windows.get(&WindowId::new(1, 1)).is_none(),
+        let state_before = apps.windows.clone();
+        let _events = apps.simulate_events();
+        assert_eq!(
+            state_before, apps.windows,
             "Window should not have been moved",
         );
 
@@ -906,7 +911,7 @@ pub mod tests {
                     });
                 }
                 req => {
-                    let (events, _) = simulate_events_for_requests(vec![req]);
+                    let events = apps.simulate_events_for_requests(vec![req]);
                     for event in events {
                         reactor.handle_event(event);
                     }
@@ -934,10 +939,10 @@ pub mod tests {
 
         reactor.handle_events(apps.make_app(1, make_windows(1)));
 
-        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        let _events = apps.simulate_events();
         assert_eq!(
             full_screen,
-            windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+            apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
         );
 
         // Simulate the system resizing a window after it recognizes an old
@@ -956,10 +961,10 @@ pub mod tests {
             }],
         ));
 
-        let (_events, windows) = simulate_events_for_requests(apps.requests());
+        let _events = apps.simulate_events();
         assert_eq!(
             full_screen,
-            windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+            apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
         );
     }
 }

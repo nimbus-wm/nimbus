@@ -154,7 +154,7 @@ mod tests {
             true,
             true,
         ));
-        reactor.handle_events(apps.make_app(2, make_windows(2)));
+        reactor.handle_events(apps.make_app_with_opts(2, make_windows(2), None, false, true));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
         assert_eq!(
             reactor.layout.selected_window(space),
@@ -224,7 +224,7 @@ mod tests {
             true,
             true,
         ));
-        reactor.handle_events(apps.make_app(2, make_windows(2)));
+        reactor.handle_events(apps.make_app_with_opts(2, make_windows(2), None, false, true));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
         assert_eq!(
             reactor.layout.selected_window(space),
