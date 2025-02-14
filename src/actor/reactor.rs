@@ -484,13 +484,19 @@ impl Reactor {
             .filter(|wid| wid.pid == pid)
             .filter(|wid| self.window_is_standard(*wid))
             .collect();
+        if !self.windows.iter().any(|(wid, _)| wid.pid == pid) {
+            // Filter out log noise from NPCs.
+            return;
+        }
         // FIXME: We assume all windows are on the main screen.
-        if let Some(space) = self.main_screen_space() {
-            // Filter out some noise.
-            if !self.windows.iter().any(|(wid, _)| wid.pid == pid) {
-                return;
+        let Some(space) = self.main_screen_space() else { return };
+        self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
+        // If it's possible we just added the main window to the layout, make sure the layout
+        // knows it's focused.
+        if let Some(main_window) = self.main_window() {
+            if main_window.pid == pid {
+                self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
             }
-            self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
         }
     }
 
@@ -778,6 +784,43 @@ pub mod tests {
         assert_eq!(
             full_screen,
             apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+        );
+    }
+
+    #[test]
+    fn it_selects_the_main_window_on_space_enable() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        let ws_info = (1..=2)
+            .map(|id| WindowServerInfo {
+                id: WindowServerId::new(id),
+                pid: 1,
+                layer: 0,
+                frame: CGRect::ZERO,
+            })
+            .collect::<Vec<_>>();
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![full_screen],
+            vec![None],
+            ws_info.clone(),
+        ));
+
+        reactor.handle_events(apps.make_app_with_opts(
+            1,
+            make_windows(2),
+            Some(WindowId::new(1, 1)),
+            true,
+            true,
+        ));
+        reactor.handle_event(Event::ApplicationGloballyActivated(1));
+        reactor.handle_events(apps.simulate_events());
+
+        reactor.handle_event(Event::SpaceChanged(vec![Some(SpaceId::new(1))], ws_info));
+        reactor.handle_events(apps.simulate_events());
+        assert_eq!(
+            reactor.layout.selected_window(SpaceId::new(1)),
+            Some(WindowId::new(1, 1))
         );
     }
 
