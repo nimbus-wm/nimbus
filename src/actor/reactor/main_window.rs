@@ -129,7 +129,7 @@ mod tests {
     use test_log::test;
 
     use super::super::{
-        tests::{make_windows, Apps},
+        testing::{make_windows, Apps},
         Event, LayoutManager, Quiet, Reactor, SpaceId, WindowId,
     };
 
