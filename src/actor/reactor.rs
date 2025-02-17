@@ -260,7 +260,6 @@ impl Reactor {
                 is_frontmost: _,
                 main_window: _,
             } => {
-                // FIXME: We don't get window server info for windows on app launch.
                 self.apps.insert(pid, AppState { info, handle });
                 self.update_partial_window_server_info(window_server_info);
                 self.on_windows_discovered(pid, visible_windows, vec![]);
