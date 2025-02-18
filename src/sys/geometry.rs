@@ -3,42 +3,6 @@ use icrate::Foundation as ic;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, SerializeAs};
 
-/*
-#[derive(Serialize, Deserialize)]
-#[serde(transparent)]
-#[repr(transparent)]
-pub struct CGRect(#[serde(with = "CGRectDef")] ic::CGRect);
-
-impl Deref for CGRect {
-    type Target = ic::CGRect;
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: repr(transparent)
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-impl DerefMut for CGRect {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: repr(transparent)
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "ic::CGPoint")]
-pub struct CGPointDef {
-    pub x: f64,
-    pub y: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "ic::CGSize")]
-pub struct CGSizeDef {
-    pub width: f64,
-    pub height: f64,
-}
-*/
-
 pub trait ToICrate<T> {
     fn to_icrate(&self) -> T;
 }
@@ -169,6 +133,28 @@ pub trait SameAs: IsWithin + Sized {
 impl SameAs for ic::CGRect {}
 impl SameAs for ic::CGPoint {}
 impl SameAs for ic::CGSize {}
+
+pub trait CGRectExt {
+    fn intersection(&self, other: &Self) -> Self;
+    fn area(&self) -> f64;
+}
+
+impl CGRectExt for ic::CGRect {
+    fn intersection(&self, other: &Self) -> Self {
+        let min_x = f64::max(self.min().x, other.min().x);
+        let max_x = f64::min(self.max().x, other.max().x);
+        let min_y = f64::max(self.min().y, other.min().y);
+        let max_y = f64::min(self.max().y, other.max().y);
+        ic::CGRect {
+            origin: ic::CGPoint::new(min_x, min_y),
+            size: ic::CGSize::new(f64::max(max_x - min_x, 0.), f64::max(max_y - min_y, 0.)),
+        }
+    }
+
+    fn area(&self) -> f64 {
+        self.size.width * self.size.height
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "ic::CGRect")]

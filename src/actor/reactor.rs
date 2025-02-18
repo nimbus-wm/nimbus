@@ -32,7 +32,7 @@ use crate::{
     sys::{
         event::MouseState,
         executor::Executor,
-        geometry::{CGRectDef, Round, SameAs},
+        geometry::{CGRectDef, CGRectExt, Round, SameAs},
         screen::SpaceId,
         window_server::{WindowServerId, WindowServerInfo},
     },
@@ -149,7 +149,8 @@ pub struct Reactor {
     window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     window_ids: HashMap<WindowServerId, WindowId>,
     visible_windows: HashSet<WindowServerId>,
-    main_screen: Option<Screen>,
+    // main_screen: Option<Screen>,
+    screens: Vec<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
@@ -228,7 +229,7 @@ impl Reactor {
             window_ids: HashMap::default(),
             window_server_info: HashMap::default(),
             visible_windows: HashSet::default(),
-            main_screen: None,
+            screens: vec![],
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
@@ -497,6 +498,10 @@ impl Reactor {
                 self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
             }
         }
+    }
+
+    fn best_screen_for_window(&self, frame: CGRect) -> Option<&Screen> {
+        self.screens.iter().max_by_key(|s| s.frame.intersection(&frame).area() as i64)
     }
 
     fn window_is_standard(&self, id: WindowId) -> bool {
@@ -852,6 +857,33 @@ pub mod tests {
             MouseState::Up,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
+    }
+
+    #[test]
+    fn it_keeps_discovered_windows_on_their_initial_screen() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let screen1 = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        let screen2 = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![screen1, screen2],
+            vec![Some(SpaceId::new(1)), Some(SpaceId::new(2))],
+            vec![],
+        ));
+
+        let mut windows = make_windows(2);
+        windows[1].frame.origin = CGPoint::new(1100., 100.);
+        reactor.handle_events(apps.make_app(1, windows));
+
+        let _events = apps.simulate_events();
+        assert_eq!(
+            screen1,
+            apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+        );
+        assert_eq!(
+            screen2,
+            apps.windows.get(&WindowId::new(1, 2)).expect("Window was not resized").frame,
+        );
     }
 
     #[test]
