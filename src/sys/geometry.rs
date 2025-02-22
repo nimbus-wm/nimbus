@@ -3,42 +3,6 @@ use icrate::Foundation as ic;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, SerializeAs};
 
-/*
-#[derive(Serialize, Deserialize)]
-#[serde(transparent)]
-#[repr(transparent)]
-pub struct CGRect(#[serde(with = "CGRectDef")] ic::CGRect);
-
-impl Deref for CGRect {
-    type Target = ic::CGRect;
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: repr(transparent)
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-impl DerefMut for CGRect {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: repr(transparent)
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "ic::CGPoint")]
-pub struct CGPointDef {
-    pub x: f64,
-    pub y: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(remote = "ic::CGSize")]
-pub struct CGSizeDef {
-    pub width: f64,
-    pub height: f64,
-}
-*/
-
 pub trait ToICrate<T> {
     fn to_icrate(&self) -> T;
 }
