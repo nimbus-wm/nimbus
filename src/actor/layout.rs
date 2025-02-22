@@ -39,13 +39,12 @@ pub enum LayoutEvent {
     AppClosed(pid_t),
     WindowAdded(SpaceId, WindowId),
     WindowRemoved(WindowId),
-    WindowFocused(Option<SpaceId>, WindowId),
+    WindowFocused(Vec<SpaceId>, WindowId),
     WindowResized {
-        space: SpaceId,
         wid: WindowId,
         old_frame: CGRect,
         new_frame: CGRect,
-        screen: CGRect,
+        screens: Vec<(SpaceId, CGRect)>,
     },
     SpaceExposed(SpaceId, CGSize),
 }
@@ -219,38 +218,41 @@ impl LayoutManager {
                 self.tree.remove_window(wid);
                 self.floating_windows.remove(&wid);
             }
-            LayoutEvent::WindowFocused(space, wid) => {
+            LayoutEvent::WindowFocused(spaces, wid) => {
                 self.focused_window = Some(wid);
                 if self.floating_windows.contains(&wid) {
                     self.last_floating_focus = Some(wid);
-                } else if let Some(space) = space {
-                    let layout = self.layout(space);
-                    if let Some(node) = self.tree.window_node(layout, wid) {
-                        self.tree.select(node);
+                } else {
+                    for space in spaces {
+                        let layout = self.layout(space);
+                        if let Some(node) = self.tree.window_node(layout, wid) {
+                            self.tree.select(node);
+                        }
                     }
                 }
             }
             LayoutEvent::WindowResized {
-                space,
                 wid,
                 old_frame,
                 new_frame,
-                screen,
+                screens,
             } => {
-                let layout = self.layout(space);
-                let Some(node) = self.tree.window_node(layout, wid) else {
-                    return EventResponse::default();
-                };
-                if new_frame == screen {
-                    self.tree.set_fullscreen(node, true);
-                } else if old_frame == screen {
-                    self.tree.set_fullscreen(node, false);
-                    // We don't have an accurate old_frame handy so just ignore
-                    // the actual new size for now. It's probably going back to
-                    // its original size, and if not, it's probably interactive
-                    // and we'll update on the next frame.
-                } else {
-                    self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
+                for (space, screen) in screens {
+                    let layout = self.layout(space);
+                    let Some(node) = self.tree.window_node(layout, wid) else {
+                        continue;
+                    };
+                    if new_frame == screen {
+                        self.tree.set_fullscreen(node, true);
+                    } else if old_frame == screen {
+                        self.tree.set_fullscreen(node, false);
+                        // We don't have an accurate old_frame handy so just ignore
+                        // the actual new size for now. It's probably going back to
+                        // its original size, and if not, it's probably interactive
+                        // and we'll update on the next frame.
+                    } else {
+                        self.tree.set_frame_from_resize(node, old_frame, new_frame, screen);
+                    }
                 }
             }
         }
@@ -515,7 +517,7 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 1)));
         _ = mgr.handle_command(Some(space), LayoutCommand::MoveNode(Direction::Up));
         assert_eq!(
             vec![
@@ -588,7 +590,7 @@ mod tests {
         let screen1 = rect(0, 0, 120, 120);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 1)));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 40, 120)),
@@ -602,7 +604,7 @@ mod tests {
         let screen2 = rect(0, 0, 1200, 1200);
         _ = mgr.handle_event(SpaceExposed(space, screen2.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 1)));
         assert_eq!(
             vec![
                 (WindowId::new(pid, 1), rect(0, 0, 400, 1200)),
@@ -705,8 +707,8 @@ mod tests {
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, make_windows(pid, 3)));
 
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 1)));
 
         // Make the first window float.
         _ = mgr.handle_command(Some(space), LayoutCommand::ToggleWindowFloating);
@@ -719,7 +721,7 @@ mod tests {
         assert_eq!(vec![WindowId::new(pid, 3)], response.raise_windows);
         assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
         if let Some(focus) = response.focus_window {
-            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+            _ = mgr.handle_event(WindowFocused(vec![space], focus));
         }
 
         // Make the second window float.
@@ -732,7 +734,7 @@ mod tests {
         assert!(response.raise_windows.is_empty());
         assert_eq!(Some(WindowId::new(pid, 3)), response.focus_window);
         if let Some(focus) = response.focus_window {
-            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+            _ = mgr.handle_event(WindowFocused(vec![space], focus));
         }
 
         // Toggle back to floating.
@@ -740,7 +742,7 @@ mod tests {
         assert_eq!(vec![WindowId::new(pid, 1)], response.raise_windows);
         assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
         if let Some(focus) = response.focus_window {
-            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+            _ = mgr.handle_event(WindowFocused(vec![space], focus));
         }
     }
 
@@ -751,7 +753,7 @@ mod tests {
         let space = SpaceId::new(1);
         let pid = 1;
 
-        _ = mgr.handle_event(WindowFocused(None, WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![], WindowId::new(pid, 1)));
 
         // Make the first window float.
         _ = mgr.handle_command(None, LayoutCommand::ToggleWindowFloating);
@@ -779,7 +781,7 @@ mod tests {
         // did that in the test but not in production. This led to an uncaught
         // bug!
         if let Some(focus) = response.focus_window {
-            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+            _ = mgr.handle_event(WindowFocused(vec![space], focus));
         }
 
         // Toggle back to floating.
@@ -787,7 +789,7 @@ mod tests {
         assert!(response.raise_windows.is_empty());
         assert_eq!(Some(WindowId::new(pid, 1)), response.focus_window);
         if let Some(focus) = response.focus_window {
-            _ = mgr.handle_event(WindowFocused(Some(space), focus));
+            _ = mgr.handle_event(WindowFocused(vec![space], focus));
         }
     }
 
@@ -803,12 +805,12 @@ mod tests {
         let screen1 = rect(0, 0, 300, 30);
         _ = mgr.handle_event(SpaceExposed(space, screen1.size));
         _ = mgr.handle_event(WindowsOnScreenUpdated(space, pid, windows.clone()));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 5)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 5)));
         _ = mgr.handle_command(Some(space), ToggleWindowFloating);
         _ = mgr.handle_command(Some(space), ToggleFocusFloating);
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 2)));
         _ = mgr.handle_command(Some(space), Split(Orientation::Vertical));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 3)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 3)));
         _ = mgr.handle_command(Some(space), MoveNode(Direction::Left));
 
         assert_eq!(
@@ -822,7 +824,7 @@ mod tests {
         );
 
         // Add a new window when the left window is selected.
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 1)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 1)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
         assert_eq!(
             vec![
@@ -837,7 +839,7 @@ mod tests {
         _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
 
         // Add a new window when the top middle is selected.
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 2)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
         assert_eq!(
             vec![
@@ -852,8 +854,8 @@ mod tests {
         _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
 
         // Same thing, but unfloat an existing window instead of making a new one.
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 2)));
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 5)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 2)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 5)));
         _ = mgr.handle_command(Some(space), ToggleWindowFloating);
         assert_eq!(
             vec![
@@ -868,7 +870,7 @@ mod tests {
         _ = mgr.handle_command(Some(space), ToggleWindowFloating);
 
         // Add a new window when the bottom middle is selected.
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 3)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 3)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
         assert_eq!(
             vec![
@@ -883,7 +885,7 @@ mod tests {
         _ = mgr.handle_event(WindowRemoved(WindowId::new(pid, 6)));
 
         // Add a new window when the right window is selected.
-        _ = mgr.handle_event(WindowFocused(Some(space), WindowId::new(pid, 4)));
+        _ = mgr.handle_event(WindowFocused(vec![space], WindowId::new(pid, 4)));
         _ = mgr.handle_event(WindowAdded(space, WindowId::new(pid, 6)));
         assert_eq!(
             vec![
@@ -962,11 +964,10 @@ mod tests {
         );
 
         _ = mgr.handle_event(WindowResized {
-            space,
             wid: WindowId::new(pid, 2),
             old_frame: rect(100, 0, 100, 30),
             new_frame: screen1,
-            screen: screen1,
+            screens: vec![(space, screen1)],
         });
 
         // Check that the other windows aren't resized (especially to zero);
@@ -982,11 +983,10 @@ mod tests {
         );
 
         _ = mgr.handle_event(WindowResized {
-            space,
             wid: WindowId::new(pid, 2),
             old_frame: screen1,
             new_frame: rect(100, 0, 100, 30),
-            screen: screen1,
+            screens: vec![(space, screen1)],
         });
 
         assert_eq!(

@@ -11,7 +11,7 @@ mod replay;
 #[cfg(test)]
 mod testing;
 
-use std::{mem, thread};
+use std::{collections::BTreeMap, mem, thread};
 
 use animation::Animation;
 use icrate::Foundation::CGRect;
@@ -32,7 +32,7 @@ use crate::{
     sys::{
         event::MouseState,
         executor::Executor,
-        geometry::{CGRectDef, Round, SameAs},
+        geometry::{CGRectDef, CGRectExt, Round, SameAs},
         screen::SpaceId,
         window_server::{WindowServerId, WindowServerInfo},
     },
@@ -149,7 +149,7 @@ pub struct Reactor {
     window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     window_ids: HashMap<WindowServerId, WindowId>,
     visible_windows: HashSet<WindowServerId>,
-    main_screen: Option<Screen>,
+    screens: Vec<Screen>,
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
@@ -228,7 +228,7 @@ impl Reactor {
             window_ids: HashMap::default(),
             window_server_info: HashMap::default(),
             visible_windows: HashSet::default(),
-            main_screen: None,
+            screens: vec![],
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
@@ -290,11 +290,12 @@ impl Reactor {
                 if let Some(wsid) = window.sys_id {
                     self.window_ids.insert(wsid, wid);
                 }
+                let frame = window.frame;
                 self.windows.insert(wid, window.into());
                 if let Some(info) = ws_info {
                     self.window_server_info.insert(info.id, info);
                 }
-                if let Some(space) = self.main_screen_space() {
+                if let Some(space) = self.best_space_for_window(&frame) {
                     if self.window_is_standard(wid) {
                         animation_focus_wid = Some(wid);
                         self.send_layout_event(LayoutEvent::WindowAdded(space, wid));
@@ -330,16 +331,18 @@ impl Reactor {
                 if old_frame == new_frame {
                     return;
                 }
-                let Some(screen) = self.main_screen else { return };
-                let Some(space) = screen.space else { return };
+                let screens = self
+                    .screens
+                    .iter()
+                    .flat_map(|screen| Some((screen.space?, screen.frame)))
+                    .collect::<Vec<_>>();
                 // This event is ignored if the window is not in the layout.
                 if old_frame.size != new_frame.size {
                     self.send_layout_event(LayoutEvent::WindowResized {
-                        space,
-                        screen: screen.frame,
                         wid,
                         old_frame,
                         new_frame,
+                        screens,
                     });
                     is_resize = true;
                 } else if mouse_state == Some(MouseState::Down) {
@@ -348,37 +351,35 @@ impl Reactor {
             }
             Event::ScreenParametersChanged(frames, spaces, ws_info) => {
                 info!("screen parameters changed");
-                self.main_screen = frames
+                self.screens = frames
                     .into_iter()
                     .zip(spaces)
                     .map(|(frame, space)| Screen { frame, space })
-                    .next();
-                if let Some(space) = self.main_screen_space() {
-                    self.send_layout_event(LayoutEvent::SpaceExposed(
-                        space,
-                        self.main_screen.unwrap().frame.size,
-                    ));
+                    .collect();
+                let screens = self.screens.clone();
+                for screen in screens {
+                    let Some(space) = screen.space else { continue };
+                    self.send_layout_event(LayoutEvent::SpaceExposed(space, screen.frame.size));
                 }
                 self.update_complete_window_server_info(ws_info);
                 // FIXME: Update visible windows if space changed
             }
             Event::SpaceChanged(spaces, ws_info) => {
                 info!("space changed");
-                let Some(screen) = self.main_screen.as_mut() else {
-                    return;
-                };
-                screen.space =
-                    *spaces.first().expect("Spaces should be non-empty if there is a main screen");
-                let Some(space) = self.main_screen_space() else {
-                    // Either the space is disabled or there is no main screen.
-                    return;
-                };
-                self.send_layout_event(LayoutEvent::SpaceExposed(
-                    space,
-                    self.main_screen.unwrap().frame.size,
-                ));
+                assert_eq!(spaces.len(), self.screens.len());
+                for (space, screen) in spaces.iter().zip(&mut self.screens) {
+                    screen.space = *space;
+                }
+                let screens = self.screens.clone();
+                for screen in screens {
+                    let Some(space) = screen.space else {
+                        continue;
+                    };
+                    self.send_layout_event(LayoutEvent::SpaceExposed(space, screen.frame.size));
+                }
                 if let Some(main_window) = self.main_window() {
-                    self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
+                    let spaces = spaces.iter().copied().flatten().collect();
+                    self.send_layout_event(LayoutEvent::WindowFocused(spaces, main_window));
                 }
                 self.update_complete_window_server_info(ws_info);
                 // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
@@ -395,13 +396,15 @@ impl Reactor {
             }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
-                let response = self.layout.handle_command(self.main_screen_space(), cmd);
+                let response = self.layout.handle_command(self.main_window_space(), cmd);
                 self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => log::handle_command(cmd),
             Event::Command(Command::Reactor(ReactorCommand::Debug)) => {
-                if let Some(space) = self.main_screen_space() {
-                    self.layout.debug_tree_desc(space, "", true);
+                for screen in &self.screens {
+                    if let Some(space) = screen.space {
+                        self.layout.debug_tree_desc(space, "", true);
+                    }
                 }
             }
             Event::Command(Command::Reactor(ReactorCommand::Serialize)) => {
@@ -418,10 +421,8 @@ impl Reactor {
             }
         }
         if let Some(raised_window) = raised_window {
-            self.send_layout_event(LayoutEvent::WindowFocused(
-                self.main_screen_space(),
-                raised_window,
-            ));
+            let spaces = self.screens.iter().flat_map(|screen| screen.space).collect();
+            self.send_layout_event(LayoutEvent::WindowFocused(spaces, raised_window));
         }
         if !self.in_drag {
             self.update_layout(animation_focus_wid, is_resize);
@@ -475,28 +476,50 @@ impl Reactor {
         self.window_ids
             .extend(new.iter().flat_map(|(wid, info)| info.sys_id.map(|wsid| (wsid, *wid))));
         self.windows.extend(new.into_iter().map(|(wid, info)| (wid, info.into())));
-        let app_windows = self
+        if !self.windows.iter().any(|(wid, _)| wid.pid == pid) {
+            // Filter out log noise from NPCs.
+            return;
+        }
+        let mut app_windows: BTreeMap<SpaceId, Vec<WindowId>> = BTreeMap::new();
+        for wid in self
             .visible_windows
             .iter()
             .flat_map(|wsid| self.window_ids.get(wsid))
             .copied()
             .filter(|wid| wid.pid == pid)
             .filter(|wid| self.window_is_standard(*wid))
-            .collect();
-        if !self.windows.iter().any(|(wid, _)| wid.pid == pid) {
-            // Filter out log noise from NPCs.
-            return;
+        {
+            let Some(space) = self.best_space_for_window(&self.windows[&wid].frame_monotonic)
+            else {
+                continue;
+            };
+            app_windows.entry(space).or_default().push(wid);
         }
-        // FIXME: We assume all windows are on the main screen.
-        let Some(space) = self.main_screen_space() else { return };
-        self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(space, pid, app_windows));
+        let screens = self.screens.clone();
+        for screen in screens {
+            let Some(space) = screen.space else { continue };
+            self.send_layout_event(LayoutEvent::WindowsOnScreenUpdated(
+                space,
+                pid,
+                app_windows.remove(&space).unwrap_or_default(),
+            ));
+        }
         // If it's possible we just added the main window to the layout, make sure the layout
         // knows it's focused.
         if let Some(main_window) = self.main_window() {
             if main_window.pid == pid {
-                self.send_layout_event(LayoutEvent::WindowFocused(Some(space), main_window));
+                let spaces = self.screens.iter().flat_map(|screen| screen.space).collect();
+                self.send_layout_event(LayoutEvent::WindowFocused(spaces, main_window));
             }
         }
+    }
+
+    fn best_screen_for_window(&self, frame: &CGRect) -> Option<&Screen> {
+        self.screens.iter().max_by_key(|s| s.frame.intersection(frame).area() as i64)
+    }
+
+    fn best_space_for_window(&self, frame: &CGRect) -> Option<SpaceId> {
+        self.best_screen_for_window(frame)?.space
     }
 
     fn window_is_standard(&self, id: WindowId) -> bool {
@@ -516,7 +539,7 @@ impl Reactor {
     fn send_layout_event(&mut self, event: LayoutEvent) {
         let response = self.layout.handle_event(event);
         self.handle_layout_response(response);
-        if let Some(space) = self.main_screen_space() {
+        for space in self.screens.iter().flat_map(|screen| screen.space) {
             self.layout.debug_tree_desc(space, "after event", false);
         }
     }
@@ -552,38 +575,40 @@ impl Reactor {
         self.main_window_tracker.main_window()
     }
 
-    fn main_screen_space(&self) -> Option<SpaceId> {
-        self.main_screen?.space
+    fn main_window_space(&self) -> Option<SpaceId> {
+        // TODO: Optimize this with a cache or something.
+        self.best_space_for_window(&self.windows[&self.main_window()?].frame_monotonic)
     }
 
-    #[instrument(skip(self), fields(?self.main_screen))]
+    #[instrument(skip(self), fields())]
     pub fn update_layout(&mut self, new_wid: Option<WindowId>, is_resize: bool) {
-        let Some(main_screen) = self.main_screen else { return };
-        let Some(space) = main_screen.space else { return };
-
-        trace!(?main_screen);
+        let screens = self.screens.clone();
+        let mut anim = Animation::new();
         let main_window = self.main_window();
         trace!(?main_window);
-        let layout = self.layout.calculate_layout(space, main_screen.frame.clone());
-        trace!(?layout, "Layout");
+        for screen in screens {
+            let Some(space) = screen.space else { continue };
+            trace!(?screen);
+            let layout = self.layout.calculate_layout(space, screen.frame.clone());
+            trace!(?layout, "Layout");
 
-        let mut anim = Animation::new();
-        for &(wid, target_frame) in &layout {
-            let Some(window) = self.windows.get_mut(&wid) else {
-                // If we restored a saved state the window may not be available yet.
-                continue;
-            };
-            let target_frame = target_frame.round();
-            let current_frame = window.frame_monotonic;
-            if target_frame.same_as(current_frame) {
-                continue;
+            for &(wid, target_frame) in &layout {
+                let Some(window) = self.windows.get_mut(&wid) else {
+                    // If we restored a saved state the window may not be available yet.
+                    continue;
+                };
+                let target_frame = target_frame.round();
+                let current_frame = window.frame_monotonic;
+                if target_frame.same_as(current_frame) {
+                    continue;
+                }
+                trace!(?wid, ?current_frame, ?target_frame);
+                let handle = &self.apps.get(&wid.pid).unwrap().handle;
+                let is_new = Some(wid) == new_wid;
+                let txid = window.next_txid();
+                anim.add_window(handle, wid, current_frame, target_frame, is_new, txid);
+                window.frame_monotonic = target_frame;
             }
-            trace!(?wid, ?current_frame, ?target_frame);
-            let handle = &self.apps.get(&wid.pid).unwrap().handle;
-            let is_new = Some(wid) == new_wid;
-            let txid = window.next_txid();
-            anim.add_window(handle, wid, current_frame, target_frame, is_new, txid);
-            window.frame_monotonic = target_frame;
         }
         if is_resize {
             // If the user is doing something with the mouse we don't want to
@@ -852,6 +877,33 @@ pub mod tests {
             MouseState::Up,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
+    }
+
+    #[test]
+    fn it_keeps_discovered_windows_on_their_initial_screen() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new(LayoutManager::new());
+        let screen1 = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        let screen2 = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![screen1, screen2],
+            vec![Some(SpaceId::new(1)), Some(SpaceId::new(2))],
+            vec![],
+        ));
+
+        let mut windows = make_windows(2);
+        windows[1].frame.origin = CGPoint::new(1100., 100.);
+        reactor.handle_events(apps.make_app(1, windows));
+
+        let _events = apps.simulate_events();
+        assert_eq!(
+            screen1,
+            apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
+        );
+        assert_eq!(
+            screen2,
+            apps.windows.get(&WindowId::new(1, 2)).expect("Window was not resized").frame,
+        );
     }
 
     #[test]
