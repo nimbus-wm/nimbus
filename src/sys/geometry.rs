@@ -134,6 +134,28 @@ impl SameAs for ic::CGRect {}
 impl SameAs for ic::CGPoint {}
 impl SameAs for ic::CGSize {}
 
+pub trait CGRectExt {
+    fn intersection(&self, other: &Self) -> Self;
+    fn area(&self) -> f64;
+}
+
+impl CGRectExt for ic::CGRect {
+    fn intersection(&self, other: &Self) -> Self {
+        let min_x = f64::max(self.min().x, other.min().x);
+        let max_x = f64::min(self.max().x, other.max().x);
+        let min_y = f64::max(self.min().y, other.min().y);
+        let max_y = f64::min(self.max().y, other.max().y);
+        ic::CGRect {
+            origin: ic::CGPoint::new(min_x, min_y),
+            size: ic::CGSize::new(f64::max(max_x - min_x, 0.), f64::max(max_y - min_y, 0.)),
+        }
+    }
+
+    fn area(&self) -> f64 {
+        self.size.width * self.size.height
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "ic::CGRect")]
 pub struct CGRectDef {
