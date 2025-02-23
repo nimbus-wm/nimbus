@@ -147,6 +147,7 @@ pub enum ReactorCommand {
 }
 
 pub struct Reactor {
+    config: Arc<Config>,
     apps: HashMap<pid_t, AppState>,
     layout: LayoutManager,
     spaces: SpaceManager,
@@ -227,6 +228,7 @@ impl Reactor {
     pub fn new(config: Arc<Config>, layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
+            config: config.clone(),
             apps: HashMap::default(),
             layout,
             spaces: SpaceManager::new(config),
@@ -666,7 +668,7 @@ impl Reactor {
                 window.frame_monotonic = target_frame;
             }
         }
-        if is_resize {
+        if is_resize || !self.config.settings.animate {
             // If the user is doing something with the mouse we don't want to
             // animate on top of that.
             anim.skip_to_end();

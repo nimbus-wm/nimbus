@@ -45,6 +45,8 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default = "yes")]
+    pub animate: bool,
+    #[serde(default = "yes")]
     pub default_disable: bool,
     #[serde(default = "no")]
     pub starting_space_only: bool,

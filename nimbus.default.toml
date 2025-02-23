@@ -4,6 +4,9 @@
 
 [settings]
 
+# Whether to enable animations.
+animate = true
+
 # Whether to disable each space by default. When this is set, Use the
 # toggle_space_activated command to enable a space.
 default_disable = true
