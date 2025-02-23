@@ -31,6 +31,11 @@ struct ConfigFile {
     keys: FxHashMap<String, WmCommand>,
 }
 
+/// The user config for the window manager.
+///
+/// This is the actual config struct used internally.
+// Serialization is only used for development (record/replay).
+#[derive(Serialize, Deserialize)]
 pub struct Config {
     pub settings: Settings,
     pub keys: Vec<(Hotkey, WmCommand)>,
@@ -41,10 +46,15 @@ pub struct Config {
 pub struct Settings {
     #[serde(default = "yes")]
     pub default_disable: bool,
+    #[serde(default = "no")]
+    pub starting_space_only: bool,
 }
 
 fn yes() -> bool {
     true
+}
+fn no() -> bool {
+    false
 }
 
 impl Config {

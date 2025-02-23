@@ -128,6 +128,8 @@ mod tests {
     use icrate::Foundation::CGRect;
     use test_log::test;
 
+    use crate::actor::reactor::{self, ReactorCommand};
+
     use super::super::{
         testing::{make_windows, Apps},
         Event, LayoutManager, Quiet, Reactor, SpaceId, WindowId,
@@ -137,7 +139,7 @@ mod tests {
     fn it_tracks_frontmost_app_and_main_window_correctly() {
         use Event::*;
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let space = SpaceId::new(1);
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
@@ -208,7 +210,7 @@ mod tests {
     fn it_does_not_update_layout_for_quiet_raises() {
         use Event::*;
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let space = SpaceId::new(1);
         reactor.handle_event(ScreenParametersChanged(
             vec![CGRect::ZERO],
@@ -288,7 +290,7 @@ mod tests {
     fn it_selects_main_window_when_space_is_enabled() {
         use Event::*;
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let pid = 3;
         let windows = make_windows(2);
         let space = SpaceId::new(1);
@@ -306,7 +308,9 @@ mod tests {
             true,
         ));
 
-        reactor.handle_event(SpaceChanged(vec![None], vec![]));
+        reactor.handle_event(Command(reactor::Command::Reactor(
+            ReactorCommand::ToggleSpaceActivated,
+        )));
         reactor.handle_event(ApplicationActivated(3, Quiet::No));
         reactor.handle_event(ApplicationGloballyActivated(3));
         reactor.handle_event(WindowsDiscovered {
@@ -316,7 +320,9 @@ mod tests {
         });
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
 
-        reactor.handle_event(SpaceChanged(vec![Some(space)], vec![]));
+        reactor.handle_event(Command(reactor::Command::Reactor(
+            ReactorCommand::ToggleSpaceActivated,
+        )));
         assert_eq!(
             reactor.layout.selected_window(space),
             Some(WindowId::new(3, 1))
