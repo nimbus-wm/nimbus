@@ -29,6 +29,10 @@ struct Cli {
     #[arg(long)]
     default_disable: bool,
 
+    /// Disable animations.
+    #[arg(long)]
+    no_animate: bool,
+
     #[arg(long)]
     validate: bool,
 
@@ -54,6 +58,7 @@ fn main() {
     } else {
         Config::default()
     };
+    config.settings.animate &= !opt.no_animate;
     config.settings.default_disable |= opt.default_disable;
     config.settings.starting_space_only |= opt.one;
     let config = Arc::new(config);
