@@ -426,7 +426,10 @@ impl Reactor {
             }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
-                let response = self.layout.handle_command(self.main_window_space(), cmd);
+                let visible_spaces =
+                    self.screens.iter().flat_map(|screen| screen.space).collect::<Vec<_>>();
+                let response =
+                    self.layout.handle_command(self.main_window_space(), &visible_spaces, cmd);
                 self.handle_layout_response(response);
             }
             Event::Command(Command::Metrics(cmd)) => log::handle_command(cmd),
