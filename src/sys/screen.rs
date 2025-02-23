@@ -55,11 +55,11 @@ impl<S: System> ScreenCache<S> {
     /// The main screen (if any) is always first. Note that there may be no
     /// screens.
     #[forbid(unsafe_code)] // called from test
-    pub fn update_screen_config(&mut self) -> Vec<CGRect> {
+    pub fn update_screen_config(&mut self) -> (Vec<CGRect>, Vec<ScreenId>) {
         let mut cg_screens = self.system.cg_screens().unwrap();
         debug!("cg_screens={cg_screens:?}");
         if cg_screens.is_empty() {
-            return vec![];
+            return (vec![], vec![]);
         };
 
         // Ensure that the main screen is always first.
@@ -82,11 +82,11 @@ impl<S: System> ScreenCache<S> {
         // The main screen has origin (0, 0) in both coordinate systems.
         let ns_origin_y = cg_screens[0].bounds.max().y;
 
-        let visible_frames = cg_screens
+        let (visible_frames, ids) = cg_screens
             .iter()
             .flat_map(|&CGScreenInfo { cg_id, .. }| {
                 let Some(ns_screen) = ns_screens.iter().find(|s| s.cg_id == cg_id) else {
-                    warn!("Can't find NSScreen corresponding to screen number {cg_id}");
+                    warn!("Can't find NSScreen corresponding to {cg_id:?}");
                     return None;
                 };
                 let converted = CGRect {
@@ -99,10 +99,10 @@ impl<S: System> ScreenCache<S> {
                     },
                     size: ns_screen.visible_frame.size,
                 };
-                Some(converted)
+                Some((converted, cg_id))
             })
-            .collect();
-        visible_frames
+            .unzip();
+        (visible_frames, ids)
     }
 
     /// Returns a list of the active spaces on each screen. The order
@@ -130,7 +130,7 @@ pub trait System {
 
 #[derive(Debug, Clone)]
 struct CGScreenInfo {
-    cg_id: CGDirectDisplayID,
+    cg_id: ScreenId,
     bounds: CGRect,
 }
 
@@ -139,10 +139,8 @@ struct CGScreenInfo {
 struct NSScreenInfo {
     frame: CGRect,
     visible_frame: CGRect,
-    cg_id: CGDirectDisplayID,
+    cg_id: ScreenId,
 }
-
-type CGDirectDisplayID = u32;
 
 pub struct Actual {
     mtm: MainThreadMarker,
@@ -167,7 +165,7 @@ impl System for Actual {
         Ok(ids
             .iter()
             .map(|&cg_id| CGScreenInfo {
-                cg_id,
+                cg_id: ScreenId(cg_id),
                 bounds: unsafe { CGDisplayBounds(cg_id).to_icrate() },
             })
             .collect())
@@ -186,28 +184,41 @@ impl System for Actual {
         NSScreen::screens(self.mtm)
             .iter()
             .flat_map(|s| {
-                let desc = s.deviceDescription();
-                let cg_id = match desc.get(ns_string!("NSScreenNumber")) {
-                    Some(val) if unsafe { msg_send![val, isKindOfClass:NSNumber::class() ] } => {
-                        let number: &NSNumber = unsafe { std::mem::transmute(val) };
-                        number.as_u32()
-                    }
-                    val => {
-                        warn!(
-                            "Could not get NSScreenNumber for screen with name {:?}: {:?}",
-                            unsafe { s.localizedName() },
-                            val,
-                        );
-                        return None;
-                    }
-                };
                 Some(NSScreenInfo {
                     frame: s.frame(),
                     visible_frame: s.visibleFrame(),
-                    cg_id,
+                    cg_id: s.get_number().ok()?,
                 })
             })
             .collect()
+    }
+}
+
+type CGDirectDisplayID = u32;
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct ScreenId(CGDirectDisplayID);
+
+pub trait NSScreenExt {
+    fn get_number(&self) -> Result<ScreenId, ()>;
+}
+impl NSScreenExt for NSScreen {
+    fn get_number(&self) -> Result<ScreenId, ()> {
+        let desc = self.deviceDescription();
+        match desc.get(ns_string!("NSScreenNumber")) {
+            Some(val) if unsafe { msg_send![val, isKindOfClass:NSNumber::class() ] } => {
+                let number: &NSNumber = unsafe { std::mem::transmute(val) };
+                Ok(ScreenId(number.as_u32()))
+            }
+            val => {
+                warn!(
+                    "Could not get NSScreenNumber for screen with name {:?}: {:?}",
+                    unsafe { self.localizedName() },
+                    val,
+                );
+                Err(())
+            }
+        }
     }
 }
 
@@ -290,7 +301,7 @@ mod test {
     use core_foundation::string::CFString;
     use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
-    use super::{CGScreenInfo, NSScreenInfo, ScreenCache, System};
+    use super::{CGScreenInfo, NSScreenInfo, ScreenCache, ScreenId, System};
 
     struct Stub {
         cg_screens: Vec<CGScreenInfo>,
@@ -314,17 +325,17 @@ mod test {
         let stub = Stub {
             cg_screens: vec![
                 CGScreenInfo {
-                    cg_id: 1,
+                    cg_id: ScreenId(1),
                     bounds: CGRect::new(CGPoint::new(3840.0, 1080.0), CGSize::new(1512.0, 982.0)),
                 },
                 CGScreenInfo {
-                    cg_id: 3,
+                    cg_id: ScreenId(3),
                     bounds: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(3840.0, 2160.0)),
                 },
             ],
             ns_screens: vec![
                 NSScreenInfo {
-                    cg_id: 3,
+                    cg_id: ScreenId(3),
                     frame: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(3840.0, 2160.0)),
                     visible_frame: CGRect::new(
                         CGPoint::new(0.0, 76.0),
@@ -332,7 +343,7 @@ mod test {
                     ),
                 },
                 NSScreenInfo {
-                    cg_id: 1,
+                    cg_id: ScreenId(1),
                     frame: CGRect::new(CGPoint::new(3840.0, 98.0), CGSize::new(1512.0, 982.0)),
                     visible_frame: CGRect::new(
                         CGPoint::new(3840.0, 98.0),
@@ -347,7 +358,7 @@ mod test {
                 CGRect::new(CGPoint::new(0.0, 25.0), CGSize::new(3840.0, 2059.0)),
                 CGRect::new(CGPoint::new(3840.0, 1112.0), CGSize::new(1512.0, 950.0)),
             ],
-            sc.update_screen_config()
+            sc.update_screen_config().0
         );
     }
 }

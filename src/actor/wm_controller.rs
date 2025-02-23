@@ -5,6 +5,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use accessibility_sys::pid_t;
+use icrate::{
+    AppKit::NSScreen,
+    Foundation::{CGRect, MainThreadMarker},
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, Span};
 
@@ -15,13 +19,24 @@ type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 use crate::{
     actor::{self, app::AppInfo, reactor},
     collections::HashSet,
-    sys::{event::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
+    sys::{
+        event::HotkeyManager,
+        screen::{NSScreenExt, ScreenId, SpaceId},
+        window_server::WindowServerInfo,
+    },
 };
 
 #[derive(Debug)]
 pub enum WmEvent {
     AppEventsRegistered,
     AppLaunch(pid_t, AppInfo),
+    SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
+    ScreenParametersChanged(
+        Vec<CGRect>,
+        Vec<ScreenId>,
+        Vec<Option<SpaceId>>,
+        Vec<WindowServerInfo>,
+    ),
     ReactorEvent(reactor::Event),
     Command(WmCommand),
 }
@@ -55,9 +70,11 @@ pub struct WmController {
     sender: WeakSender,
     starting_space: Option<SpaceId>,
     cur_space: Vec<Option<SpaceId>>,
+    cur_screen_id: Vec<ScreenId>,
     disabled_spaces: HashSet<SpaceId>,
     enabled_spaces: HashSet<SpaceId>,
     hotkeys: Option<HotkeyManager>,
+    mtm: MainThreadMarker,
 }
 
 impl WmController {
@@ -70,9 +87,11 @@ impl WmController {
             sender: sender.downgrade(),
             starting_space: None,
             cur_space: Vec::new(),
+            cur_screen_id: Vec::new(),
             disabled_spaces: HashSet::default(),
             enabled_spaces: HashSet::default(),
             hotkeys: None,
+            mtm: MainThreadMarker::new().unwrap(),
         };
         (this, sender)
     }
@@ -97,26 +116,29 @@ impl WmController {
             AppLaunch(pid, info) => {
                 actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
             }
-            ReactorEvent(mut event) => {
-                if let Event::SpaceChanged(spaces, _)
-                | Event::ScreenParametersChanged(_, spaces, _) = &mut event
-                {
-                    self.handle_space_changed(spaces);
-                    self.apply_space_activation(spaces);
-                }
+            ScreenParametersChanged(frames, ids, mut spaces, windows) => {
+                self.cur_screen_id = ids;
+                self.handle_space_changed(&spaces);
+                self.apply_space_activation(&mut spaces);
+                self.send_event(Event::ScreenParametersChanged(frames, spaces, windows));
+            }
+            SpaceChanged(mut spaces, windows) => {
+                self.handle_space_changed(&spaces);
+                self.apply_space_activation(&mut spaces);
+                self.send_event(Event::SpaceChanged(spaces, windows));
+            }
+            ReactorEvent(event) => {
                 self.send_event(event);
             }
             Command(Wm(ToggleSpaceActivated)) => {
+                let Some(space) = self.get_focused_space() else { return };
                 let toggle_set = if self.config.config.settings.default_disable {
                     &mut self.enabled_spaces
                 } else {
                     &mut self.disabled_spaces
                 };
-                for space in &self.cur_space {
-                    let Some(space) = space else { return };
-                    if !toggle_set.remove(space) {
-                        toggle_set.insert(*space);
-                    }
+                if !toggle_set.remove(&space) {
+                    toggle_set.insert(space);
                 }
                 let mut spaces = self.cur_space.clone();
                 self.apply_space_activation(&mut spaces);
@@ -136,6 +158,13 @@ impl WmController {
         return crate::sys::window_server::get_visible_windows_with_layer(None);
         #[cfg(test)]
         vec![]
+    }
+
+    fn get_focused_space(&self) -> Option<SpaceId> {
+        // The currently focused screen is what NSScreen calls the "main" screen.
+        let screen = NSScreen::mainScreen(self.mtm)?;
+        let number = screen.get_number().ok()?;
+        *self.cur_screen_id.iter().zip(&self.cur_space).find(|(id, _)| **id == number)?.1
     }
 
     fn handle_space_changed(&mut self, spaces: &[Option<SpaceId>]) {

@@ -98,10 +98,11 @@ impl NotificationCenterInner {
 
     fn send_screen_parameters(&self) {
         let mut screen_cache = self.ivars().screen_cache.borrow_mut();
-        let frames = screen_cache.update_screen_config();
+        let (frames, ids) = screen_cache.update_screen_config();
         let spaces = screen_cache.get_screen_spaces();
-        self.send_event(Event::ScreenParametersChanged(
+        self.send_wm_event(WmEvent::ScreenParametersChanged(
             frames,
+            ids,
             spaces,
             self.get_windows(),
         ));
@@ -109,7 +110,7 @@ impl NotificationCenterInner {
 
     fn send_current_space(&self) {
         let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
-        self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+        self.send_wm_event(WmEvent::SpaceChanged(spaces, self.get_windows()));
     }
 
     fn get_windows(&self) -> Vec<WindowServerInfo> {
