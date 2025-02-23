@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use nimbus_wm::{
@@ -17,7 +17,9 @@ use tokio::join;
 
 #[derive(Parser)]
 struct Cli {
-    /// Only run the window manager on the current space.
+    /// Only enables the WM on the starting space. On all other spaces, hotkeys are disabled.
+    ///
+    /// This can be useful for development.
     #[arg(long)]
     one: bool,
 
@@ -53,6 +55,8 @@ fn main() {
         Config::default()
     };
     config.settings.default_disable |= opt.default_disable;
+    config.settings.starting_space_only |= opt.one;
+    let config = Arc::new(config);
 
     if opt.validate {
         LayoutManager::load(restore_file()).unwrap();
@@ -64,10 +68,13 @@ fn main() {
     } else {
         LayoutManager::new()
     };
-    let events_tx = Reactor::spawn(layout, reactor::Record::new(opt.record.as_deref()));
+    let events_tx = Reactor::spawn(
+        config.clone(),
+        layout,
+        reactor::Record::new(opt.record.as_deref()),
+    );
 
     let config = wm_controller::Config {
-        one_space: opt.one,
         restore_file: restore_file(),
         config,
     };

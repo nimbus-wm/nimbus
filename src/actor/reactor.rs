@@ -7,11 +7,12 @@
 mod animation;
 mod main_window;
 mod replay;
+mod space;
 
 #[cfg(test)]
 mod testing;
 
-use std::{collections::BTreeMap, mem, thread};
+use std::{collections::BTreeMap, mem, sync::Arc, thread};
 
 use animation::Animation;
 use icrate::Foundation::CGRect;
@@ -19,6 +20,7 @@ use main_window::MainWindowTracker;
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use space::SpaceManager;
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
@@ -28,6 +30,7 @@ use crate::{
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
     collections::{HashMap, HashSet},
+    config::Config,
     log::{self, MetricsCommand},
     sys::{
         event::MouseState,
@@ -137,6 +140,7 @@ pub enum Command {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactorCommand {
+    ToggleSpaceActivated,
     Debug,
     Serialize,
     SaveAndExit,
@@ -145,6 +149,7 @@ pub enum ReactorCommand {
 pub struct Reactor {
     apps: HashMap<pid_t, AppState>,
     layout: LayoutManager,
+    spaces: SpaceManager,
     windows: HashMap<WindowId, WindowState>,
     window_server_info: HashMap<WindowServerId, WindowServerInfo>,
     window_ids: HashMap<WindowServerId, WindowId>,
@@ -208,22 +213,23 @@ impl From<WindowInfo> for WindowState {
 }
 
 impl Reactor {
-    pub fn spawn(layout: LayoutManager, record: Record) -> Sender {
+    pub fn spawn(config: Arc<Config>, layout: LayoutManager, record: Record) -> Sender {
         let (events_tx, events) = unbounded_channel();
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
-                Executor::run(Reactor::new(layout).run(events, record));
+                Executor::run(Reactor::new(config, layout).run(events, record));
             })
             .unwrap();
         events_tx
     }
 
-    pub fn new(layout: LayoutManager) -> Reactor {
+    pub fn new(config: Arc<Config>, layout: LayoutManager) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         Reactor {
             apps: HashMap::default(),
             layout,
+            spaces: SpaceManager::new(config),
             windows: HashMap::default(),
             window_ids: HashMap::default(),
             window_server_info: HashMap::default(),
@@ -235,9 +241,16 @@ impl Reactor {
         }
     }
 
+    #[cfg(test)]
+    fn new_for_test(layout: LayoutManager) -> Reactor {
+        let mut config = Config::default();
+        config.settings.default_disable = false;
+        Self::new(Arc::new(config), layout)
+    }
+
     pub async fn run(mut self, mut events: Receiver, mut record: Record) {
         let record = &mut record;
-        record.start(&self.layout);
+        record.start(&self.spaces.config, &self.layout);
         while let Some((span, event)) = events.recv().await {
             let _guard = span.enter();
             record.on_event(&event);
@@ -351,6 +364,7 @@ impl Reactor {
             }
             Event::ScreenParametersChanged(frames, spaces, ws_info) => {
                 info!("screen parameters changed");
+                let spaces = self.spaces.update_screen_spaces(spaces);
                 self.screens = frames
                     .into_iter()
                     .zip(spaces)
@@ -363,10 +377,12 @@ impl Reactor {
                 }
                 self.update_complete_window_server_info(ws_info);
                 // FIXME: Update visible windows if space changed
+                // self.get_visible_windows();
             }
             Event::SpaceChanged(spaces, ws_info) => {
                 info!("space changed");
                 assert_eq!(spaces.len(), self.screens.len());
+                let spaces = self.spaces.update_screen_spaces(spaces);
                 for (space, screen) in spaces.iter().zip(&mut self.screens) {
                     screen.space = *space;
                 }
@@ -377,17 +393,31 @@ impl Reactor {
                     };
                     self.send_layout_event(LayoutEvent::SpaceExposed(space, screen.frame.size));
                 }
-                if let Some(main_window) = self.main_window() {
-                    let spaces = spaces.iter().copied().flatten().collect();
-                    self.send_layout_event(LayoutEvent::WindowFocused(spaces, main_window));
-                }
                 self.update_complete_window_server_info(ws_info);
-                // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
-                // (see notes for WindowsDiscovered above).
-                for app in self.apps.values_mut() {
-                    // Errors mean the app terminated (and a termination event
-                    // is coming); ignore.
-                    _ = app.handle.send(Request::GetVisibleWindows);
+                self.get_visible_windows();
+            }
+            Event::Command(Command::Reactor(ReactorCommand::ToggleSpaceActivated)) => {
+                // Toggle the screen with the main window or, if none, the main screen.
+                let Some(screen_idx) =
+                    self.main_window_screen_idx().or(self.screens.first().map(|_| 0))
+                else {
+                    return;
+                };
+                let space = self.spaces.toggle_space_activated(screen_idx);
+                self.screens[screen_idx].space = space;
+                if let Some(space) = space {
+                    // If we just activated a space, bring its layout state up to date.
+                    self.send_layout_event(LayoutEvent::SpaceExposed(
+                        space,
+                        self.screens[screen_idx].frame.size,
+                    ));
+                    if let Some(main_window) = self.main_window() {
+                        let spaces = self.screens.iter().flat_map(|screen| screen.space).collect();
+                        self.send_layout_event(LayoutEvent::WindowFocused(spaces, main_window));
+                    }
+                    // TODO: We don't actually need to do this; we can just go
+                    // through our local state and update the layout.
+                    self.get_visible_windows();
                 }
             }
             Event::MouseUp => {
@@ -449,6 +479,16 @@ impl Reactor {
             window.frame_monotonic = info.frame;
         }
         self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
+    }
+
+    fn get_visible_windows(&mut self) {
+        // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
+        // (see notes for on_windows_discovered below).
+        for app in self.apps.values_mut() {
+            // Errors mean the app terminated (and a termination event
+            // is coming); ignore.
+            _ = app.handle.send(Request::GetVisibleWindows);
+        }
     }
 
     fn on_windows_discovered(
@@ -514,8 +554,16 @@ impl Reactor {
         }
     }
 
+    fn best_screen_idx_for_window(&self, frame: &CGRect) -> Option<usize> {
+        self.screens
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, s)| s.frame.intersection(frame).area() as i64)
+            .map(|(idx, _)| idx)
+    }
+
     fn best_screen_for_window(&self, frame: &CGRect) -> Option<&Screen> {
-        self.screens.iter().max_by_key(|s| s.frame.intersection(frame).area() as i64)
+        self.screens.get(self.best_screen_idx_for_window(frame)?)
     }
 
     fn best_space_for_window(&self, frame: &CGRect) -> Option<SpaceId> {
@@ -578,6 +626,11 @@ impl Reactor {
     fn main_window_space(&self) -> Option<SpaceId> {
         // TODO: Optimize this with a cache or something.
         self.best_space_for_window(&self.windows[&self.main_window()?].frame_monotonic)
+    }
+
+    fn main_window_screen_idx(&self) -> Option<usize> {
+        // TODO: Optimize this with a cache or something.
+        self.best_screen_idx_for_window(&self.windows[&self.main_window()?].frame_monotonic)
     }
 
     #[instrument(skip(self), fields())]
@@ -644,7 +697,7 @@ pub mod tests {
     #[test]
     fn it_ignores_stale_resize_events() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
@@ -672,7 +725,7 @@ pub mod tests {
     #[test]
     fn it_sends_writes_when_stale_read_state_looks_same_as_written_state() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
@@ -708,7 +761,7 @@ pub mod tests {
     #[test]
     fn sends_writes_same_as_last_written_state_if_changed_externally() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
@@ -748,7 +801,7 @@ pub mod tests {
     #[test]
     fn it_responds_to_resizes() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.))],
             vec![Some(SpaceId::new(1))],
@@ -794,7 +847,7 @@ pub mod tests {
     #[test]
     fn it_manages_windows_on_enabled_spaces() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],
@@ -814,7 +867,7 @@ pub mod tests {
     #[test]
     fn it_selects_the_main_window_on_space_enable() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         let ws_info = (1..=2)
             .map(|id| WindowServerInfo {
@@ -851,7 +904,7 @@ pub mod tests {
     #[test]
     fn it_ignores_windows_on_disabled_spaces() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],
@@ -882,7 +935,7 @@ pub mod tests {
     #[test]
     fn it_keeps_discovered_windows_on_their_initial_screen() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let screen1 = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         let screen2 = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
@@ -909,7 +962,7 @@ pub mod tests {
     #[test]
     fn it_ignores_windows_on_nonzero_layers() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],
@@ -946,7 +999,7 @@ pub mod tests {
     fn it_preserves_layout_after_login_screen() {
         // TODO: This would be better tested with a more complete simulation.
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let space = SpaceId::new(1);
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
@@ -1023,7 +1076,7 @@ pub mod tests {
     #[test]
     fn it_fixes_window_sizes_after_screen_config_changes() {
         let mut apps = Apps::new();
-        let mut reactor = Reactor::new(LayoutManager::new());
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let full_screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
         reactor.handle_event(Event::ScreenParametersChanged(
             vec![full_screen],

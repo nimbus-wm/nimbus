@@ -7,15 +7,19 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Write},
     path::Path,
+    sync::Arc,
 };
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tracing::Span;
 
 use super::{Event, Reactor};
-use crate::actor::{
-    app::{AppThreadHandle, Request},
-    layout::LayoutManager,
+use crate::{
+    actor::{
+        app::{AppThreadHandle, Request},
+        layout::LayoutManager,
+    },
+    config::Config,
 };
 
 thread_local! {
@@ -38,10 +42,11 @@ impl Record {
         Self(path.map(|path| File::create(path).unwrap()))
     }
 
-    pub(super) fn start(&mut self, layout: &LayoutManager) {
+    pub(super) fn start(&mut self, config: &Config, layout: &LayoutManager) {
         let Some(file) = &mut self.0 else { return };
-        let line = ron::ser::to_string(&layout).unwrap();
-        write!(file, "{line}\n").unwrap();
+        let config = ron::ser::to_string(&config).unwrap();
+        let layout = ron::ser::to_string(&layout).unwrap();
+        write!(file, "{config}\n{layout}\n").unwrap();
     }
 
     pub(super) fn on_event(&mut self, event: &Event) {
@@ -60,8 +65,11 @@ pub fn replay(
     let handle = AppThreadHandle::new_for_test(tx);
     DESERIALIZE_THREAD_HANDLE.with(|h| h.borrow_mut().replace(handle));
     let mut lines = file.lines();
+    let config = Arc::new(ron::de::from_str(
+        &lines.next().expect("Empty restore file")?,
+    )?);
     let layout = ron::de::from_str(&lines.next().expect("Empty restore file")?)?;
-    let mut reactor = Reactor::new(layout);
+    let mut reactor = Reactor::new(config, layout);
     for line in lines {
         reactor.handle_event(ron::de::from_str(&line?)?);
         on_event(&mut rx);
