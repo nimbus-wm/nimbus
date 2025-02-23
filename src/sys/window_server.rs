@@ -8,6 +8,7 @@ use core_foundation::{
     string::{CFString, CFStringRef},
 };
 use core_graphics::{
+    base::CGError,
     display::{
         kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
     },
@@ -137,6 +138,56 @@ fn get_num(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i6
     Some(item.to_i64()?)
 }
 
+/// Sets the given window as the key window of the window server.
+pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
+    // See https://github.com/Hammerspoon/hammerspoon/issues/370#issuecomment-545545468.
+    #[allow(non_upper_case_globals)]
+    const kCPSUserGenerated: u32 = 0x200;
+
+    let mut event1 = [0; 0xf8];
+    event1[0x04] = 0xf8;
+    event1[0x08] = 0x01;
+    event1[0x3a] = 0x10;
+    event1[0x3c..0x3c + 4].copy_from_slice(&wsid.0.to_le_bytes());
+    event1[0x20..(0x20 + 0x10)].fill(0xff);
+
+    let mut event2 = event1.clone();
+    event2[0x08] = 0x02;
+
+    let mut psn = ProcessSerialNumber::default();
+    let check = |err| if err == 0 { Ok(()) } else { Err(()) };
+    unsafe {
+        check(GetProcessForPID(pid, &mut psn))?;
+        check(_SLPSSetFrontProcessWithOptions(
+            &psn,
+            wsid.0,
+            kCPSUserGenerated,
+        ))?;
+        check(SLPSPostEventRecordTo(&psn, event1.as_ptr()))?;
+        check(SLPSPostEventRecordTo(&psn, event2.as_ptr()))?;
+    }
+    Ok(())
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct ProcessSerialNumber {
+    high: u32,
+    low: u32,
+}
+
 extern "C" {
     fn _AXUIElementGetWindow(elem: AXUIElementRef, wid: *mut CGWindowID) -> AXError;
+
+    fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
+}
+
+#[link(name = "SkyLight", kind = "framework")]
+extern "C" {
+    fn _SLPSSetFrontProcessWithOptions(
+        psn: *const ProcessSerialNumber,
+        wid: u32,
+        mode: u32,
+    ) -> CGError;
+    fn SLPSPostEventRecordTo(psn: *const ProcessSerialNumber, bytes: *const u8) -> CGError;
 }

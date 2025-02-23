@@ -25,7 +25,7 @@ use accessibility_sys::{
 use core_foundation::{runloop::CFRunLoop, string::CFString};
 use icrate::{
     objc2::rc::Id,
-    AppKit::{NSApplicationActivationOptions, NSRunningApplication},
+    AppKit::NSRunningApplication,
     Foundation::{CGPoint, CGRect},
 };
 use serde::{Deserialize, Serialize};
@@ -174,6 +174,7 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
 struct State {
     pid: pid_t,
     bundle_id: Option<String>,
+    #[expect(dead_code, reason = "unused for now")]
     running_app: Id<NSRunningApplication>,
     app: AXUIElement,
     observer: Observer,
@@ -537,15 +538,11 @@ impl State {
                     _ = done.take().map(|s| s.send(()));
                     return Ok(());
                 }
-                // This option is deprecated, but there is no alternative.
-                #[allow(non_upper_case_globals)]
-                const NSApplicationActivateIgnoringOtherApps: NSApplicationActivationOptions =
-                    1 << 1;
-                // SAFETY: This method should be marked as safe.
-                let success = trace_misc("activate", || unsafe {
-                    self.running_app.activateWithOptions(NSApplicationActivateIgnoringOtherApps)
-                });
-                if success {
+                let result = window_server::make_key_window(
+                    self.pid,
+                    WindowServerId::try_from(&self.window(wid)?.elem)?,
+                );
+                if result.is_ok() {
                     // Record the activation so we can match against its
                     // notification and correctly mark it as quiet.
                     self.last_activated = Some((Instant::now(), quiet, done.take()));
@@ -571,6 +568,8 @@ impl State {
         // Often we get this event for new windows before the WindowCreated
         // notification. If that happens, register it and send the corresponding
         // event here.
+        // FIXME: This can happen ahead of a space change and result in us adding
+        // a window to the wrong space.
         let wid = match self.id(&elem).ok() {
             Some(wid) => wid,
             None => {
