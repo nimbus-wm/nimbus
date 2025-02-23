@@ -357,6 +357,20 @@ impl LayoutManager {
             return EventResponse::default();
         }
 
+        let next_space = |direction| {
+            // Pick another space based on the order in visible_spaces.
+            if visible_spaces.len() <= 1 {
+                return None;
+            }
+            let idx = visible_spaces.iter().enumerate().find(|(_, s)| **s == space)?.0;
+            let idx = match direction {
+                Direction::Left | Direction::Up => idx as i32 - 1,
+                Direction::Right | Direction::Down => idx as i32 + 1,
+            };
+            let idx = idx.rem_euclid(visible_spaces.len() as i32);
+            Some(visible_spaces[idx as usize])
+        };
+
         match command {
             // Handled above.
             LayoutCommand::ToggleWindowFloating => unreachable!(),
@@ -383,14 +397,7 @@ impl LayoutManager {
                     .tree
                     .traverse(self.tree.selection(layout), direction)
                     .or_else(|| {
-                        // Pick another space based on the order in visible_spaces.
-                        let idx = visible_spaces.iter().enumerate().find(|(_, s)| **s == space)?.0;
-                        let idx = match direction {
-                            Direction::Left | Direction::Up => idx as i32 - 1,
-                            Direction::Right | Direction::Down => idx as i32 + 1,
-                        };
-                        let idx = idx.rem_euclid(visible_spaces.len() as i32);
-                        let layout = self.layout(visible_spaces[idx as usize]);
+                        let layout = self.layout(next_space(direction)?);
                         Some(self.tree.selection(layout))
                     })
                     .and_then(|new| self.tree.window_at(new));
@@ -413,7 +420,12 @@ impl LayoutManager {
             LayoutCommand::MoveNode(direction) => {
                 space_layout.last_saved.replace(layout);
                 let selection = self.tree.selection(layout);
-                self.tree.move_node(layout, selection, direction);
+                if !self.tree.move_node(layout, selection, direction) {
+                    if let Some(new_space) = next_space(direction) {
+                        let new_layout = self.layout(new_space);
+                        self.tree.move_node_after(self.tree.selection(new_layout), selection);
+                    }
+                }
                 EventResponse::default()
             }
             LayoutCommand::Split(orientation) => {
@@ -1049,6 +1061,7 @@ mod tests {
         _ = mgr.handle_event(WindowFocused(vec![space1, space2], WindowId::new(pid, 3)));
         _ = mgr.handle_event(WindowFocused(vec![space1, space2], WindowId::new(pid, 1)));
 
+        // Test moving focus between screens.
         assert_eq!(
             mgr.handle_command(Some(space1), &[space1, space2], MoveFocus(Direction::Right))
                 .focus_window,
@@ -1065,6 +1078,32 @@ mod tests {
             mgr.handle_command(Some(space2), &[space1, space2], MoveFocus(Direction::Left))
                 .focus_window,
             Some(WindowId::new(pid, 2))
+        );
+        _ = mgr.handle_event(WindowFocused(vec![space1, space2], WindowId::new(pid, 3)));
+
+        // Test moving a node between screens.
+        _ = mgr.handle_command(Some(space1), &[space1, space2], MoveNode(Direction::Right));
+        mgr.debug_tree(space2);
+        assert_eq!(
+            vec![(WindowId::new(pid, 1), rect(0, 0, 300, 30)),],
+            mgr.layout_sorted(space1, screen1),
+        );
+        assert_eq!(
+            vec![
+                // Note that 2 is moved to the right of 3.
+                (WindowId::new(pid, 2), rect(400, 0, 100, 30)),
+                (WindowId::new(pid, 3), rect(300, 0, 100, 30)),
+                (WindowId::new(pid, 4), rect(500, 0, 100, 30)),
+            ],
+            mgr.layout_sorted(space2, screen2),
+        );
+        assert_eq!(Some(WindowId::new(pid, 2)), mgr.selected_window(space2));
+
+        // Finally, test moving focus after moving the node.
+        assert_eq!(
+            mgr.handle_command(Some(space2), &[space1, space2], MoveFocus(Direction::Right))
+                .focus_window,
+            Some(WindowId::new(pid, 4))
         );
     }
 }

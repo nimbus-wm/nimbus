@@ -83,6 +83,26 @@ impl LayoutTree {
         node
     }
 
+    pub fn move_node_after(&mut self, sibling: NodeId, moving_node: NodeId) {
+        let map = &self.tree.map;
+        let Some(old_parent) = moving_node.parent(map) else {
+            return;
+        };
+        let is_selection =
+            self.tree.data.selection.local_selection(map, old_parent) == Some(moving_node);
+        if sibling.parent(self.map()).is_none() {
+            // Don't attempt to add next to the root node.
+            moving_node.detach(&mut self.tree).push_back(sibling);
+        } else {
+            moving_node.detach(&mut self.tree).insert_after(sibling);
+        }
+        if is_selection {
+            for node in moving_node.ancestors(&self.tree.map).take_while(|&a| a != old_parent) {
+                self.tree.data.selection.select_locally(&self.tree.map, node);
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn add_windows_if_missing(
         &mut self,
@@ -261,16 +281,21 @@ impl LayoutTree {
         };
         let is_selection =
             self.tree.data.selection.local_selection(map, old_parent) == Some(moving_node);
-        self.move_node_inner(layout, moving_node, direction);
-        if is_selection {
+        let moved = self.move_node_inner(layout, moving_node, direction);
+        if moved && is_selection {
             for node in moving_node.ancestors(&self.tree.map).take_while(|&a| a != old_parent) {
                 self.tree.data.selection.select_locally(&self.tree.map, node);
             }
         }
-        true
+        moved
     }
 
-    fn move_node_inner(&mut self, layout: LayoutId, moving_node: NodeId, direction: Direction) {
+    fn move_node_inner(
+        &mut self,
+        layout: LayoutId,
+        moving_node: NodeId,
+        direction: Direction,
+    ) -> bool {
         /// Where to insert the node, along the direction we're moving.
         enum Destination {
             Ahead(NodeId),
@@ -320,6 +345,12 @@ impl LayoutTree {
                 // We went all the way to the root and couldn't move in the
                 // desired direction, so we'll make a new container level above it.
                 let old_root = moving_node.ancestors(map).last().unwrap();
+                if self.tree.data.layout.kind(old_root).orientation() == direction.orientation() {
+                    // Arguably it's not that useful to do this in the same direction as the root,
+                    // so let's stop here. (This will become a screen move if there are
+                    // multiple screens.)
+                    return false;
+                }
                 self.nest_in_container(layout, old_root, LayoutKind::from(direction.orientation()));
                 destination = Destination::Ahead(old_root);
             }
@@ -338,6 +369,7 @@ impl LayoutTree {
                 moving_node.detach(&mut self.tree).insert_after(target);
             }
         }
+        true
     }
 
     pub fn map(&self) -> &NodeMap {
