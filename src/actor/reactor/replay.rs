@@ -65,11 +65,9 @@ pub fn replay(
     let handle = AppThreadHandle::new_for_test(tx);
     DESERIALIZE_THREAD_HANDLE.with(|h| h.borrow_mut().replace(handle));
     let mut lines = file.lines();
-    let config = Arc::new(ron::de::from_str(
-        &lines.next().expect("Empty restore file")?,
-    )?);
+    let config = ron::de::from_str(&lines.next().expect("Empty restore file")?)?;
     let layout = ron::de::from_str(&lines.next().expect("Empty restore file")?)?;
-    let mut reactor = Reactor::new(config, layout);
+    let mut reactor = Reactor::new(Arc::new(config), layout);
     std::thread::spawn(move || {
         // Unfortunately we have to spawn a thread because the reactor blocks
         // on raise requests currently.

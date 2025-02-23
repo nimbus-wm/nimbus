@@ -1,4 +1,6 @@
-//! The WM Controller launches app threads and controls hotkey registration.
+//! The WM Controller handles major events like enabling and disabling the
+//! window manager on certain spaces and launching app threads. It also
+//! controls hotkey registration.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -12,7 +14,8 @@ type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use crate::{
     actor::{self, app::AppInfo, reactor},
-    sys::{event::HotkeyManager, screen::SpaceId},
+    collections::HashSet,
+    sys::{event::HotkeyManager, screen::SpaceId, window_server::WindowServerInfo},
 };
 
 #[derive(Debug)]
@@ -26,10 +29,21 @@ pub enum WmEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WmCommand {
+    Wm(WmCmd),
     ReactorCommand(reactor::Command),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WmCmd {
+    ToggleSpaceActivated,
+}
+
 pub struct Config {
+    /// Only enables the WM on the starting space. On all other spaces, hotkeys are disabled.
+    ///
+    /// This can be useful for development.
+    pub one_space: bool,
     pub restore_file: PathBuf,
     pub config: Arc<crate::config::Config>,
 }
@@ -40,6 +54,9 @@ pub struct WmController {
     receiver: Receiver,
     sender: WeakSender,
     starting_space: Option<SpaceId>,
+    cur_space: Vec<Option<SpaceId>>,
+    disabled_spaces: HashSet<SpaceId>,
+    enabled_spaces: HashSet<SpaceId>,
     hotkeys: Option<HotkeyManager>,
 }
 
@@ -52,6 +69,9 @@ impl WmController {
             receiver,
             sender: sender.downgrade(),
             starting_space: None,
+            cur_space: Vec::new(),
+            disabled_spaces: HashSet::default(),
+            enabled_spaces: HashSet::default(),
             hotkeys: None,
         };
         (this, sender)
@@ -69,7 +89,7 @@ impl WmController {
         debug!("handle_event");
         use reactor::Event;
 
-        use self::{WmCommand::*, WmEvent::*};
+        use self::{WmCmd::*, WmCommand::*, WmEvent::*};
         match event {
             AppEventsRegistered => {
                 actor::app::spawn_initial_app_threads(self.events_tx.clone());
@@ -86,18 +106,45 @@ impl WmController {
                 }
                 self.send_event(event);
             }
+            Command(Wm(ToggleSpaceActivated)) => {
+                let toggle_set = if self.config.config.settings.default_disable {
+                    &mut self.enabled_spaces
+                } else {
+                    &mut self.disabled_spaces
+                };
+                for space in &self.cur_space {
+                    let Some(space) = space else { return };
+                    if !toggle_set.remove(space) {
+                        toggle_set.insert(*space);
+                    }
+                }
+                let mut spaces = self.cur_space.clone();
+                self.apply_space_activation(&mut spaces);
+                self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+            }
             Command(ReactorCommand(cmd)) => {
                 self.send_event(Event::Command(cmd));
             }
         }
     }
 
+    fn get_windows(&self) -> Vec<WindowServerInfo> {
+        // TODO: This probably shouldn't happen here.
+        // We only do it because we manufacture a SpaceChanged event, and the
+        // reactor might need an accurate list of visible windows.
+        #[cfg(not(test))]
+        return crate::sys::window_server::get_visible_windows_with_layer(None);
+        #[cfg(test)]
+        vec![]
+    }
+
     fn handle_space_changed(&mut self, spaces: &[Option<SpaceId>]) {
+        self.cur_space = spaces.iter().copied().collect();
         let Some(&Some(space)) = spaces.first() else { return };
         if self.starting_space.is_none() {
             self.starting_space = Some(space);
             self.register_hotkeys();
-        } else if self.config.config.settings.starting_space_only {
+        } else if self.config.one_space {
             if Some(space) == self.starting_space {
                 self.register_hotkeys();
             } else {
@@ -109,12 +156,10 @@ impl WmController {
     fn apply_space_activation(&self, spaces: &mut [Option<SpaceId>]) {
         for space in spaces {
             let enabled = match space {
-                Some(_)
-                    if self.config.config.settings.starting_space_only
-                        && *space != self.starting_space =>
-                {
-                    false
-                }
+                Some(_) if self.config.one_space && *space != self.starting_space => false,
+                Some(sp) if self.disabled_spaces.contains(sp) => false,
+                Some(sp) if self.enabled_spaces.contains(sp) => true,
+                _ if self.config.config.settings.default_disable => false,
                 _ => true,
             };
             if !enabled {

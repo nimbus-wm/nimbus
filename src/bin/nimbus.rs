@@ -17,9 +17,7 @@ use tokio::join;
 
 #[derive(Parser)]
 struct Cli {
-    /// Only enables the WM on the starting space. On all other spaces, hotkeys are disabled.
-    ///
-    /// This can be useful for development.
+    /// Only run the window manager on the current space.
     #[arg(long)]
     one: bool,
 
@@ -60,7 +58,6 @@ fn main() {
     };
     config.settings.animate &= !opt.no_animate;
     config.settings.default_disable |= opt.default_disable;
-    config.settings.starting_space_only |= opt.one;
     let config = Arc::new(config);
 
     if opt.validate {
@@ -80,6 +77,7 @@ fn main() {
     );
 
     let config = wm_controller::Config {
+        one_space: opt.one,
         restore_file: restore_file(),
         config,
     };
