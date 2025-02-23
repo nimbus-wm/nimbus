@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc::unbounded_channel;
 use tracing::Span;
 
 use super::{Event, Reactor};
@@ -58,7 +58,7 @@ impl Record {
 
 pub fn replay(
     path: &Path,
-    mut on_event: impl FnMut(&mut UnboundedReceiver<(Span, Request)>),
+    mut on_event: impl FnMut(Span, Request) + Send + 'static,
 ) -> anyhow::Result<()> {
     let file = BufReader::new(File::open(path)?);
     let (tx, mut rx) = unbounded_channel();
@@ -70,9 +70,15 @@ pub fn replay(
     )?);
     let layout = ron::de::from_str(&lines.next().expect("Empty restore file")?)?;
     let mut reactor = Reactor::new(config, layout);
+    std::thread::spawn(move || {
+        // Unfortunately we have to spawn a thread because the reactor blocks
+        // on raise requests currently.
+        while let Some((span, request)) = rx.blocking_recv() {
+            on_event(span, request);
+        }
+    });
     for line in lines {
         reactor.handle_event(ron::de::from_str(&line?)?);
-        on_event(&mut rx);
     }
     Ok(())
 }

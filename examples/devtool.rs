@@ -207,11 +207,18 @@ async fn main() -> anyhow::Result<()> {
             None => println!("Could not find window {id}"),
         },
         Command::Replay(Replay { path }) => {
-            reactor::replay(&path, |rx| {
-                while let Ok((_span, request)) = rx.try_recv() {
+            // We have to spawn a thread because the reactor uses a blocking receive.
+            tokio::task::spawn_blocking(move || {
+                reactor::replay(&path, |_span, request| {
                     info!(?request);
-                }
-            })?;
+                    match request {
+                        nimbus_wm::actor::app::Request::Raise(_, _, Some(ch), _) => _ = ch.send(()),
+                        _ => (),
+                    }
+                })
+            })
+            .await
+            .unwrap()?;
         }
         Command::Mouse => {
             use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
