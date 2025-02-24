@@ -4,15 +4,14 @@
 
 [settings]
 
-# Whether to enable animations.
+# Enable animations.
 animate = true
 
-# Whether to disable each space by default. When this is set, Use the
+# Disable each space by default. When this is set, Use the
 # toggle_space_activated command to enable a space.
 default_disable = true
 
-# Whether to move the mouse to the middle of the window each time the focus
-# changes.
+# Move the mouse to the middle of the window each time the focus changes.
 mouse_follows_focus = false
 
 [keys]
