@@ -1,11 +1,15 @@
 use accessibility_sys::pid_t;
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::Write, sync::Arc};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, Span};
 
 use crate::{
-    actor::app::{AppThreadHandle, Request, WindowId},
+    actor::{
+        app::{AppThreadHandle, Request, WindowId},
+        layout::LayoutManager,
+    },
+    config::Config,
     sys::{
         app::{AppInfo, WindowInfo},
         geometry::SameAs,
@@ -13,7 +17,42 @@ use crate::{
     },
 };
 
-use super::{Event, Reactor, Requested, TransactionId};
+use super::{Event, Reactor, Record, Requested, TransactionId};
+
+impl Reactor {
+    pub fn new_for_test(layout: LayoutManager) -> Reactor {
+        let mut config = Config::default();
+        config.settings.default_disable = false;
+        config.settings.animate = false;
+        let record = Record::new_for_test(tempfile::NamedTempFile::new().unwrap());
+        Reactor::new(Arc::new(config), layout, record)
+    }
+
+    pub fn handle_events(&mut self, events: Vec<Event>) {
+        for event in events {
+            self.handle_event(event);
+        }
+    }
+}
+
+impl Drop for Reactor {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        // Replay the recorded data to make sure we can do so without crashing.
+        if let Some(temp) = self.record.temp() {
+            temp.as_file().flush().unwrap();
+            let mut cmd = test_bin::get_test_bin("examples/devtool");
+            cmd.arg("replay").arg(temp.path());
+            println!("Replaying recorded data:\n{cmd:?}");
+            assert!(
+                cmd.spawn().unwrap().wait().unwrap().success(),
+                "replay failed"
+            );
+        }
+    }
+}
 
 pub fn make_window(idx: usize) -> WindowInfo {
     WindowInfo {

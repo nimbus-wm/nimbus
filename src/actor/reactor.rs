@@ -155,6 +155,7 @@ pub struct Reactor {
     raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
+    record: Record,
 }
 
 #[derive(Debug)]
@@ -215,14 +216,15 @@ impl Reactor {
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
-                Executor::run(Reactor::new(config, layout).run(events, record));
+                Executor::run(Reactor::new(config, layout, record).run(events));
             })
             .unwrap();
         events_tx
     }
 
-    pub fn new(config: Arc<Config>, layout: LayoutManager) -> Reactor {
+    pub fn new(config: Arc<Config>, layout: LayoutManager, mut record: Record) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
+        record.start(&config, &layout);
         Reactor {
             config,
             apps: HashMap::default(),
@@ -235,27 +237,19 @@ impl Reactor {
             raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
+            record,
         }
     }
 
-    #[cfg(test)]
-    fn new_for_test(layout: LayoutManager) -> Reactor {
-        let mut config = Config::default();
-        config.settings.default_disable = false;
-        Reactor::new(Arc::new(config), layout)
-    }
-
-    pub async fn run(mut self, mut events: Receiver, mut record: Record) {
-        let record = &mut record;
-        record.start(&self.config, &self.layout);
+    pub async fn run(mut self, mut events: Receiver) {
         while let Some((span, event)) = events.recv().await {
             let _guard = span.enter();
-            record.on_event(&event);
             self.handle_event(event);
         }
     }
 
     fn handle_event(&mut self, event: Event) {
+        self.record.on_event(&event);
         debug!(?event, "Event");
         let mut animation_focus_wid = None;
         let mut is_resize = false;
@@ -645,14 +639,6 @@ pub mod tests {
         model::Direction,
         sys::window_server::WindowServerId,
     };
-
-    impl Reactor {
-        pub fn handle_events(&mut self, events: Vec<Event>) {
-            for event in events {
-                self.handle_event(event);
-            }
-        }
-    }
 
     #[test]
     fn it_ignores_stale_resize_events() {
