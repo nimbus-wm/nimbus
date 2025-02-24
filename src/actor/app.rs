@@ -488,17 +488,6 @@ impl State {
         done: &mut Option<oneshot::Sender<()>>,
         quiet: Quiet,
     ) -> Result<(), accessibility::Error> {
-        let window = self.window(wid)?;
-        trace("raise", &window.elem, || window.elem.raise())?;
-        let quiet_if = (quiet == Quiet::Yes).then_some(wid);
-        let main_window = self.on_main_window_changed(quiet_if);
-        if main_window != Some(wid) {
-            warn!(
-                "Raise request failed to raise {desired:?}; instead got {main_window:?}",
-                desired = self.window(wid)?.elem
-            );
-            return Ok(());
-        }
         // This request could be handled out of order with respect to
         // later requests sent to other apps by the reactor. To avoid
         // raising ourselves after a later request was processed to
@@ -551,7 +540,18 @@ impl State {
                 }
                 Ok(())
             })
-            .unwrap_or(Ok(()))
+            .unwrap_or(Ok(()))?;
+        let window = self.window(wid)?;
+        trace("raise", &window.elem, || window.elem.raise())?;
+        let quiet_if = (quiet == Quiet::Yes).then_some(wid);
+        let main_window = self.on_main_window_changed(quiet_if);
+        if main_window != Some(wid) {
+            warn!(
+                "Raise request failed to raise {desired:?}; instead got {main_window:?}",
+                desired = self.window(wid)?.elem
+            );
+        }
+        Ok(())
     }
 
     fn on_main_window_changed(&mut self, quiet_if: Option<WindowId>) -> Option<WindowId> {
