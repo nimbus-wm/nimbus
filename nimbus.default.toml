@@ -11,6 +11,10 @@ animate = true
 # toggle_space_activated command to enable a space.
 default_disable = true
 
+# Whether to move the mouse to the middle of the window each time the focus
+# changes.
+mouse_follows_focus = false
+
 [keys]
 # Modifier and key names must be capitalized.
 

@@ -1,3 +1,5 @@
+use core_graphics::{base::CGError, display::CGWarpMouseCursorPosition};
+use icrate::Foundation::CGPoint;
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 use serde::{Deserialize, Serialize};
@@ -7,6 +9,8 @@ use crate::actor::{
     reactor::Command,
     wm_controller::{Sender, WmCommand, WmEvent},
 };
+
+use super::geometry::ToCGType;
 
 pub struct HotkeyManager {
     hook: Hook,
@@ -49,5 +53,14 @@ pub fn get_mouse_state() -> MouseState {
         MouseState::Down
     } else {
         MouseState::Up
+    }
+}
+
+pub fn warp_mouse(point: CGPoint) -> Result<(), CGError> {
+    let err = unsafe { CGWarpMouseCursorPosition(point.to_cgtype()) };
+    if err == 0 {
+        Ok(())
+    } else {
+        Err(err)
     }
 }

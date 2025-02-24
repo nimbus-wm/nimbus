@@ -44,10 +44,15 @@ pub struct Settings {
     pub animate: bool,
     #[serde(default = "yes")]
     pub default_disable: bool,
+    #[serde(default = "no")]
+    pub mouse_follows_focus: bool,
 }
 
 fn yes() -> bool {
     true
+}
+fn no() -> bool {
+    false
 }
 
 impl Config {

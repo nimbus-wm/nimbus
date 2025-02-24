@@ -24,7 +24,9 @@ use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::{
-        app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
+        app::{
+            pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, Warp, WindowId, WindowInfo,
+        },
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
     collections::{HashMap, HashSet},
@@ -555,14 +557,18 @@ impl Reactor {
         let layout::EventResponse { raise_windows, focus_window } = response;
         for wid in raise_windows {
             info!(raise_window = ?wid);
-            self.raise_window(wid, Quiet::Yes);
+            self.raise_window(wid, Quiet::Yes, Warp::No);
         }
         if let Some(wid) = focus_window {
-            self.raise_window(wid, Quiet::No);
+            let warp = match self.config.settings.mouse_follows_focus {
+                true => Warp::Yes(self.windows[&wid].frame_monotonic.mid()),
+                false => Warp::No,
+            };
+            self.raise_window(wid, Quiet::No, warp);
         }
     }
 
-    fn raise_window(&mut self, wid: WindowId, quiet: Quiet) {
+    fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Warp) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
         let Some(app) = self.apps.get_mut(&wid.pid) else { return };
@@ -572,6 +578,7 @@ impl Reactor {
                 self.raise_token.clone(),
                 Some(tx),
                 quiet,
+                warp,
             ))
             .unwrap();
         let _ = rx.blocking_recv();
