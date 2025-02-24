@@ -31,13 +31,18 @@ struct Cli {
     #[arg(long)]
     no_animate: bool,
 
+    /// Check whether the restore file can be loaded without actually starting
+    /// the window manager.
     #[arg(long)]
     validate: bool,
 
+    /// Restore the configuration saved with the save_and_exit command. This is
+    /// only useful within the same session.
     #[arg(long)]
     restore: bool,
 
-    /// Record reactor events to the specified file path. Overwrites the file if exists.
+    /// Record reactor events to the specified file path. Overwrites the file if
+    /// exists.
     #[arg(long)]
     record: Option<PathBuf>,
 }
