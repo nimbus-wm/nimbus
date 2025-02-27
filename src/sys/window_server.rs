@@ -144,7 +144,7 @@ pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
     #[allow(non_upper_case_globals)]
     const kCPSUserGenerated: u32 = 0x200;
 
-    let mut event1 = [0; 0xf8];
+    let mut event1 = [0; 0x100];
     event1[0x04] = 0xf8;
     event1[0x08] = 0x01;
     event1[0x3a] = 0x10;
