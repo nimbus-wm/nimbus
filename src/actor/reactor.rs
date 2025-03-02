@@ -591,7 +591,7 @@ impl Reactor {
 
     fn main_window_space(&self) -> Option<SpaceId> {
         // TODO: Optimize this with a cache or something.
-        self.best_space_for_window(&self.windows[&self.main_window()?].frame_monotonic)
+        self.best_space_for_window(&self.windows.get(&self.main_window()?)?.frame_monotonic)
     }
 
     #[instrument(skip(self), fields())]
@@ -1066,5 +1066,31 @@ pub mod tests {
             full_screen,
             apps.windows.get(&WindowId::new(1, 1)).expect("Window was not resized").frame,
         );
+    }
+
+    #[test]
+    fn it_doesnt_crash_after_main_window_closes() {
+        use {super::Command::*, super::Reactor, Direction::*, Event::*, LayoutCommand::*};
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
+        let space = SpaceId::new(1);
+        reactor.handle_event(ScreenParametersChanged(
+            vec![CGRect::ZERO],
+            vec![Some(space)],
+            vec![],
+        ));
+        assert_eq!(None, reactor.main_window());
+
+        reactor.handle_event(ApplicationGloballyActivated(1));
+        reactor.handle_events(apps.make_app_with_opts(
+            1,
+            make_windows(2),
+            Some(WindowId::new(1, 1)),
+            true,
+            true,
+        ));
+
+        reactor.handle_event(WindowDestroyed(WindowId::new(1, 1)));
+        reactor.handle_event(Command(Layout(MoveFocus(Left))));
     }
 }
