@@ -1,0 +1,14 @@
+[book]
+authors = ["Tyler Mandry"]
+language = "en"
+multilingual = false
+src = "doc"
+title = "Nimbus WM"
+
+[output.html]
+no-section-label = true
+
+[output.html.print]
+enable = false
+
+[preprocessor.alerts]
