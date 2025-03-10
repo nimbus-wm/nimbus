@@ -250,9 +250,17 @@ impl Reactor {
         }
     }
 
+    fn log_event(&self, event: &Event) {
+        match event {
+            // Record more noisy events as trace logs instead of debug.
+            Event::WindowFrameChanged(_, _, _, _, _) | Event::MouseUp => trace!(?event, "Event"),
+            _ => debug!(?event, "Event"),
+        }
+    }
+
     fn handle_event(&mut self, event: Event) {
         self.record.on_event(&event);
-        debug!(?event, "Event");
+        self.log_event(&event);
         let mut animation_focus_wid = None;
         let mut is_resize = false;
         let raised_window = self.main_window_tracker.handle_event(&event);
