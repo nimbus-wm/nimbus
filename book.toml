@@ -10,6 +10,7 @@ theme = "third_party/mdbook/theme"
 additional-css = [
     "./third_party/catppuccin/catppuccin.css",
     "./third_party/catppuccin/catppuccin-alerts.css",
+    "./doc/theme/tweaks.css",
 ]
 default-theme = "latte"
 preferred-dark-theme = "mocha"

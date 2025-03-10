@@ -1,0 +1,4 @@
+/* Use moon instead of paint brush icon for theme toggle. */
+#theme-toggle .fa:before {
+    content: "\f186";
+}
