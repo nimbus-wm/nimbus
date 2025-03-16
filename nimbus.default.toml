@@ -12,7 +12,7 @@ animate = true
 default_disable = true
 
 # Move the mouse to the middle of the window each time the focus changes.
-mouse_follows_focus = false
+mouse_follows_focus = true
 
 [keys]
 # Modifier and key names must be capitalized.

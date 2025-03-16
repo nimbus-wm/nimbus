@@ -46,7 +46,7 @@ use crate::{
         app::{running_apps, NSRunningApplicationExt},
         event,
         executor::Executor,
-        geometry::{CGPointDef, ToCGType, ToICrate},
+        geometry::{ToCGType, ToICrate},
         observer::Observer,
         window_server::{self, WindowServerId},
     },
@@ -114,25 +114,12 @@ pub enum Request {
     ///
     /// Events attributed to this request will have the [`Quiet`] parameter
     /// attached to them.
-    Raise(
-        WindowId,
-        RaiseToken,
-        Option<oneshot::Sender<()>>,
-        Quiet,
-        Warp,
-    ),
+    Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>, Quiet),
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Quiet {
     Yes,
-    #[default]
-    No,
-}
-
-#[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum Warp {
-    Yes(#[serde(with = "CGPointDef")] CGPoint),
     #[default]
     No,
 }
@@ -421,8 +408,8 @@ impl State {
                     None,
                 ));
             }
-            &mut Request::Raise(wid, ref token, ref mut done, quiet, warp) => {
-                self.handle_raise_request(wid, token, done, quiet, warp)?;
+            &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
+                self.handle_raise_request(wid, token, done, quiet)?;
             }
         }
         Ok(false)
@@ -500,7 +487,6 @@ impl State {
         token: &RaiseToken,
         done: &mut Option<oneshot::Sender<()>>,
         quiet: Quiet,
-        warp: Warp,
     ) -> Result<(), accessibility::Error> {
         // This request could be handled out of order with respect to
         // later requests sent to other apps by the reactor. To avoid
@@ -564,11 +550,6 @@ impl State {
                 "Raise request failed to raise {desired:?}; instead got {main_window:?}",
                 desired = self.window(wid)?.elem
             );
-        }
-        if let Warp::Yes(point) = warp {
-            if let Err(e) = event::warp_mouse(point) {
-                warn!("Failed to warp mouse: {e:?}");
-            }
         }
         Ok(())
     }

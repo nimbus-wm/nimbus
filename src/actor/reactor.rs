@@ -14,7 +14,7 @@ mod testing;
 use std::{collections::BTreeMap, mem, sync::Arc, thread};
 
 use animation::Animation;
-use icrate::Foundation::CGRect;
+use icrate::Foundation::{CGPoint, CGRect};
 use main_window::MainWindowTracker;
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
@@ -24,9 +24,7 @@ use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use crate::{
     actor::{
-        app::{
-            pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, Warp, WindowId, WindowInfo,
-        },
+        app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
         layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
     },
     collections::{HashMap, HashSet},
@@ -40,6 +38,8 @@ use crate::{
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
+
+use super::mouse;
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Event)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, Event)>;
@@ -158,6 +158,7 @@ pub struct Reactor {
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
     record: Record,
+    mouse_tx: Option<mouse::Sender>,
 }
 
 #[derive(Debug)]
@@ -213,12 +214,19 @@ impl From<WindowInfo> for WindowState {
 }
 
 impl Reactor {
-    pub fn spawn(config: Arc<Config>, layout: LayoutManager, record: Record) -> Sender {
+    pub fn spawn(
+        config: Arc<Config>,
+        layout: LayoutManager,
+        record: Record,
+        mouse_tx: mouse::Sender,
+    ) -> Sender {
         let (events_tx, events) = unbounded_channel();
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
-                Executor::run(Reactor::new(config, layout, record).run(events));
+                let mut reactor = Reactor::new(config, layout, record);
+                reactor.mouse_tx.replace(mouse_tx);
+                Executor::run(reactor.run(events));
             })
             .unwrap();
         events_tx
@@ -240,6 +248,7 @@ impl Reactor {
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
             record,
+            mouse_tx: None,
         }
     }
 
@@ -565,18 +574,18 @@ impl Reactor {
         let layout::EventResponse { raise_windows, focus_window } = response;
         for wid in raise_windows {
             info!(raise_window = ?wid);
-            self.raise_window(wid, Quiet::Yes, Warp::No);
+            self.raise_window(wid, Quiet::Yes, None);
         }
         if let Some(wid) = focus_window {
             let warp = match self.config.settings.mouse_follows_focus {
-                true => Warp::Yes(self.windows[&wid].frame_monotonic.mid()),
-                false => Warp::No,
+                true => Some(self.windows[&wid].frame_monotonic.mid()),
+                false => None,
             };
             self.raise_window(wid, Quiet::No, warp);
         }
     }
 
-    fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Warp) {
+    fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Option<CGPoint>) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
         let Some(app) = self.apps.get_mut(&wid.pid) else { return };
@@ -586,9 +595,13 @@ impl Reactor {
                 self.raise_token.clone(),
                 Some(tx),
                 quiet,
-                warp,
             ))
             .unwrap();
+        if let Some(point) = warp {
+            if let Some(mouse_tx) = &self.mouse_tx {
+                _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
+            }
+        }
         let _ = rx.blocking_recv();
     }
 

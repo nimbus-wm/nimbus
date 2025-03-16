@@ -212,9 +212,7 @@ async fn main() -> anyhow::Result<()> {
                 reactor::replay(&path, |_span, request| {
                     info!(?request);
                     match request {
-                        nimbus_wm::actor::app::Request::Raise(_, _, Some(ch), _, _) => {
-                            _ = ch.send(())
-                        }
+                        nimbus_wm::actor::app::Request::Raise(_, _, Some(ch), _) => _ = ch.send(()),
                         _ => (),
                     }
                 })
