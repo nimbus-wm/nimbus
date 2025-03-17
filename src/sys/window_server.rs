@@ -20,10 +20,16 @@ use core_graphics::{
         kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
     },
 };
-use icrate::Foundation::CGRect;
+use icrate::{
+    AppKit::NSWindow,
+    Foundation::{CGPoint, CGRect, MainThreadMarker},
+};
 use serde::{Deserialize, Serialize};
 
-use super::geometry::{CGRectDef, ToICrate};
+use super::{
+    geometry::{CGRectDef, ToICrate},
+    screen::CoordinateConverter,
+};
 
 /// The window ID used by the window server.
 ///
@@ -139,6 +145,16 @@ fn get_windows_inner(ids: &[CGWindowID]) -> CFArray<CFDictionary<CFString, CFTyp
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i64> {
     let item: CFNumber = dict.find(key)?.downcast()?;
     Some(item.to_i64()?)
+}
+
+pub fn get_window_at_point(
+    point: CGPoint,
+    converter: CoordinateConverter,
+    mtm: MainThreadMarker,
+) -> Option<WindowServerId> {
+    let ns_loc = converter.convert_point(point)?;
+    let win = unsafe { NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(ns_loc, 0, mtm) };
+    Some(WindowServerId(win as u32))
 }
 
 extern "C" {

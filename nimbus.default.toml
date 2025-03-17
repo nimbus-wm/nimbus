@@ -11,6 +11,9 @@ animate = true
 # toggle_space_activated command to enable a space.
 default_disable = true
 
+# Focus the window under the mouse as it moves.
+focus_follows_mouse = true
+
 # Move the mouse to the middle of the window each time the focus changes.
 mouse_follows_focus = true
 

@@ -83,6 +83,7 @@ impl MainWindowTracker {
             | Event::ScreenParametersChanged(_, _, _)
             | Event::SpaceChanged(_, _)
             | Event::MouseUp
+            | Event::MouseMovedOverWindow(_)
             | Event::Command(_) => return None,
         };
         if Some(event_pid) == self.global_frontmost && quiet_edge == Quiet::No {

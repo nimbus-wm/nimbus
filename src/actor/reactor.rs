@@ -122,6 +122,7 @@ pub enum Event {
     /// FIXME: This can be interleaved incorrectly with the MouseState in app
     /// actor events.
     MouseUp,
+    MouseMovedOverWindow(WindowServerId),
 
     Command(Command),
 }
@@ -417,6 +418,10 @@ impl Reactor {
                 self.in_drag = false;
                 // Now re-check the layout.
             }
+            Event::MouseMovedOverWindow(wsid) => {
+                let Some(&wid) = self.window_ids.get(&wsid) else { return };
+                self.raise_window(wid, Quiet::No, None);
+            }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
                 let visible_spaces =
@@ -585,6 +590,7 @@ impl Reactor {
         }
     }
 
+    #[instrument(skip(self))]
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Option<CGPoint>) {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
@@ -602,7 +608,9 @@ impl Reactor {
                 _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
             }
         }
+        trace!("Blocking");
         let _ = rx.blocking_recv();
+        trace!("Done blocking");
     }
 
     /// The main window of the active app, if any.

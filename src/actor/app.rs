@@ -17,7 +17,7 @@ use std::{
 use accessibility::{AXAttribute, AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
-    kAXMainWindowChangedNotification, kAXTitleChangedNotification,
+    kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
     kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
@@ -507,8 +507,7 @@ impl State {
         token
             .with(self.pid, || {
                 // Check whether the app thinks it is frontmost. If it
-                // does we won't get an activated event, so don't
-                // bother activating it.
+                // does we won't get an activated event.
                 //
                 // We read the value directly instead of using the
                 // cached value because it's possible the cache is
@@ -523,22 +522,31 @@ impl State {
                 // the requested window is indeed frontmost.
                 let is_frontmost: bool =
                     trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
-                if !is_frontmost {
-                    let result = window_server::make_key_window(
-                        self.pid,
-                        WindowServerId::try_from(&self.window(wid)?.elem)?,
-                    );
-                    if result.is_ok() {
-                        // Record the activation so we can match against its
-                        // notification and correctly mark it as quiet.
-                        // FIXME: We might not get the activation event, and
-                        // this will deadlock the reactor.
+                let window = self.window(wid)?;
+                let is_standard =
+                    window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false);
+                // Make this the key window regardless of is_frontmost. This
+                // ensures that the window has focus and can receive keyboard events.
+                let result = window_server::make_key_window(
+                    self.pid,
+                    WindowServerId::try_from(&self.window(wid)?.elem)?,
+                );
+                if result.is_err() {
+                    warn!(?self.pid, "Failed to activate app");
+                } else if !is_frontmost {
+                    // We should be getting an activation event from make_key_window.
+                    // Record the activation so we can match against its
+                    // notification and correctly mark it as quiet.
+                    //
+                    // FIXME: We might not get the activation event, and
+                    // this will deadlock the reactor.
+                    //
+                    // As a temporary workaround, don't expect activation events
+                    // for non-standard windows or we will hit the deadlock
+                    // mentioned above.
+                    if is_standard {
                         self.last_activated = Some((Instant::now(), quiet, done.take()));
-                    } else {
-                        warn!(?self.pid, "Failed to activate app");
                     }
-                } else {
-                    trace!("App is already frontmost; skipping activation");
                 }
                 Ok(())
             })

@@ -21,7 +21,7 @@ use crate::{
     collections::HashSet,
     sys::{
         event::HotkeyManager,
-        screen::{NSScreenExt, ScreenId, SpaceId},
+        screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId},
         window_server::WindowServerInfo,
     },
 };
@@ -36,6 +36,7 @@ pub enum WmEvent {
     ScreenParametersChanged(
         Vec<CGRect>,
         Vec<ScreenId>,
+        CoordinateConverter,
         Vec<Option<SpaceId>>,
         Vec<WindowServerInfo>,
     ),
@@ -124,17 +125,27 @@ impl WmController {
             AppLaunch(pid, info) => {
                 actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
             }
-            ScreenParametersChanged(frames, ids, mut spaces, windows) => {
+            ScreenParametersChanged(frames, ids, converter, mut spaces, windows) => {
                 self.cur_screen_id = ids;
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
-                self.send_event(Event::ScreenParametersChanged(frames, spaces, windows));
+                self.send_event(Event::ScreenParametersChanged(
+                    frames.clone(),
+                    spaces,
+                    windows,
+                ));
+                _ = self.mouse_tx.send((
+                    Span::current(),
+                    mouse::Request::ScreenParametersChanged(converter),
+                ));
             }
             SpaceChanged(mut spaces, windows) => {
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
                 self.send_event(Event::SpaceChanged(spaces, windows));
             }
+            // TODO: Remove this variant; we already handle almost every event
+            // on this channel specially.
             ReactorEvent(event) => {
                 if let Event::ApplicationGloballyActivated(_) = &event {
                     // Make sure the mouse cursor stays hidden after app switch.

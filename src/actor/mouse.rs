@@ -1,15 +1,20 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
-use icrate::Foundation::CGPoint;
+use icrate::Foundation::{CGPoint, MainThreadMarker};
 use tracing::{debug, error, trace, warn, Span};
 
 use crate::{
     config::Config,
-    sys::{event, window_server},
+    sys::{
+        event,
+        geometry::ToICrate,
+        screen::CoordinateConverter,
+        window_server::{self, WindowServerId},
+    },
 };
 
 use super::reactor::{self, Event};
@@ -21,18 +26,21 @@ pub enum Request {
     /// application changes. WmController sends us this request when that
     /// happens, so we can re-hide the mouse if it is supposed to be hidden.
     EnforceHidden,
+    ScreenParametersChanged(CoordinateConverter),
 }
 
 pub struct Mouse {
     config: Arc<Config>,
     events_tx: reactor::Sender,
-    requests_rx: Receiver,
-    state: Rc<RefCell<State>>,
+    requests_rx: Option<Receiver>,
+    state: RefCell<State>,
 }
 
 #[derive(Default)]
 struct State {
     hidden: bool,
+    above_window: Option<WindowServerId>,
+    converter: CoordinateConverter,
 }
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Request)>;
@@ -47,15 +55,18 @@ impl Mouse {
         Mouse {
             config,
             events_tx,
-            requests_rx,
-            state: Rc::new(RefCell::new(State::default())),
+            requests_rx: Some(requests_rx),
+            state: RefCell::new(State::default()),
         }
     }
 
     pub async fn run(mut self) {
+        let mut requests_rx = self.requests_rx.take().unwrap();
+
+        let this = Rc::new(self);
+        let this_ = Rc::clone(&this);
         let current = CFRunLoop::get_current();
-        let tx = self.events_tx.clone();
-        let state = Rc::clone(&self.state);
+        let mtm = MainThreadMarker::new().unwrap();
         let tap = CGEventTap::new(
             CGEventTapLocation::Session,
             CGEventTapPlacement::HeadInsertEventTap,
@@ -72,7 +83,7 @@ impl Mouse {
                 CGEventType::RightMouseDragged,
             ],
             move |_, event_type, event| {
-                Self::on_event(event_type, event, &tx, &mut *state.borrow_mut());
+                this_.on_event(event_type, event, mtm);
                 None
             },
         )
@@ -85,7 +96,7 @@ impl Mouse {
         // running by the time this function is awaited.
         tap.enable();
 
-        if self.config.settings.mouse_hides_on_focus {
+        if this.config.settings.mouse_hides_on_focus {
             if let Err(e) = window_server::allow_hide_mouse() {
                 error!(
                     "Could not enable mouse hiding: {e:?}. \
@@ -94,33 +105,39 @@ impl Mouse {
             }
         }
 
-        while let Some((_span, request)) = self.requests_rx.recv().await {
-            let mut state = self.state.borrow_mut();
-            match request {
-                Request::Warp(point) => {
-                    if let Err(e) = event::warp_mouse(point) {
-                        warn!("Failed to warp mouse: {e:?}");
-                    }
-                    if self.config.settings.mouse_hides_on_focus && !state.hidden {
-                        debug!("Hiding mouse");
-                        if let Err(e) = event::hide_mouse() {
-                            warn!("Failed to hide mouse: {e:?}");
-                        }
-                        state.hidden = true;
-                    }
-                }
-                Request::EnforceHidden => {
-                    if state.hidden {
-                        if let Err(e) = event::hide_mouse() {
-                            warn!("Failed to hide mouse: {e:?}");
-                        }
-                    }
-                }
-            }
+        while let Some((_span, request)) = requests_rx.recv().await {
+            this.on_request(request);
         }
     }
 
-    fn on_event(event_type: CGEventType, event: &CGEvent, tx: &reactor::Sender, state: &mut State) {
+    fn on_request(self: &Rc<Self>, request: Request) {
+        let mut state = self.state.borrow_mut();
+        match request {
+            Request::Warp(point) => {
+                if let Err(e) = event::warp_mouse(point) {
+                    warn!("Failed to warp mouse: {e:?}");
+                }
+                if self.config.settings.mouse_hides_on_focus && !state.hidden {
+                    debug!("Hiding mouse");
+                    if let Err(e) = event::hide_mouse() {
+                        warn!("Failed to hide mouse: {e:?}");
+                    }
+                    state.hidden = true;
+                }
+            }
+            Request::EnforceHidden => {
+                if state.hidden {
+                    if let Err(e) = event::hide_mouse() {
+                        warn!("Failed to hide mouse: {e:?}");
+                    }
+                }
+            }
+            Request::ScreenParametersChanged(converter) => state.converter = converter,
+        }
+    }
+
+    fn on_event(self: &Rc<Self>, event_type: CGEventType, event: &CGEvent, mtm: MainThreadMarker) {
+        let mut state = self.state.borrow_mut();
         if state.hidden {
             debug!("Showing mouse");
             if let Err(e) = event::show_mouse() {
@@ -130,13 +147,38 @@ impl Mouse {
         }
         match event_type {
             CGEventType::LeftMouseUp => {
-                _ = tx.send((Span::current().clone(), Event::MouseUp));
+                _ = self.events_tx.send((Span::current().clone(), Event::MouseUp));
             }
-            CGEventType::MouseMoved => {
+            CGEventType::MouseMoved if self.config.settings.focus_follows_mouse => {
                 let loc = event.location();
                 trace!("Mouse moved {loc:?}");
+                // TODO: This takes on the order of 200µs, which is a while
+                // for something that can run many times a second on the main
+                // thread. For now this isn't a problem but when we start
+                // doing anything with UI we will probably want to compute
+                // this internally.
+                let wsid = trace_misc("NSWindow", || {
+                    window_server::get_window_at_point(loc.to_icrate(), state.converter, mtm)
+                });
+                if state.above_window != wsid {
+                    debug!("Mouse is now above window {wsid:?}");
+                    state.above_window = wsid;
+                    if let Some(wsid) = wsid {
+                        _ = self
+                            .events_tx
+                            .send((Span::current(), Event::MouseMovedOverWindow(wsid)));
+                    }
+                }
             }
             _ => (),
         }
     }
+}
+
+fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let out = f();
+    let end = Instant::now();
+    trace!(time = ?(end - start), "{desc:12}");
+    out
 }

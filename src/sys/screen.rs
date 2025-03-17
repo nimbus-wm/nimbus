@@ -1,4 +1,4 @@
-use std::{ffi::c_int, mem::MaybeUninit, num::NonZeroU64};
+use std::{f64, ffi::c_int, mem::MaybeUninit, num::NonZeroU64};
 
 use bitflags::bitflags;
 use core_foundation::{
@@ -55,11 +55,11 @@ impl<S: System> ScreenCache<S> {
     /// The main screen (if any) is always first. Note that there may be no
     /// screens.
     #[forbid(unsafe_code)] // called from test
-    pub fn update_screen_config(&mut self) -> (Vec<CGRect>, Vec<ScreenId>) {
+    pub fn update_screen_config(&mut self) -> (Vec<CGRect>, Vec<ScreenId>, CoordinateConverter) {
         let mut cg_screens = self.system.cg_screens().unwrap();
         debug!("cg_screens={cg_screens:?}");
         if cg_screens.is_empty() {
-            return (vec![], vec![]);
+            return (vec![], vec![], CoordinateConverter::default());
         };
 
         // Ensure that the main screen is always first.
@@ -80,7 +80,9 @@ impl<S: System> ScreenCache<S> {
         debug!("ns_screens={ns_screens:?}");
 
         // The main screen has origin (0, 0) in both coordinate systems.
-        let ns_origin_y = cg_screens[0].bounds.max().y;
+        let converter = CoordinateConverter {
+            screen_height: cg_screens[0].bounds.max().y,
+        };
 
         let (visible_frames, ids) = cg_screens
             .iter()
@@ -89,20 +91,11 @@ impl<S: System> ScreenCache<S> {
                     warn!("Can't find NSScreen corresponding to {cg_id:?}");
                     return None;
                 };
-                let converted = CGRect {
-                    origin: CGPoint {
-                        x: ns_screen.visible_frame.origin.x,
-                        // Take the original origin, in converted coordinates,
-                        // and move up to the top-left of the visible frame.
-                        // This is the converted origin of the visible frame.
-                        y: ns_origin_y - ns_screen.visible_frame.max().y,
-                    },
-                    size: ns_screen.visible_frame.size,
-                };
+                let converted = converter.convert_rect(ns_screen.visible_frame).unwrap();
                 Some((converted, cg_id))
             })
             .unzip();
-        (visible_frames, ids)
+        (visible_frames, ids, converter)
     }
 
     /// Returns a list of the active spaces on each screen. The order
@@ -118,6 +111,41 @@ impl<S: System> ScreenCache<S> {
             })
             .map(|id| Some(SpaceId(NonZeroU64::new(id)?)))
             .collect()
+    }
+}
+
+/// Converts between Quartz and Cocoa coordinate systems.
+#[derive(Clone, Copy, Debug)]
+pub struct CoordinateConverter {
+    /// The y offset of the Cocoa origin in the Quartz coordinate system, and
+    /// vice versa. This is the height of the first screen. The origins
+    /// are the bottom left and top left of the screen, respectively.
+    screen_height: f64,
+}
+
+/// Creates a `CoordinateConverter` that returns None for any conversion.
+impl Default for CoordinateConverter {
+    fn default() -> Self {
+        Self { screen_height: f64::NAN }
+    }
+}
+
+impl CoordinateConverter {
+    pub fn convert_point(&self, point: CGPoint) -> Option<CGPoint> {
+        if self.screen_height.is_nan() {
+            return None;
+        }
+        Some(CGPoint::new(point.x, self.screen_height - point.y))
+    }
+
+    pub fn convert_rect(&self, rect: CGRect) -> Option<CGRect> {
+        if self.screen_height.is_nan() {
+            return None;
+        }
+        Some(CGRect::new(
+            CGPoint::new(rect.origin.x, self.screen_height - rect.max().y),
+            rect.size,
+        ))
     }
 }
 

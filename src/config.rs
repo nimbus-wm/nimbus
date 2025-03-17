@@ -48,6 +48,8 @@ pub struct Settings {
     pub mouse_follows_focus: bool,
     #[serde(default = "yes")]
     pub mouse_hides_on_focus: bool,
+    #[serde(default = "yes")]
+    pub focus_follows_mouse: bool,
 }
 
 fn yes() -> bool {
