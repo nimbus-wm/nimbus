@@ -521,22 +521,24 @@ impl State {
                 // now we don't handle this case. We could handle it
                 // by looking at the window list and seeing whether
                 // the requested window is indeed frontmost.
-                if trace("is_frontmost", &self.app, || self.app.frontmost())?.into() {
-                    trace!("App is already frontmost; skipping activation");
-                    // Declare success.
-                    _ = done.take().map(|s| s.send(()));
-                    return Ok(());
-                }
-                let result = window_server::make_key_window(
-                    self.pid,
-                    WindowServerId::try_from(&self.window(wid)?.elem)?,
-                );
-                if result.is_ok() {
-                    // Record the activation so we can match against its
-                    // notification and correctly mark it as quiet.
-                    self.last_activated = Some((Instant::now(), quiet, done.take()));
+                let is_frontmost: bool =
+                    trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
+                if !is_frontmost {
+                    let result = window_server::make_key_window(
+                        self.pid,
+                        WindowServerId::try_from(&self.window(wid)?.elem)?,
+                    );
+                    if result.is_ok() {
+                        // Record the activation so we can match against its
+                        // notification and correctly mark it as quiet.
+                        // FIXME: We might not get the activation event, and
+                        // this will deadlock the reactor.
+                        self.last_activated = Some((Instant::now(), quiet, done.take()));
+                    } else {
+                        warn!(?self.pid, "Failed to activate app");
+                    }
                 } else {
-                    warn!(?self.pid, "Failed to activate app");
+                    trace!("App is already frontmost; skipping activation");
                 }
                 Ok(())
             })
