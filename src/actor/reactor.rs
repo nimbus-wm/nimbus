@@ -263,7 +263,7 @@ impl Reactor {
     fn log_event(&self, event: &Event) {
         match event {
             // Record more noisy events as trace logs instead of debug.
-            Event::WindowFrameChanged(_, _, _, _, _) | Event::MouseUp => trace!(?event, "Event"),
+            Event::WindowFrameChanged(..) | Event::MouseUp => trace!(?event, "Event"),
             _ => debug!(?event, "Event"),
         }
     }
@@ -297,11 +297,11 @@ impl Reactor {
                 self.apps.remove(&pid);
                 self.send_layout_event(LayoutEvent::AppClosed(pid));
             }
-            Event::ApplicationActivated(_, _)
-            | Event::ApplicationDeactivated(_)
-            | Event::ApplicationGloballyActivated(_)
-            | Event::ApplicationGloballyDeactivated(_)
-            | Event::ApplicationMainWindowChanged(_, _, _) => {
+            Event::ApplicationActivated(..)
+            | Event::ApplicationDeactivated(..)
+            | Event::ApplicationGloballyActivated(..)
+            | Event::ApplicationGloballyDeactivated(..)
+            | Event::ApplicationMainWindowChanged(..) => {
                 // Handled by MainWindowTracker.
             }
             Event::WindowsDiscovered { pid, new, known_visible } => {

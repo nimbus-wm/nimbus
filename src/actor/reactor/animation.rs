@@ -100,7 +100,7 @@ impl<'a> Animation<'a> {
             }
         }
 
-        for &(handle, wid, _, _, _, _) in &self.windows {
+        for &(handle, wid, ..) in &self.windows {
             handle.send(Request::EndWindowAnimation(wid)).unwrap();
         }
     }
