@@ -4,7 +4,7 @@ use core_graphics::{
         kCGNullDirectDisplayID, CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition,
     },
 };
-use icrate::Foundation::CGPoint;
+use icrate::{AppKit::NSEvent, Foundation::CGPoint};
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ use crate::actor::{
     wm_controller::{Sender, WmCommand, WmEvent},
 };
 
-use super::geometry::ToCGType;
+use super::{geometry::ToCGType, screen::CoordinateConverter};
 
 pub struct HotkeyManager {
     hook: Hook,
@@ -53,12 +53,17 @@ pub enum MouseState {
 }
 
 pub fn get_mouse_state() -> MouseState {
-    let left_button = unsafe { icrate::AppKit::NSEvent::pressedMouseButtons() } & 0x1 != 0;
+    let left_button = unsafe { NSEvent::pressedMouseButtons() } & 0x1 != 0;
     if left_button {
         MouseState::Down
     } else {
         MouseState::Up
     }
+}
+
+pub fn get_mouse_pos(converter: CoordinateConverter) -> Option<CGPoint> {
+    let ns_loc = unsafe { NSEvent::mouseLocation() };
+    converter.convert_point(ns_loc)
 }
 
 pub fn warp_mouse(point: CGPoint) -> Result<(), CGError> {

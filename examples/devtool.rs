@@ -1,34 +1,39 @@
 //! This tool is used to exercise nimbus and system APIs during development.
 
-use std::{future::Future, path::PathBuf, time::Instant};
+use std::{future::Future, path::PathBuf, ptr, time::Instant};
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
-use accessibility_sys::pid_t;
+use accessibility_sys::{pid_t, AXUIElementCopyElementAtPosition, AXUIElementRef};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use core_foundation::{array::CFArray, base::TCFType, dictionary::CFDictionaryRef};
+use core_foundation::{
+    array::CFArray,
+    base::{FromMutVoid, TCFType},
+    dictionary::CFDictionaryRef,
+};
 use core_graphics::{
     display::{CGDisplayBounds, CGMainDisplayID},
     window::{
-        kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
-        CGWindowID, CGWindowListCopyWindowInfo,
+        kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
     },
 };
 use icrate::{
     AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications},
     Foundation::MainThreadMarker,
 };
+use livesplit_hotkey::{ConsumePreference, Modifiers};
 use nimbus_wm::{
     actor::reactor,
     sys::{
         self,
         app::WindowInfo,
-        event,
+        event::{self, get_mouse_pos},
+        executor::Executor,
         screen::{self, ScreenCache},
-        window_server::{self, WindowServerId},
+        window_server::{self, get_window, WindowServerId},
     },
 };
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, unbounded_channel, UnboundedReceiver};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -54,6 +59,8 @@ enum Command {
     Replay(Replay),
     #[command(subcommand)]
     Mouse(Mouse),
+    #[command()]
+    Inspect,
 }
 
 #[derive(Subcommand, Clone)]
@@ -267,14 +274,64 @@ async fn main() -> anyhow::Result<()> {
             println!("Press enter to exit");
             std::io::stdin().read_line(&mut String::new())?;
         }
+        Command::Inspect => inspect(MainThreadMarker::new().unwrap()),
     }
     Ok(())
+}
+
+fn inspect(mtm: MainThreadMarker) {
+    let (tx, rx) = unbounded_channel();
+    let hook =
+        livesplit_hotkey::Hook::with_consume_preference(ConsumePreference::MustConsume).unwrap();
+    let key = event::Hotkey {
+        key_code: event::KeyCode::KeyI,
+        modifiers: Modifiers::ALT | Modifiers::SHIFT,
+    };
+    hook.register(key, move || _ = tx.send(())).unwrap();
+    println!("Press {key:?} to inspect the window under the mouse");
+    Executor::run(inspect_inner(rx, mtm));
+}
+
+async fn inspect_inner(mut rx: UnboundedReceiver<()>, mtm: MainThreadMarker) {
+    let mut screen_cache = ScreenCache::new(mtm);
+    let (_, _, converter) = screen_cache.update_screen_config();
+    while let Some(()) = rx.recv().await {
+        let Some(pos) = get_mouse_pos(converter) else { continue };
+        // This API doesn't always work, but for some reason get_window_at_point
+        // *never* works from devtool.
+        let mut element: AXUIElementRef = ptr::null_mut();
+        let err = unsafe {
+            AXUIElementCopyElementAtPosition(
+                AXUIElement::system_wide().as_CFTypeRef() as _,
+                pos.x as f32,
+                pos.y as f32,
+                &raw mut element,
+            )
+        };
+        if err != 0 {
+            println!("Failed to get element under cursor: {err:?}");
+            continue;
+        }
+        let Ok(ax_window) = unsafe { AXUIElement::from_mut_void(element as *mut _) }.window()
+        else {
+            println!("No window for element {element:#?}");
+            continue;
+        };
+        println!("{ax_window:#?}");
+        let Some(info) =
+            WindowServerId::try_from(&ax_window).ok().and_then(|wsid| get_window(wsid))
+        else {
+            println!("Couldn't get window server info for {element:?}");
+            continue;
+        };
+        println!("{info:#?}");
+    }
 }
 
 async fn get_windows_with_cg(opt: &Opt, print: bool) {
     let windows: CFArray<CFDictionaryRef> = unsafe {
         CFArray::wrap_under_get_rule(CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGWindowListOptionOnScreenOnly,
             kCGNullWindowID,
         ))
     };
