@@ -1,10 +1,10 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, mem::replace, rc::Rc, sync::Arc, time::Instant};
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
-use icrate::Foundation::{CGPoint, MainThreadMarker};
+use icrate::Foundation::{CGPoint, MainThreadMarker, NSInteger};
 use tracing::{debug, error, trace, warn, Span};
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
         event,
         geometry::ToICrate,
         screen::CoordinateConverter,
-        window_server::{self, WindowServerId},
+        window_server::{self, get_window, WindowServerId},
     },
 };
 
@@ -40,6 +40,7 @@ pub struct Mouse {
 struct State {
     hidden: bool,
     above_window: Option<WindowServerId>,
+    above_window_level: NSWindowLevel,
     converter: CoordinateConverter,
 }
 
@@ -152,22 +153,8 @@ impl Mouse {
             CGEventType::MouseMoved if self.config.settings.focus_follows_mouse => {
                 let loc = event.location();
                 trace!("Mouse moved {loc:?}");
-                // TODO: This takes on the order of 200µs, which is a while
-                // for something that can run many times a second on the main
-                // thread. For now this isn't a problem but when we start
-                // doing anything with UI we will probably want to compute
-                // this internally.
-                let wsid = trace_misc("NSWindow", || {
-                    window_server::get_window_at_point(loc.to_icrate(), state.converter, mtm)
-                });
-                if state.above_window != wsid {
-                    debug!("Mouse is now above window {wsid:?}");
-                    state.above_window = wsid;
-                    if let Some(wsid) = wsid {
-                        _ = self
-                            .events_tx
-                            .send((Span::current(), Event::MouseMovedOverWindow(wsid)));
-                    }
+                if let Some(wsid) = state.track_mouse_move(loc.to_icrate(), mtm) {
+                    _ = self.events_tx.send((Span::current(), Event::MouseMovedOverWindow(wsid)));
                 }
             }
             _ => (),
@@ -175,10 +162,66 @@ impl Mouse {
     }
 }
 
+impl State {
+    fn track_mouse_move(&mut self, loc: CGPoint, mtm: MainThreadMarker) -> Option<WindowServerId> {
+        // This takes on the order of 200µs, which can be a while for something
+        // that may run many times a second on the main thread. For now this
+        // isn't a problem, but when we start doing anything with UI we might
+        // want to compute this internally.
+        let new_window = trace_misc("NSWindow", || {
+            window_server::get_window_at_point(loc, self.converter, mtm)
+        });
+        if self.above_window == new_window {
+            return None;
+        }
+
+        debug!("Mouse is now above window {new_window:?}");
+        let old_window = replace(&mut self.above_window, new_window);
+        let new_window_level = new_window
+            .and_then(|id| trace_misc("get_window", || get_window(id)))
+            .map(|info| info.layer as NSWindowLevel)
+            .unwrap_or(NSWindowLevel::MIN);
+        let old_window_level = replace(&mut self.above_window_level, new_window_level);
+
+        debug!(
+            ?old_window,
+            ?old_window_level,
+            ?new_window,
+            ?new_window_level
+        );
+
+        // Don't dismiss popups when the mouse moves off them.
+        //
+        // The only reason this is NSMainMenuWindowLevel and not
+        // NSPopUpMenuWindowLevel is that there seems to be a gap between the
+        // menu bar and the actual menu pop-ups when a menu is opened. When the
+        // mouse goes over this gap, the system reports it to be over whatever
+        // window happens to be below the menu bar and behind the pop-up, and so
+        // we would dismiss the pop-up. First observed on 13.5.2.
+        if old_window_level >= NSMainMenuWindowLevel {
+            return None;
+        }
+
+        // Don't focus windows outside the "normal" range.
+        if !(0..NSPopUpMenuWindowLevel).contains(&new_window_level) {
+            return None;
+        }
+
+        new_window
+    }
+}
+
 fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
     let start = Instant::now();
     let out = f();
     let end = Instant::now();
-    trace!(time = ?(end - start), "{desc:12}");
+    trace!(time = ?(end - start), "{desc}");
     out
 }
+
+/// https://developer.apple.com/documentation/appkit/nswindowlevel?language=objc
+pub type NSWindowLevel = NSInteger;
+#[allow(non_upper_case_globals)]
+pub const NSMainMenuWindowLevel: NSWindowLevel = 24;
+#[allow(non_upper_case_globals)]
+pub const NSPopUpMenuWindowLevel: NSWindowLevel = 101;
