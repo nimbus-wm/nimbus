@@ -37,10 +37,9 @@ use super::{
 /// Any functionality depending on this should have a backup plan in case it
 /// breaks in the future.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct WindowServerId(CGWindowID);
+pub struct WindowServerId(pub CGWindowID);
 
 impl WindowServerId {
-    #[cfg(test)]
     pub fn new(id: CGWindowID) -> Self {
         WindowServerId(id)
     }
@@ -79,7 +78,7 @@ pub struct WindowServerInfo {
 }
 
 /// Returns a list of windows visible on the screen, in order starting with the
-/// frontmost.
+/// frontmost. Excludes desktop elements.
 pub fn get_visible_windows_with_layer(layer: Option<i32>) -> Vec<WindowServerInfo> {
     get_visible_windows_raw()
         .iter()
@@ -122,18 +121,18 @@ fn make_info(
     })
 }
 
-pub fn get_windows(ids: &[CGWindowID]) -> Vec<WindowServerInfo> {
+pub fn get_windows(ids: &[WindowServerId]) -> Vec<WindowServerInfo> {
     if ids.is_empty() {
         return Vec::new();
     }
     get_windows_inner(ids).iter().flat_map(|w| make_info(w, None)).collect()
 }
 
-pub fn get_window(id: CGWindowID) -> Option<WindowServerInfo> {
+pub fn get_window(id: WindowServerId) -> Option<WindowServerInfo> {
     get_windows_inner(&[id]).iter().next().and_then(|w| make_info(w, None))
 }
 
-fn get_windows_inner(ids: &[CGWindowID]) -> CFArray<CFDictionary<CFString, CFType>> {
+fn get_windows_inner(ids: &[WindowServerId]) -> CFArray<CFDictionary<CFString, CFType>> {
     let array = CFArray::from_copyable(ids);
     unsafe {
         CFArray::wrap_under_create_rule(CGWindowListCreateDescriptionFromArray(

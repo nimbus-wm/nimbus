@@ -282,7 +282,7 @@ impl State {
                 continue;
             };
             if let Some(wsid) = wsid {
-                wsids.push(wsid.as_u32());
+                wsids.push(wsid);
             }
             windows.push((wid, info));
         }
@@ -436,7 +436,7 @@ impl State {
                 let Some((window, wid)) = self.register_window(elem) else {
                     return;
                 };
-                let window_server_info = window_server::get_window(wid.idx.into());
+                let window_server_info = window_server::get_window(WindowServerId(wid.idx.into()));
                 self.send_event(Event::WindowCreated(
                     wid,
                     window,
@@ -587,7 +587,7 @@ impl State {
                     warn!(?self.pid, "Got MainWindowChanged on unknown window");
                     return None;
                 };
-                let window_server_info = window_server::get_window(wid.idx.into());
+                let window_server_info = window_server::get_window(WindowServerId(wid.idx.into()));
                 self.send_event(Event::WindowCreated(
                     wid,
                     info,

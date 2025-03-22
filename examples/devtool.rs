@@ -211,10 +211,12 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Command::WindowServer(WindowServer::Get { id }) => match window_server::get_window(id) {
-            Some(win) => println!("{win:?}"),
-            None => println!("Could not find window {id}"),
-        },
+        Command::WindowServer(WindowServer::Get { id }) => {
+            match window_server::get_window(WindowServerId(id)) {
+                Some(win) => println!("{win:?}"),
+                None => println!("Could not find window {id}"),
+            }
+        }
         Command::Replay(Replay { path }) => {
             // We have to spawn a thread because the reactor uses a blocking receive.
             tokio::task::spawn_blocking(move || {
