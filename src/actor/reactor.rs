@@ -583,7 +583,7 @@ impl Reactor {
         }
         if let Some(wid) = focus_window {
             let warp = match self.config.settings.mouse_follows_focus {
-                true => Some(self.windows[&wid].frame_monotonic.mid()),
+                true => self.windows.get(&wid).map(|w| w.frame_monotonic.mid()),
                 false => None,
             };
             self.raise_window(wid, Quiet::No, warp);
