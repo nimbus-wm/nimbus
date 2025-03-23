@@ -16,6 +16,7 @@ pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
+use super::mouse;
 use crate::{
     actor::{self, app::AppInfo, reactor},
     collections::HashSet,
@@ -25,8 +26,6 @@ use crate::{
         window_server::WindowServerInfo,
     },
 };
-
-use super::mouse;
 
 #[derive(Debug)]
 pub enum WmEvent {

@@ -22,6 +22,7 @@ use serde_with::serde_as;
 use tokio::sync::{mpsc::unbounded_channel, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
+use super::mouse;
 use crate::{
     actor::{
         app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
@@ -38,8 +39,6 @@ use crate::{
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
-
-use super::mouse;
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Event)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, Event)>;
@@ -663,8 +662,7 @@ pub mod tests {
     use icrate::Foundation::{CGPoint, CGSize};
     use test_log::test;
 
-    use super::testing::*;
-    use super::*;
+    use super::{testing::*, *};
     use crate::{
         actor::{app::Request, layout::LayoutManager},
         model::Direction,
@@ -1085,7 +1083,11 @@ pub mod tests {
 
     #[test]
     fn it_doesnt_crash_after_main_window_closes() {
-        use {super::Command::*, super::Reactor, Direction::*, Event::*, LayoutCommand::*};
+        use Direction::*;
+        use Event::*;
+        use LayoutCommand::*;
+
+        use super::{Command::*, Reactor};
         let mut apps = Apps::new();
         let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let space = SpaceId::new(1);

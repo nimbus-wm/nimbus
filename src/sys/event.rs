@@ -10,12 +10,11 @@ pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
+use super::{geometry::ToCGType, screen::CoordinateConverter};
 use crate::actor::{
     reactor::Command,
     wm_controller::{Sender, WmCommand, WmEvent},
 };
-
-use super::{geometry::ToCGType, screen::CoordinateConverter};
 
 pub struct HotkeyManager {
     hook: Hook,

@@ -1,9 +1,11 @@
+use std::{collections::BTreeMap, io::Write, sync::Arc};
+
 use accessibility_sys::pid_t;
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
-use std::{collections::BTreeMap, io::Write, sync::Arc};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, Span};
 
+use super::{Event, Reactor, Record, Requested, TransactionId};
 use crate::{
     actor::{
         app::{AppThreadHandle, Request, WindowId},
@@ -16,8 +18,6 @@ use crate::{
         window_server::{WindowServerId, WindowServerInfo},
     },
 };
-
-use super::{Event, Reactor, Record, Requested, TransactionId};
 
 impl Reactor {
     pub fn new_for_test(layout: LayoutManager) -> Reactor {

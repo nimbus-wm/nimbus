@@ -7,6 +7,7 @@ use core_graphics::event::{
 use icrate::Foundation::{CGPoint, MainThreadMarker, NSInteger};
 use tracing::{debug, error, trace, warn, Span};
 
+use super::reactor::{self, Event};
 use crate::{
     config::Config,
     sys::{
@@ -16,8 +17,6 @@ use crate::{
         window_server::{self, get_window, WindowServerId},
     },
 };
-
-use super::reactor::{self, Event};
 
 #[derive(Debug)]
 pub enum Request {
