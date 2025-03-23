@@ -121,6 +121,8 @@ pub enum Event {
     /// FIXME: This can be interleaved incorrectly with the MouseState in app
     /// actor events.
     MouseUp,
+    /// The mouse cursor moved over a new window. Only sent if focus-follows-
+    /// mouse is enabled.
     MouseMovedOverWindow(WindowServerId),
 
     Command(Command),
@@ -419,6 +421,11 @@ impl Reactor {
             }
             Event::MouseMovedOverWindow(wsid) => {
                 let Some(&wid) = self.window_ids.get(&wsid) else { return };
+                let Some(window) = self.windows.get(&wid) else { return };
+                if self.best_space_for_window(&window.frame_monotonic).is_none() {
+                    // The space is disabled.
+                    return;
+                }
                 self.raise_window(wid, Quiet::No, None);
             }
             Event::Command(Command::Layout(cmd)) => {
