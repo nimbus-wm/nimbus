@@ -93,9 +93,6 @@ mod tests {
 
     #[test]
     fn default_settings_match_unspecified_setting_values() {
-        assert_eq!(
-            super::Config::default().settings,
-            toml::from_str("").unwrap()
-        );
+        assert_eq!(super::Config::default().settings, toml::from_str("").unwrap());
     }
 }

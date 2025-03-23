@@ -137,10 +137,7 @@ async fn main() -> anyhow::Result<()> {
             time("core-graphics", || get_windows_with_cg(&opt, true)).await;
             time("ns-window", || get_windows_with_ns(&opt, true)).await;
             time("accessibility", || get_windows_with_ax(&opt, false, true)).await;
-            time("core-graphics second time", || {
-                get_windows_with_cg(&opt, false)
-            })
-            .await;
+            time("core-graphics second time", || get_windows_with_cg(&opt, false)).await;
             time("ns-window second time", || get_windows_with_ns(&opt, false)).await;
             time("accessibility second time", || {
                 get_windows_with_ax(&opt, false, false)

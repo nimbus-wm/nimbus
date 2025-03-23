@@ -703,11 +703,7 @@ mod tests {
 
         #[track_caller]
         fn assert_children_are_inner(&self, children: &[NodeId], parent: NodeId) {
-            assert_eq!(
-                children,
-                self.get_children(parent),
-                "children did not match"
-            );
+            assert_eq!(children, self.get_children(parent), "children did not match");
             assert_eq!(
                 children.iter().copied().rev().collect::<Vec<_>>(),
                 self.get_children_rev(parent),
@@ -805,10 +801,7 @@ mod tests {
     fn traverse_postorder() {
         let t = TestTree::new();
         let traverse = |node: NodeId| node.traverse_postorder(&t.tree.map).collect::<Vec<_>>();
-        assert_eq!(
-            [t.child1, t.gc1, t.child2, t.child3, t.root],
-            *traverse(t.root)
-        );
+        assert_eq!([t.child1, t.gc1, t.child2, t.child3, t.root], *traverse(t.root));
         assert_eq!([t.child1], *traverse(t.child1));
     }
 
@@ -816,10 +809,7 @@ mod tests {
     fn traverse_preorder() {
         let t = TestTree::new();
         let traverse = |node: NodeId| node.traverse_preorder(&t.tree.map).collect::<Vec<_>>();
-        assert_eq!(
-            [t.root, t.child1, t.child2, t.gc1, t.child3],
-            *traverse(t.root)
-        );
+        assert_eq!([t.root, t.child1, t.child2, t.gc1, t.child3], *traverse(t.root));
         assert_eq!([t.child1], *traverse(t.child1));
     }
 

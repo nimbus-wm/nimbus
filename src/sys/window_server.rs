@@ -182,11 +182,7 @@ pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
     let check = |err| if err == 0 { Ok(()) } else { Err(()) };
     unsafe {
         check(GetProcessForPID(pid, &mut psn))?;
-        check(_SLPSSetFrontProcessWithOptions(
-            &psn,
-            wsid.0,
-            kCPSUserGenerated,
-        ))?;
+        check(_SLPSSetFrontProcessWithOptions(&psn, wsid.0, kCPSUserGenerated))?;
         check(SLPSPostEventRecordTo(&psn, event1.as_ptr()))?;
         check(SLPSPostEventRecordTo(&psn, event2.as_ptr()))?;
     }

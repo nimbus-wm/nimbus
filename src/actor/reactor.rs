@@ -596,12 +596,7 @@ impl Reactor {
         let (tx, rx) = oneshot::channel();
         let Some(app) = self.apps.get_mut(&wid.pid) else { return };
         app.handle
-            .send(Request::Raise(
-                wid,
-                self.raise_token.clone(),
-                Some(tx),
-                quiet,
-            ))
+            .send(Request::Raise(wid, self.raise_token.clone(), Some(tx), quiet))
             .unwrap();
         if let Some(point) = warp {
             if let Some(mouse_tx) = &self.mouse_tx {
@@ -898,10 +893,7 @@ pub mod tests {
 
         let state_before = apps.windows.clone();
         let _events = apps.simulate_events();
-        assert_eq!(
-            state_before, apps.windows,
-            "Window should not have been moved",
-        );
+        assert_eq!(state_before, apps.windows, "Window should not have been moved",);
 
         // Make sure it doesn't choke on destroyed events for ignored windows.
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 1)));
@@ -961,10 +953,7 @@ pub mod tests {
 
         let state_before = apps.windows.clone();
         let _events = apps.simulate_events();
-        assert_eq!(
-            state_before, apps.windows,
-            "Window should not have been moved",
-        );
+        assert_eq!(state_before, apps.windows, "Window should not have been moved",);
 
         // Make sure it doesn't choke on destroyed events for ignored windows.
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 1)));
@@ -1049,10 +1038,7 @@ pub mod tests {
         }
         apps.simulate_until_quiet(&mut reactor);
 
-        assert_eq!(
-            reactor.layout.calculate_layout(space, full_screen),
-            modified
-        );
+        assert_eq!(reactor.layout.calculate_layout(space, full_screen), modified);
     }
 
     #[test]

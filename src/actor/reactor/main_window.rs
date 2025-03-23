@@ -157,10 +157,7 @@ mod tests {
         ));
         reactor.handle_events(apps.make_app_with_opts(2, make_windows(2), None, false, true));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(1, 1))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(1, 1)));
 
         reactor.handle_event(ApplicationGloballyDeactivated(1));
         assert_eq!(None, reactor.main_window());
@@ -173,10 +170,7 @@ mod tests {
             Quiet::No,
         ));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(2, 2))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(2, 2)));
         reactor.handle_event(ApplicationMainWindowChanged(
             1,
             Some(WindowId::new(1, 2)),
@@ -199,10 +193,7 @@ mod tests {
             true,
         ));
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(3, 1))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(3, 1)));
     }
 
     #[test]
@@ -227,10 +218,7 @@ mod tests {
         ));
         reactor.handle_events(apps.make_app_with_opts(2, make_windows(2), None, false, true));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(1, 1))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(1, 1)));
 
         reactor.handle_event(ApplicationGloballyDeactivated(1));
         assert_eq!(None, reactor.main_window());
@@ -243,16 +231,10 @@ mod tests {
             Quiet::Yes,
         ));
         assert_eq!(Some(WindowId::new(2, 2)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(1, 1))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(1, 1)));
 
         reactor.handle_event(ApplicationActivated(2, Quiet::No));
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(2, 2))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(2, 2)));
 
         reactor.handle_event(ApplicationMainWindowChanged(
             2,
@@ -260,18 +242,12 @@ mod tests {
             Quiet::Yes,
         ));
         assert_eq!(Some(WindowId::new(2, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(2, 2))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(2, 2)));
 
         reactor.handle_event(ApplicationActivated(1, Quiet::Yes));
         reactor.handle_event(ApplicationGloballyActivated(1));
         assert_eq!(Some(WindowId::new(1, 1)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(2, 2))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(2, 2)));
 
         reactor.handle_event(ApplicationMainWindowChanged(
             1,
@@ -279,10 +255,7 @@ mod tests {
             Quiet::No,
         ));
         assert_eq!(Some(WindowId::new(1, 2)), reactor.main_window());
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(1, 2))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(1, 2)));
     }
 
     #[test]
@@ -318,9 +291,6 @@ mod tests {
         assert_eq!(Some(WindowId::new(3, 1)), reactor.main_window());
 
         reactor.handle_event(SpaceChanged(vec![Some(space)], vec![]));
-        assert_eq!(
-            reactor.layout.selected_window(space),
-            Some(WindowId::new(3, 1))
-        );
+        assert_eq!(reactor.layout.selected_window(space), Some(WindowId::new(3, 1)));
     }
 }

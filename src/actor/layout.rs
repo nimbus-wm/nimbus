@@ -519,10 +519,7 @@ mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> CGRect {
-        CGRect::new(
-            CGPoint::new(x as f64, y as f64),
-            CGSize::new(w as f64, h as f64),
-        )
+        CGRect::new(CGPoint::new(x as f64, y as f64), CGSize::new(w as f64, h as f64))
     }
 
     fn make_windows(pid: pid_t, num: u32) -> Vec<WindowId> {

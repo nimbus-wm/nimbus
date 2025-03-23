@@ -129,11 +129,7 @@ impl WmController {
                 self.cur_screen_id = ids;
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
-                self.send_event(Event::ScreenParametersChanged(
-                    frames.clone(),
-                    spaces,
-                    windows,
-                ));
+                self.send_event(Event::ScreenParametersChanged(frames.clone(), spaces, windows));
                 _ = self.mouse_tx.send((
                     Span::current(),
                     mouse::Request::ScreenParametersChanged(converter),

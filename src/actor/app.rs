@@ -163,10 +163,7 @@ pub fn spawn_initial_app_threads(events_tx: reactor::Sender) {
 
 pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     thread::Builder::new()
-        .name(format!(
-            "{}({pid})",
-            info.bundle_id.as_deref().unwrap_or("")
-        ))
+        .name(format!("{}({pid})", info.bundle_id.as_deref().unwrap_or("")))
         .spawn(move || app_thread_main(pid, info, events_tx))
         .unwrap();
 }
@@ -607,11 +604,7 @@ impl State {
             Some(id) if id == wid => Quiet::Yes,
             _ => Quiet::No,
         };
-        self.send_event(Event::ApplicationMainWindowChanged(
-            self.pid,
-            Some(wid),
-            quiet,
-        ));
+        self.send_event(Event::ApplicationMainWindowChanged(self.pid, Some(wid), quiet));
         Some(wid)
     }
 
@@ -752,11 +745,7 @@ impl State {
             let res = self.observer.remove_notification(elem, notif);
             if let Err(err) = res {
                 // There isn't much we can do here except log and keep going.
-                debug!(
-                    ?notif,
-                    ?elem,
-                    "Removing notification failed with error {err}"
-                );
+                debug!(?notif, ?elem, "Removing notification failed with error {err}");
             }
         }
     }
@@ -775,10 +764,7 @@ impl State {
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     let app = AXUIElement::application(pid);
     let Some(running_app) = NSRunningApplication::with_process_id(pid) else {
-        debug!(
-            ?pid,
-            "Making NSRunningApplication failed; exiting app thread"
-        );
+        debug!(?pid, "Making NSRunningApplication failed; exiting app thread");
         return;
     };
 

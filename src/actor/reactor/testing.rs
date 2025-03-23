@@ -46,10 +46,7 @@ impl Drop for Reactor {
             let mut cmd = test_bin::get_test_bin("examples/devtool");
             cmd.arg("replay").arg(temp.path());
             println!("Replaying recorded data:\n{cmd:?}");
-            assert!(
-                cmd.spawn().unwrap().wait().unwrap().success(),
-                "replay failed"
-            );
+            assert!(cmd.spawn().unwrap().wait().unwrap().success(), "replay failed");
         }
     }
 }

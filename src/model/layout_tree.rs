@@ -534,10 +534,7 @@ impl LayoutTree {
         };
         let desc = format!("{status}{node:?}",);
         let desc = match self.window_at(node) {
-            Some(wid) => format!(
-                "{desc} {wid:?} {}",
-                self.tree.data.layout.debug(node, false)
-            ),
+            Some(wid) => format!("{desc} {wid:?} {}", self.tree.data.layout.debug(node, false)),
             None => format!("{desc} {}", self.tree.data.layout.debug(node, true)),
         };
         let children: Vec<_> =
@@ -937,10 +934,7 @@ mod tests {
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
 
         // Calling on only child updates the (root) parent.
-        assert_eq!(
-            root,
-            tree.nest_in_container(layout, a1, LayoutKind::Vertical)
-        );
+        assert_eq!(root, tree.nest_in_container(layout, a1, LayoutKind::Vertical));
         assert_eq!(LayoutKind::Vertical, tree.tree.data.layout.kind(root));
 
         let a2 = tree.add_window_under(layout, root, WindowId::new(1, 2));
@@ -951,19 +945,13 @@ mod tests {
         // To keep the naming scheme consistent, rename the node a1 to b1
         // once it's nested a level deeper.
         tree.select(a1);
-        let (b1, a1) = (
-            a1,
-            tree.nest_in_container(layout, a1, LayoutKind::Horizontal),
-        );
+        let (b1, a1) = (a1, tree.nest_in_container(layout, a1, LayoutKind::Horizontal));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a1);
         assert_eq!(b1, tree.selection(layout));
 
         tree.select(a2);
-        let (b2, a2) = (
-            a2,
-            tree.nest_in_container(layout, a2, LayoutKind::Horizontal),
-        );
+        let (b2, a2) = (a2, tree.nest_in_container(layout, a2, LayoutKind::Horizontal));
         assert_eq!(b2, tree.selection(layout));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
@@ -974,19 +962,13 @@ mod tests {
         assert_eq!(b2, tree.selection(layout));
 
         // Calling on only child updates the (non-root) parent.
-        assert_eq!(
-            a2,
-            tree.nest_in_container(layout, b2, LayoutKind::Horizontal)
-        );
+        assert_eq!(a2, tree.nest_in_container(layout, b2, LayoutKind::Horizontal));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
         assert_eq!(b2, tree.selection(layout));
 
         // Calling on root works too.
-        let (old_root, root) = (
-            root,
-            tree.nest_in_container(layout, root, LayoutKind::Vertical),
-        );
+        let (old_root, root) = (root, tree.nest_in_container(layout, root, LayoutKind::Vertical));
         tree.assert_children_are([old_root], root);
         tree.assert_children_are([a1, a2], old_root);
         assert_eq!(b2, tree.selection(layout));

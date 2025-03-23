@@ -183,12 +183,7 @@ impl State {
             .unwrap_or(NSWindowLevel::MIN);
         let old_window_level = replace(&mut self.above_window_level, new_window_level);
 
-        debug!(
-            ?old_window,
-            ?old_window_level,
-            ?new_window,
-            ?new_window_level
-        );
+        debug!(?old_window, ?old_window_level, ?new_window, ?new_window_level);
 
         // Don't dismiss popups when the mouse moves off them.
         //
