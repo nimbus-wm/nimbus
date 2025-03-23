@@ -1,3 +1,5 @@
+//! Defines the [`LayoutManager`] actor.
+
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -60,11 +62,16 @@ pub struct EventResponse {
     pub focus_window: Option<WindowId>,
 }
 
-/// Actor that manages the layout tree.
+/// Actor that manages the layouts for each space.
 ///
-/// This actor receives commands and (cleaned up) events from the Reactor,
-/// converts them into layout operations, and calculates the desired position
-/// and size of each window.
+/// The LayoutManager is the event-driven layer that sits between the Reactor
+/// and the LayoutTree model. This actor receives commands and (cleaned up)
+/// events from the Reactor, converts them into LayoutTree operations, and
+/// calculates the desired position and size of each window. It also manages
+/// floating windows.
+///
+/// LayoutManager keeps a different layout for each screen size a space is used
+/// on. See [`SpaceLayoutInfo`] for more details.
 #[derive(Serialize, Deserialize)]
 pub struct LayoutManager {
     tree: LayoutTree,
@@ -81,8 +88,11 @@ pub struct LayoutManager {
 ///
 /// These layouts all track approximately the same windows, but we save one per
 /// screen size so that users can change how their windows are laid out in
-/// different configurations. We only save a layout if it was modified by the
-/// user in some way.
+/// different configurations.
+///
+/// To keep the number of configurations manageable, we only save a unique
+/// layout for a screen size if it was modified by user commands under that
+/// screen size.
 #[derive(Serialize, Deserialize, Debug)]
 struct SpaceLayoutInfo {
     configurations: HashMap<Size, LayoutId>,
