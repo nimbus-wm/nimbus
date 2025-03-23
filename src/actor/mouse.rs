@@ -167,7 +167,7 @@ impl State {
         // that may run many times a second on the main thread. For now this
         // isn't a problem, but when we start doing anything with UI we might
         // want to compute this internally.
-        let new_window = trace_misc("NSWindow", || {
+        let new_window = trace_misc("get_window_at_point", || {
             window_server::get_window_at_point(loc, self.converter, mtm)
         });
         if self.above_window == new_window {
