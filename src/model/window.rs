@@ -53,7 +53,7 @@ impl Window {
     pub(super) fn take_nodes_for(
         &mut self,
         wid: WindowId,
-    ) -> impl Iterator<Item = (LayoutId, NodeId)> {
+    ) -> impl Iterator<Item = (LayoutId, NodeId)> + use<> {
         self.window_nodes
             .remove(&wid)
             .unwrap_or_default()
@@ -64,7 +64,7 @@ impl Window {
     pub(super) fn take_nodes_for_app(
         &mut self,
         pid: pid_t,
-    ) -> impl Iterator<Item = (WindowId, LayoutId, NodeId)> {
+    ) -> impl Iterator<Item = (WindowId, LayoutId, NodeId)> + use<> {
         let removed = self.window_nodes.remove_all_for_pid(pid);
         removed.into_iter().flat_map(|(wid, infos)| {
             infos.into_iter().map(move |info| (wid, info.layout, info.node))

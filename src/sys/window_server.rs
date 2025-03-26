@@ -156,7 +156,7 @@ pub fn get_window_at_point(
     Some(WindowServerId(win as u32))
 }
 
-extern "C" {
+unsafe extern "C" {
     fn _AXUIElementGetWindow(elem: AXUIElementRef, wid: *mut CGWindowID) -> AXError;
 
     fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
@@ -197,7 +197,7 @@ struct ProcessSerialNumber {
 }
 
 #[link(name = "SkyLight", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn _SLPSSetFrontProcessWithOptions(
         psn: *const ProcessSerialNumber,
         wid: u32,
@@ -231,7 +231,7 @@ pub fn allow_hide_mouse() -> Result<(), CGError> {
 type CGSConnectionID = c_int;
 
 #[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CGSMainConnectionID() -> CGSConnectionID;
     fn CGSSetConnectionProperty(
         cid: CGSConnectionID,

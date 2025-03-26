@@ -288,7 +288,7 @@ pub mod diagnostic {
 // Also see https://github.com/koekeishiya/yabai/blob/d55a647913ab72d8d8b348bee2d3e59e52ce4a5d/src/misc/extern.h.
 
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CGSMainConnectionID() -> c_int;
     fn CGSGetActiveSpace(cid: c_int) -> u64;
     fn CGSCopySpaces(cid: c_int, mask: CGSSpaceMask) -> CFArrayRef;

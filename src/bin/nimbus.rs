@@ -51,7 +51,8 @@ fn main() {
     let opt: Cli = Parser::parse();
 
     if std::env::var_os("RUST_BACKTRACE").is_none() {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        // SAFETY: We are single threaded at this point.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
     log::init_logging();
     install_panic_hook();
@@ -111,12 +112,6 @@ fn install_panic_hook() {
         original_hook(info);
         std::process::abort();
     }));
-
-    // Since this version only runs in development, let's default
-    // RUST_BACKTRACE=1 too.
-    if std::env::var("RUST_BACKTRACE").is_err() {
-        std::env::set_var("RUST_BACKTRACE", "1");
-    }
 }
 
 #[cfg(not(panic = "unwind"))]
