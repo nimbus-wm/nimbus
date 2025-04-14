@@ -601,9 +601,11 @@ impl Reactor {
         self.raise_token.set_pid(wid.pid);
         let (tx, rx) = oneshot::channel();
         let Some(app) = self.apps.get_mut(&wid.pid) else { return };
-        app.handle
-            .send(Request::Raise(wid, self.raise_token.clone(), Some(tx), quiet))
-            .unwrap();
+        let Ok(()) =
+            app.handle.send(Request::Raise(wid, self.raise_token.clone(), Some(tx), quiet))
+        else {
+            return;
+        };
         if let Some(point) = warp {
             if let Some(mouse_tx) = &self.mouse_tx {
                 _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
