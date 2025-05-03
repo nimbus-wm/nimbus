@@ -43,7 +43,7 @@ use crate::{
     actor::reactor::{self, Event, Requested, TransactionId},
     collections::HashMap,
     sys::{
-        app::{running_apps, NSRunningApplicationExt},
+        app::NSRunningApplicationExt,
         event,
         executor::Executor,
         geometry::{ToCGType, ToICrate},
@@ -152,12 +152,6 @@ impl RaiseToken {
         // This means any apps that are first in the queue have either completed
         // their activation request or timed out.
         self.0 .1.store(pid, Ordering::SeqCst)
-    }
-}
-
-pub fn spawn_initial_app_threads(events_tx: reactor::Sender) {
-    for (pid, info) in running_apps(None) {
-        spawn_app_thread(pid, info, events_tx.clone());
     }
 }
 

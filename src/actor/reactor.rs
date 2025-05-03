@@ -407,13 +407,7 @@ impl Reactor {
                     self.send_layout_event(LayoutEvent::WindowFocused(spaces, main_window));
                 }
                 self.update_complete_window_server_info(ws_info);
-                // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
-                // (see notes for WindowsDiscovered above).
-                for app in self.apps.values_mut() {
-                    // Errors mean the app terminated (and a termination event
-                    // is coming); ignore.
-                    _ = app.handle.send(Request::GetVisibleWindows);
-                }
+                self.check_for_new_windows();
             }
             Event::MouseUp => {
                 self.in_drag = false;
@@ -486,6 +480,16 @@ impl Reactor {
             window.frame_monotonic = info.frame;
         }
         self.window_server_info.extend(ws_info.into_iter().map(|info| (info.id, info)));
+    }
+
+    fn check_for_new_windows(&mut self) {
+        // TODO: Do this correctly/more optimally using CGWindowListCopyWindowInfo
+        // (see notes for on_windows_discovered below).
+        for app in self.apps.values_mut() {
+            // Errors mean the app terminated (and a termination event
+            // is coming); ignore.
+            _ = app.handle.send(Request::GetVisibleWindows);
+        }
     }
 
     fn on_windows_discovered(

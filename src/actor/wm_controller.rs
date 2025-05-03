@@ -21,6 +21,7 @@ use crate::{
     actor::{self, app::AppInfo, reactor},
     collections::HashSet,
     sys::{
+        self,
         event::HotkeyManager,
         screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId},
         window_server::WindowServerInfo,
@@ -34,13 +35,12 @@ pub enum WmEvent {
     AppGloballyActivated(pid_t),
     AppGloballyDeactivated(pid_t),
     AppTerminated(pid_t),
-    SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
+    SpaceChanged(Vec<Option<SpaceId>>),
     ScreenParametersChanged(
         Vec<CGRect>,
         Vec<ScreenId>,
         CoordinateConverter,
         Vec<Option<SpaceId>>,
-        Vec<WindowServerInfo>,
     ),
     Command(WmCommand),
 }
@@ -78,6 +78,7 @@ pub struct WmController {
     cur_screen_id: Vec<ScreenId>,
     disabled_spaces: HashSet<SpaceId>,
     enabled_spaces: HashSet<SpaceId>,
+    login_window_pid: Option<pid_t>,
     hotkeys: Option<HotkeyManager>,
     mtm: MainThreadMarker,
 }
@@ -100,6 +101,7 @@ impl WmController {
             cur_screen_id: Vec::new(),
             disabled_spaces: HashSet::default(),
             enabled_spaces: HashSet::default(),
+            login_window_pid: None,
             hotkeys: None,
             mtm: MainThreadMarker::new().unwrap(),
         };
@@ -121,10 +123,12 @@ impl WmController {
         use self::{WmCmd::*, WmCommand::*, WmEvent::*};
         match event {
             AppEventsRegistered => {
-                actor::app::spawn_initial_app_threads(self.events_tx.clone());
+                for (pid, info) in sys::app::running_apps(None) {
+                    self.new_app(pid, info);
+                }
             }
             AppLaunch(pid, info) => {
-                actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
+                self.new_app(pid, info);
             }
             AppGloballyActivated(pid) => {
                 // Make sure the mouse cursor stays hidden after app switch.
@@ -133,24 +137,36 @@ impl WmController {
             }
             AppGloballyDeactivated(pid) => {
                 self.send_event(Event::ApplicationGloballyDeactivated(pid));
+                if self.login_window_pid == Some(pid) {
+                    // While the login screen is active AX APIs do not work.
+                    // When it's dismissed, simulate a space change to update
+                    // the set of visible windows on screen and their positions.
+                    let mut spaces = self.cur_space.clone();
+                    self.apply_space_activation(&mut spaces);
+                    self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+                }
             }
             AppTerminated(pid) => {
                 self.send_event(Event::ApplicationTerminated(pid));
             }
-            ScreenParametersChanged(frames, ids, converter, mut spaces, windows) => {
+            ScreenParametersChanged(frames, ids, converter, mut spaces) => {
                 self.cur_screen_id = ids;
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
-                self.send_event(Event::ScreenParametersChanged(frames.clone(), spaces, windows));
+                self.send_event(Event::ScreenParametersChanged(
+                    frames.clone(),
+                    spaces,
+                    self.get_windows(),
+                ));
                 _ = self.mouse_tx.send((
                     Span::current(),
                     mouse::Request::ScreenParametersChanged(converter),
                 ));
             }
-            SpaceChanged(mut spaces, windows) => {
+            SpaceChanged(mut spaces) => {
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
-                self.send_event(Event::SpaceChanged(spaces, windows));
+                self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
             }
             Command(Wm(ToggleSpaceActivated)) => {
                 let Some(space) = self.get_focused_space() else { return };
@@ -172,14 +188,11 @@ impl WmController {
         }
     }
 
-    fn get_windows(&self) -> Vec<WindowServerInfo> {
-        // TODO: This probably shouldn't happen here.
-        // We only do it because we manufacture a SpaceChanged event, and the
-        // reactor might need an accurate list of visible windows.
-        #[cfg(not(test))]
-        return crate::sys::window_server::get_visible_windows_with_layer(None);
-        #[cfg(test)]
-        vec![]
+    fn new_app(&mut self, pid: pid_t, info: AppInfo) {
+        if info.bundle_id.as_deref() == Some("com.apple.loginwindow") {
+            self.login_window_pid = Some(pid);
+        }
+        actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
     }
 
     fn get_focused_space(&self) -> Option<SpaceId> {
@@ -235,5 +248,12 @@ impl WmController {
     fn unregister_hotkeys(&mut self) {
         debug!("unregister_hotkeys");
         self.hotkeys = None;
+    }
+
+    fn get_windows(&self) -> Vec<WindowServerInfo> {
+        #[cfg(not(test))]
+        return sys::window_server::get_visible_windows_with_layer(None);
+        #[cfg(test)]
+        vec![]
     }
 }
