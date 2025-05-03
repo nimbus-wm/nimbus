@@ -16,7 +16,7 @@ use tracing::{info_span, trace, warn, Span};
 
 use super::wm_controller::{self, WmEvent};
 use crate::{
-    actor::{app::AppInfo, reactor::Event},
+    actor::app::AppInfo,
     sys::{
         app::NSRunningApplicationExt,
         screen::ScreenCache,
@@ -100,7 +100,7 @@ impl NotificationCenterInner {
         let mut screen_cache = self.ivars().screen_cache.borrow_mut();
         let (frames, ids, converter) = screen_cache.update_screen_config();
         let spaces = screen_cache.get_screen_spaces();
-        self.send_wm_event(WmEvent::ScreenParametersChanged(
+        self.send_event(WmEvent::ScreenParametersChanged(
             frames,
             ids,
             converter,
@@ -111,7 +111,7 @@ impl NotificationCenterInner {
 
     fn send_current_space(&self) {
         let spaces = self.ivars().screen_cache.borrow().get_screen_spaces();
-        self.send_wm_event(WmEvent::SpaceChanged(spaces, self.get_windows()));
+        self.send_event(WmEvent::SpaceChanged(spaces, self.get_windows()));
     }
 
     fn get_windows(&self) -> Vec<WindowServerInfo> {
@@ -128,13 +128,13 @@ impl NotificationCenterInner {
         let span = info_span!("notification_center::handle_app_event", ?name);
         let _guard = span.enter();
         if unsafe { NSWorkspaceDidLaunchApplicationNotification } == name {
-            self.send_wm_event(WmEvent::AppLaunch(pid, AppInfo::from(&*app)));
+            self.send_event(WmEvent::AppLaunch(pid, AppInfo::from(&*app)));
         } else if unsafe { NSWorkspaceDidActivateApplicationNotification } == name {
-            self.send_event(Event::ApplicationGloballyActivated(pid));
+            self.send_event(WmEvent::AppGloballyActivated(pid));
         } else if unsafe { NSWorkspaceDidDeactivateApplicationNotification } == name {
-            self.send_event(Event::ApplicationGloballyDeactivated(pid));
+            self.send_event(WmEvent::AppGloballyDeactivated(pid));
         } else if unsafe { NSWorkspaceDidTerminateApplicationNotification } == name {
-            self.send_event(Event::ApplicationTerminated(pid));
+            self.send_event(WmEvent::AppTerminated(pid));
         } else if unsafe { NSWorkspaceActiveSpaceDidChangeNotification } == name {
             self.send_current_space();
         } else {
@@ -142,13 +142,9 @@ impl NotificationCenterInner {
         }
     }
 
-    fn send_wm_event(&self, event: WmEvent) {
+    fn send_event(&self, event: WmEvent) {
         // Errors only happen during shutdown, so we can ignore them.
         _ = self.ivars().events_tx.send((Span::current().clone(), event));
-    }
-
-    fn send_event(&self, event: Event) {
-        self.send_wm_event(WmEvent::ReactorEvent(event))
     }
 
     fn running_application(&self, notif: &NSNotification) -> Option<Id<NSRunningApplication>> {
@@ -238,9 +234,9 @@ impl NotificationCenter {
         let workspace = &unsafe { NSWorkspace::sharedWorkspace() };
 
         self.inner.send_screen_parameters();
-        self.inner.send_wm_event(WmEvent::AppEventsRegistered);
+        self.inner.send_event(WmEvent::AppEventsRegistered);
         if let Some(app) = unsafe { workspace.frontmostApplication() } {
-            self.inner.send_event(Event::ApplicationGloballyActivated(app.pid()));
+            self.inner.send_event(WmEvent::AppGloballyActivated(app.pid()));
         }
 
         // All the work is done in callbacks dispatched by the run loop, which

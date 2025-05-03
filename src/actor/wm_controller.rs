@@ -31,6 +31,9 @@ use crate::{
 pub enum WmEvent {
     AppEventsRegistered,
     AppLaunch(pid_t, AppInfo),
+    AppGloballyActivated(pid_t),
+    AppGloballyDeactivated(pid_t),
+    AppTerminated(pid_t),
     SpaceChanged(Vec<Option<SpaceId>>, Vec<WindowServerInfo>),
     ScreenParametersChanged(
         Vec<CGRect>,
@@ -39,7 +42,6 @@ pub enum WmEvent {
         Vec<Option<SpaceId>>,
         Vec<WindowServerInfo>,
     ),
-    ReactorEvent(reactor::Event),
     Command(WmCommand),
 }
 
@@ -124,6 +126,17 @@ impl WmController {
             AppLaunch(pid, info) => {
                 actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
             }
+            AppGloballyActivated(pid) => {
+                // Make sure the mouse cursor stays hidden after app switch.
+                _ = self.mouse_tx.send((Span::current(), mouse::Request::EnforceHidden));
+                self.send_event(Event::ApplicationGloballyActivated(pid));
+            }
+            AppGloballyDeactivated(pid) => {
+                self.send_event(Event::ApplicationGloballyDeactivated(pid));
+            }
+            AppTerminated(pid) => {
+                self.send_event(Event::ApplicationTerminated(pid));
+            }
             ScreenParametersChanged(frames, ids, converter, mut spaces, windows) => {
                 self.cur_screen_id = ids;
                 self.handle_space_changed(&spaces);
@@ -138,15 +151,6 @@ impl WmController {
                 self.handle_space_changed(&spaces);
                 self.apply_space_activation(&mut spaces);
                 self.send_event(Event::SpaceChanged(spaces, windows));
-            }
-            // TODO: Remove this variant; we already handle almost every event
-            // on this channel specially.
-            ReactorEvent(event) => {
-                if let Event::ApplicationGloballyActivated(_) = &event {
-                    // Make sure the mouse cursor stays hidden after app switch.
-                    _ = self.mouse_tx.send((Span::current(), mouse::Request::EnforceHidden));
-                }
-                self.send_event(event);
             }
             Command(Wm(ToggleSpaceActivated)) => {
                 let Some(space) = self.get_focused_space() else { return };
