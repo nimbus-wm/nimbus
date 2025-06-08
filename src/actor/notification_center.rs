@@ -4,14 +4,12 @@
 use std::cell::RefCell;
 use std::{future, mem};
 
-use icrate::objc2::rc::{Allocated, Id};
-use icrate::objc2::{
-    declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass, Encode, Encoding,
-};
-use icrate::AppKit::{
+use objc2::rc::{Allocated, Retained};
+use objc2::{define_class, msg_send, sel, AnyThread, ClassType, DeclaredClass, Encode, Encoding};
+use objc2_app_kit::{
     self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
 };
-use icrate::Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject};
+use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject};
 use tracing::{info_span, trace, warn, Span};
 
 use super::wm_controller::{self, WmEvent};
@@ -29,38 +27,29 @@ unsafe impl Encode for Instance {
     const ENCODING: Encoding = Encoding::Object;
 }
 
-declare_class! {
-    struct NotificationCenterInner;
-
+define_class! {
     // SAFETY:
     // - The superclass NSObject does not have any subclassing requirements.
-    // - Interior mutability is a safe default.
     // - `NotificationHandler` does not implement `Drop`.
-    unsafe impl ClassType for NotificationCenterInner {
-        type Super = NSObject;
-        type Mutability = mutability::InteriorMutable;
-        const NAME: &'static str = "NotificationHandler";
-    }
-
-    impl DeclaredClass for NotificationCenterInner {
-        type Ivars = Box<Instance>;
-    }
+    #[unsafe(super(NSObject))]
+    #[ivars = Box<Instance>]
+    struct NotificationCenterInner;
 
     // SAFETY: Each of these method signatures must match their invocations.
-    unsafe impl NotificationCenterInner {
-        #[method_id(initWith:)]
-        fn init(this: Allocated<Self>, instance: Instance) -> Option<Id<Self>> {
+    impl NotificationCenterInner {
+        #[unsafe(method_id(initWith:))]
+        fn init(this: Allocated<Self>, instance: Instance) -> Option<Retained<Self>> {
             let this = this.set_ivars(Box::new(instance));
-            unsafe { msg_send_id![super(this), init] }
+            unsafe { msg_send![super(this), init] }
         }
 
-        #[method(recvScreenChangedEvent:)]
+        #[unsafe(method(recvScreenChangedEvent:))]
         fn recv_screen_changed_event(&self, notif: &NSNotification) {
             trace!("{notif:#?}");
             self.handle_screen_changed_event(notif);
         }
 
-        #[method(recvAppEvent:)]
+        #[unsafe(method(recvAppEvent:))]
         fn recv_app_event(&self, notif: &NSNotification) {
             trace!("{notif:#?}");
             self.handle_app_event(notif);
@@ -69,16 +58,16 @@ declare_class! {
 }
 
 impl NotificationCenterInner {
-    fn new(events_tx: wm_controller::Sender) -> Id<Self> {
+    fn new(events_tx: wm_controller::Sender) -> Retained<Self> {
         let instance = Instance {
             screen_cache: RefCell::new(ScreenCache::new(MainThreadMarker::new().unwrap())),
             events_tx,
         };
-        unsafe { msg_send_id![Self::alloc(), initWith: instance] }
+        unsafe { msg_send![Self::alloc(), initWith: instance] }
     }
 
     fn handle_screen_changed_event(&self, notif: &NSNotification) {
-        use AppKit::*;
+        use objc2_app_kit::*;
         let name = unsafe { &*notif.name() };
         let span = info_span!("notification_center::handle_screen_changed_event", ?name);
         let _s = span.enter();
@@ -104,7 +93,7 @@ impl NotificationCenterInner {
     }
 
     fn handle_app_event(&self, notif: &NSNotification) {
-        use AppKit::*;
+        use objc2_app_kit::*;
         let Some(app) = self.running_application(notif) else {
             return;
         };
@@ -132,7 +121,10 @@ impl NotificationCenterInner {
         _ = self.ivars().events_tx.send((Span::current().clone(), event));
     }
 
-    fn running_application(&self, notif: &NSNotification) -> Option<Id<NSRunningApplication>> {
+    fn running_application(
+        &self,
+        notif: &NSNotification,
+    ) -> Option<Retained<NSRunningApplication>> {
         let info = unsafe { notif.userInfo() };
         let Some(info) = info else {
             warn!("Got app notification without user info: {notif:?}");
@@ -144,14 +136,14 @@ impl NotificationCenterInner {
             return None;
         };
         assert!(app.class() == NSRunningApplication::class());
-        let app: Id<NSRunningApplication> = unsafe { mem::transmute(app) };
+        let app: Retained<NSRunningApplication> = unsafe { mem::transmute(app) };
         Some(app)
     }
 }
 
 pub struct NotificationCenter {
     #[allow(dead_code)]
-    inner: Id<NotificationCenterInner>,
+    inner: Retained<NotificationCenterInner>,
 }
 
 impl NotificationCenter {
@@ -159,21 +151,22 @@ impl NotificationCenter {
         let handler = NotificationCenterInner::new(events_tx);
 
         // SAFETY: Selector must have signature fn(&self, &NSNotification)
-        let register_unsafe = |selector, notif_name, center: &Id<NSNotificationCenter>, object| unsafe {
-            center.addObserver_selector_name_object(
-                &handler,
-                selector,
-                Some(notif_name),
-                Some(object),
-            );
-        };
+        let register_unsafe =
+            |selector, notif_name, center: &Retained<NSNotificationCenter>, object| unsafe {
+                center.addObserver_selector_name_object(
+                    &handler,
+                    selector,
+                    Some(notif_name),
+                    Some(object),
+                );
+            };
 
         let workspace = &unsafe { NSWorkspace::sharedWorkspace() };
         let workspace_center = &unsafe { workspace.notificationCenter() };
         let default_center = &unsafe { NSNotificationCenter::defaultCenter() };
         let shared_app = &NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
         unsafe {
-            use AppKit::*;
+            use objc2_app_kit::*;
             register_unsafe(
                 sel!(recvScreenChangedEvent:),
                 NSApplicationDidChangeScreenParametersNotification,

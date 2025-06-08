@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use accessibility_sys::pid_t;
-use icrate::AppKit::NSScreen;
-use icrate::Foundation::{CGRect, MainThreadMarker};
+use objc2_app_kit::NSScreen;
+use objc2_core_foundation::CGRect;
+use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, Span};
 

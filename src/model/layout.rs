@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::mem;
 
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 
 use super::layout_tree::TreeEvent;

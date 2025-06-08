@@ -1,5 +1,5 @@
 use core_graphics_types::geometry as cg;
-use icrate::Foundation as ic;
+use objc2_core_foundation as ic;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, SerializeAs};
 

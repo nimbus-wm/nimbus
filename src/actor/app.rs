@@ -20,9 +20,9 @@ use accessibility_sys::{
 };
 use core_foundation::runloop::CFRunLoop;
 use core_foundation::string::CFString;
-use icrate::objc2::rc::Id;
-use icrate::AppKit::NSRunningApplication;
-use icrate::Foundation::{CGPoint, CGRect};
+use objc2::rc::Retained;
+use objc2_app_kit::NSRunningApplication;
+use objc2_core_foundation::{CGPoint, CGRect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{
     unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
@@ -156,7 +156,7 @@ struct State {
     pid: pid_t,
     bundle_id: Option<String>,
     #[expect(dead_code, reason = "unused for now")]
-    running_app: Id<NSRunningApplication>,
+    running_app: Retained<NSRunningApplication>,
     app: AXUIElement,
     observer: Observer,
     events_tx: reactor::Sender,

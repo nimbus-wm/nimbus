@@ -16,8 +16,6 @@ use core_graphics::display::{CGDisplayBounds, CGMainDisplayID};
 use core_graphics::window::{
     kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
 };
-use icrate::AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications};
-use icrate::Foundation::MainThreadMarker;
 use livesplit_hotkey::{ConsumePreference, Modifiers};
 use nimbus_wm::actor::reactor;
 use nimbus_wm::sys::app::WindowInfo;
@@ -26,6 +24,8 @@ use nimbus_wm::sys::executor::Executor;
 use nimbus_wm::sys::screen::{self, ScreenCache};
 use nimbus_wm::sys::window_server::{self, get_window, WindowServerId};
 use nimbus_wm::sys::{self};
+use objc2_app_kit::{NSScreen, NSWindow, NSWindowNumberListOptions};
+use objc2_foundation::MainThreadMarker;
 use tokio::sync::mpsc::{self, unbounded_channel, UnboundedReceiver};
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
@@ -349,8 +349,9 @@ async fn get_windows_with_cg(opt: &Opt, print: bool) {
 
 async fn get_windows_with_ns(_opt: &Opt, print: bool) {
     let mtm = MainThreadMarker::new().unwrap();
-    let windows =
-        unsafe { NSWindow::windowNumbersWithOptions(NSWindowNumberListAllApplications, mtm) };
+    let windows = unsafe {
+        NSWindow::windowNumbersWithOptions(NSWindowNumberListOptions::AllApplications, mtm)
+    };
     if print {
         println!("{windows:?}");
     }

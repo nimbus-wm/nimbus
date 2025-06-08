@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
 use super::TransactionId;
 use crate::actor::app::{AppThreadHandle, Request, WindowId};

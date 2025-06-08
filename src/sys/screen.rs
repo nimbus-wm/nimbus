@@ -9,9 +9,10 @@ use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::display::{CGDisplayBounds, CGGetActiveDisplayList};
 use core_graphics_types::base::{kCGErrorSuccess, CGError};
-use icrate::objc2::{msg_send, ClassType};
-use icrate::AppKit::NSScreen;
-use icrate::Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber};
+use objc2::{msg_send, ClassType};
+use objc2_app_kit::NSScreen;
+use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_foundation::{ns_string, MainThreadMarker, NSNumber};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -232,8 +233,8 @@ pub trait NSScreenExt {
 impl NSScreenExt for NSScreen {
     fn get_number(&self) -> Result<ScreenId, ()> {
         let desc = self.deviceDescription();
-        match desc.get(ns_string!("NSScreenNumber")) {
-            Some(val) if unsafe { msg_send![val, isKindOfClass:NSNumber::class() ] } => {
+        match desc.objectForKey(ns_string!("NSScreenNumber")) {
+            Some(val) if unsafe { msg_send![&*val, isKindOfClass:NSNumber::class() ] } => {
                 let number: &NSNumber = unsafe { std::mem::transmute(val) };
                 Ok(ScreenId(number.as_u32()))
             }
@@ -326,7 +327,7 @@ bitflags! {
 #[cfg(test)]
 mod test {
     use core_foundation::string::CFString;
-    use icrate::Foundation::{CGPoint, CGRect, CGSize};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
     use super::{CGScreenInfo, NSScreenInfo, ScreenCache, ScreenId, System};
 

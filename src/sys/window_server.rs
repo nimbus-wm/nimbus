@@ -16,8 +16,9 @@ use core_graphics::window::{
     kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowNumber,
     kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
 };
-use icrate::AppKit::NSWindow;
-use icrate::Foundation::{CGPoint, CGRect, MainThreadMarker};
+use objc2_app_kit::NSWindow;
+use objc2_core_foundation::{CGPoint, CGRect};
+use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
 
 use super::geometry::{CGRectDef, ToICrate};

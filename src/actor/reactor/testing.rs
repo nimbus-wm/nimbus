@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use accessibility_sys::pid_t;
-use icrate::Foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, Span};
 

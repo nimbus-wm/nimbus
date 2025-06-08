@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::{mem, thread};
 
 use animation::Animation;
-use icrate::Foundation::{CGPoint, CGRect};
 use main_window::MainWindowTracker;
+use objc2_core_foundation::{CGPoint, CGRect};
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -671,7 +671,7 @@ impl Reactor {
 
 #[cfg(test)]
 pub mod tests {
-    use icrate::Foundation::{CGPoint, CGSize};
+    use objc2_core_foundation::{CGPoint, CGSize};
     use test_log::test;
 
     use super::testing::*;

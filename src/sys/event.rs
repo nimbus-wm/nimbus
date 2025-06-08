@@ -2,10 +2,10 @@ use core_graphics::base::CGError;
 use core_graphics::display::{
     kCGNullDirectDisplayID, CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition,
 };
-use icrate::AppKit::NSEvent;
-use icrate::Foundation::CGPoint;
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
+use objc2_app_kit::NSEvent;
+use objc2_core_foundation::CGPoint;
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 

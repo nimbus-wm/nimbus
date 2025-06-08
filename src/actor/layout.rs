@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use icrate::Foundation::{CGRect, CGSize};
+use objc2_core_foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -519,7 +519,7 @@ impl LayoutManager {
 
 #[cfg(test)]
 mod tests {
-    use icrate::Foundation::CGPoint;
+    use objc2_core_foundation::CGPoint;
     use pretty_assertions::assert_eq;
     use test_log::test;
 

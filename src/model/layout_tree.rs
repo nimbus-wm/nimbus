@@ -1,6 +1,6 @@
 use std::{iter, mem};
 
-use icrate::Foundation::CGRect;
+use objc2_core_foundation::CGRect;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -635,7 +635,7 @@ impl tree::Observer for Components {
 mod tests {
     use std::collections::BTreeMap;
 
-    use icrate::Foundation::{CGPoint, CGSize};
+    use objc2_core_foundation::{CGPoint, CGSize};
     use pretty_assertions::assert_eq;
 
     use super::*;

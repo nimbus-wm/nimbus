@@ -8,7 +8,8 @@ use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
-use icrate::Foundation::{CGPoint, MainThreadMarker, NSInteger};
+use objc2_core_foundation::CGPoint;
+use objc2_foundation::{MainThreadMarker, NSInteger};
 use tracing::{debug, error, trace, warn, Span};
 
 use super::reactor::{self, Event};

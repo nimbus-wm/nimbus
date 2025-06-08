@@ -124,7 +124,7 @@ impl MainWindowTracker {
 
 #[cfg(test)]
 mod tests {
-    use icrate::Foundation::CGRect;
+    use objc2_core_foundation::CGRect;
     use test_log::test;
 
     use super::super::testing::{make_windows, Apps};
