@@ -8,11 +8,11 @@ use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::display::{CGDisplayBounds, CGGetActiveDisplayList};
-use core_graphics_types::base::{kCGErrorSuccess, CGError};
-use objc2::{msg_send, ClassType};
+use core_graphics_types::base::{CGError, kCGErrorSuccess};
+use objc2::{ClassType, msg_send};
 use objc2_app_kit::NSScreen;
 use objc2_core_foundation::{CGPoint, CGRect};
-use objc2_foundation::{ns_string, MainThreadMarker, NSNumber};
+use objc2_foundation::{MainThreadMarker, NSNumber, ns_string};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 

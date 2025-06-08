@@ -6,8 +6,8 @@ use std::{mem, ptr};
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFIndex;
 use core_foundation::runloop::{
-    kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext,
-    CFRunLoopSourceCreate, CFRunLoopSourceSignal, CFRunLoopWakeUp,
+    CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopSourceCreate,
+    CFRunLoopSourceSignal, CFRunLoopWakeUp, kCFRunLoopCommonModes,
 };
 
 /// A core foundation run loop source.
@@ -118,9 +118,9 @@ impl WakeupHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
-    use std::sync::mpsc::{channel, Receiver, Sender};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+    use std::sync::mpsc::{Receiver, Sender, channel};
     use std::thread::JoinHandle;
 
     use core_foundation::runloop::CFRunLoop;

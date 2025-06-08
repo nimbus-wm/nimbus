@@ -102,7 +102,7 @@ impl Wake for WakerImpl {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
     use std::{future, thread};
 

@@ -1,5 +1,5 @@
 use super::Event;
-use crate::actor::app::{pid_t, Quiet, WindowId};
+use crate::actor::app::{Quiet, WindowId, pid_t};
 use crate::collections::HashMap;
 
 /// Keeps track of the main window.
@@ -127,7 +127,7 @@ mod tests {
     use objc2_core_foundation::CGRect;
     use test_log::test;
 
-    use super::super::testing::{make_windows, Apps};
+    use super::super::testing::{Apps, make_windows};
     use super::super::{Event, LayoutManager, Quiet, Reactor, SpaceId, WindowId};
 
     #[test]

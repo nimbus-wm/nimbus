@@ -18,16 +18,16 @@ use std::{mem, thread};
 use animation::Animation;
 use main_window::MainWindowTracker;
 use objc2_core_foundation::{CGPoint, CGRect};
-pub use replay::{replay, Record};
+pub use replay::{Record, replay};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, instrument, trace, warn, Span};
+use tracing::{Span, debug, error, info, instrument, trace, warn};
 
 use super::mouse;
 use crate::actor::app::{
-    pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo,
+    AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo, pid_t,
 };
 use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 use crate::collections::{HashMap, HashSet};

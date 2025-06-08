@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::{future, mem};
 
 use objc2::rc::{Allocated, Retained};
-use objc2::{define_class, msg_send, sel, AnyThread, ClassType, DeclaredClass, Encode, Encoding};
+use objc2::{AnyThread, ClassType, DeclaredClass, Encode, Encoding, define_class, msg_send, sel};
 use objc2_app_kit::{
     self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject};
-use tracing::{info_span, trace, warn, Span};
+use tracing::{Span, info_span, trace, warn};
 
 use super::wm_controller::{self, WmEvent};
 use crate::actor::app::AppInfo;

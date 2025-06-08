@@ -4,20 +4,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_foundation::{MainThreadMarker, NSInteger};
-use tracing::{debug, error, trace, warn, Span};
+use tracing::{Span, debug, error, trace, warn};
 
 use super::reactor::{self, Event};
 use crate::config::Config;
 use crate::sys::event;
 use crate::sys::geometry::ToICrate;
 use crate::sys::screen::CoordinateConverter;
-use crate::sys::window_server::{self, get_window, WindowServerId};
+use crate::sys::window_server::{self, WindowServerId, get_window};
 
 #[derive(Debug)]
 pub enum Request {

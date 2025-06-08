@@ -8,7 +8,7 @@ use super::layout::{Direction, Layout, LayoutKind};
 use super::selection::Selection;
 use super::tree::{self, Tree};
 use super::window::Window;
-use crate::actor::app::{pid_t, WindowId};
+use crate::actor::app::{WindowId, pid_t};
 use crate::model::tree::{NodeId, NodeMap, OwnedNode};
 
 /// The layout tree.

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use accessibility_sys::pid_t;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::{debug, Span};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tracing::{Span, debug};
 
 use super::{Event, Reactor, Record, Requested, TransactionId};
 use crate::actor::app::{AppThreadHandle, Request, WindowId};

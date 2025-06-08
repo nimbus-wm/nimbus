@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-pub(crate) use std::collections::{hash_map, BTreeMap, BTreeSet};
+pub(crate) use std::collections::{BTreeMap, BTreeSet, hash_map};
 
 // We don't need or want the random state of the default std collections.
 // We also don't need cryptographic hashing, and these are faster.

@@ -8,7 +8,7 @@ use objc2_core_foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::actor::app::{pid_t, WindowId};
+use crate::actor::app::{WindowId, pid_t};
 use crate::collections::hash_map::Entry;
 use crate::collections::{BTreeExt, BTreeSet, HashMap, HashSet};
 use crate::model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation};

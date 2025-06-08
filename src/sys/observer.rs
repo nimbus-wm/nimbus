@@ -6,12 +6,12 @@ use std::ptr;
 
 use accessibility::AXUIElement;
 use accessibility_sys::{
-    kAXErrorSuccess, pid_t, AXError, AXObserverAddNotification, AXObserverCreate,
-    AXObserverGetRunLoopSource, AXObserverGetTypeID, AXObserverRef, AXObserverRemoveNotification,
-    AXUIElementRef,
+    AXError, AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource,
+    AXObserverGetTypeID, AXObserverRef, AXObserverRemoveNotification, AXUIElementRef,
+    kAXErrorSuccess, pid_t,
 };
 use core_foundation::base::TCFType;
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent};
+use core_foundation::runloop::{CFRunLoopAddSource, CFRunLoopGetCurrent, kCFRunLoopCommonModes};
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::{declare_TCFType, impl_TCFType};
 

@@ -10,7 +10,7 @@ use objc2_app_kit::NSScreen;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument, Span};
+use tracing::{Span, debug, instrument};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;

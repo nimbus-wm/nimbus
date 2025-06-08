@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
-use tracing_timing::{group, Histogram};
+use tracing_timing::{Histogram, group};
 use tracing_tree::time::UtcDateTime;
 
 pub fn init_logging() {

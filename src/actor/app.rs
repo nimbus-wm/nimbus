@@ -25,17 +25,17 @@ use objc2_app_kit::NSRunningApplication;
 use objc2_core_foundation::{CGPoint, CGRect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{
-    unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
+    UnboundedReceiver as Receiver, UnboundedSender as Sender, unbounded_channel as channel,
 };
 use tokio::sync::oneshot;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, trace, warn, Span};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::{Span, debug, error, info, instrument, trace, warn};
 
 use crate::actor::reactor::{self, Event, Requested, TransactionId};
 use crate::collections::HashMap;
 use crate::sys::app::NSRunningApplicationExt;
-pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
+pub use crate::sys::app::{AppInfo, WindowInfo, pid_t};
 use crate::sys::event;
 use crate::sys::executor::Executor;
 use crate::sys::geometry::{ToCGType, ToICrate};
@@ -128,8 +128,8 @@ impl RaiseToken {
     /// Checks if the most recent activation request was for `pid`. Calls the
     /// supplied closure if it was.
     pub fn with<R>(&self, pid: pid_t, f: impl FnOnce() -> R) -> Option<R> {
-        let _lock = trace_misc("RT lock", || self.0 .0.lock()).unwrap();
-        if pid == self.0 .1.load(Ordering::SeqCst) {
+        let _lock = trace_misc("RT lock", || self.0.0.lock()).unwrap();
+        if pid == self.0.1.load(Ordering::SeqCst) {
             Some(f())
         } else {
             None
@@ -141,7 +141,7 @@ impl RaiseToken {
         // the Raise request will have to hold it while it activates itself.
         // This means any apps that are first in the queue have either completed
         // their activation request or timed out.
-        self.0 .1.store(pid, Ordering::SeqCst)
+        self.0.1.store(pid, Ordering::SeqCst)
     }
 }
 

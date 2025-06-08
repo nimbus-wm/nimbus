@@ -1,7 +1,7 @@
 use std::ffi::c_int;
 
 use accessibility::AXUIElement;
-use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
+use accessibility_sys::{AXError, AXUIElementRef, kAXErrorSuccess, pid_t};
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, CFTypeRef, ItemRef, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -10,11 +10,11 @@ use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::base::CGError;
 use core_graphics::display::{
-    kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
+    CGWindowID, CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
 };
 use core_graphics::window::{
-    kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowNumber,
-    kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
+    CGWindowListCreateDescriptionFromArray, kCGWindowBounds, kCGWindowLayer,
+    kCGWindowListExcludeDesktopElements, kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_app_kit::NSWindow;
 use objc2_core_foundation::{CGPoint, CGRect};
@@ -214,11 +214,7 @@ pub fn allow_hide_mouse() -> Result<(), CGError> {
             CFBoolean::true_value().as_CFTypeRef(),
         )
     };
-    if err == 0 {
-        Ok(())
-    } else {
-        Err(err)
-    }
+    if err == 0 { Ok(()) } else { Err(err) }
 }
 
 type CGSConnectionID = c_int;

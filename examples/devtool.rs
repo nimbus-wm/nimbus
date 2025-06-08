@@ -6,7 +6,7 @@ use std::ptr;
 use std::time::Instant;
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
-use accessibility_sys::{pid_t, AXUIElementCopyElementAtPosition, AXUIElementRef};
+use accessibility_sys::{AXUIElementCopyElementAtPosition, AXUIElementRef, pid_t};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use core_foundation::array::CFArray;
@@ -14,7 +14,7 @@ use core_foundation::base::{FromMutVoid, TCFType};
 use core_foundation::dictionary::CFDictionaryRef;
 use core_graphics::display::{CGDisplayBounds, CGMainDisplayID};
 use core_graphics::window::{
-    kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
+    CGWindowID, CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
 };
 use livesplit_hotkey::{ConsumePreference, Modifiers};
 use nimbus_wm::actor::reactor;
@@ -22,15 +22,15 @@ use nimbus_wm::sys::app::WindowInfo;
 use nimbus_wm::sys::event::{self, get_mouse_pos};
 use nimbus_wm::sys::executor::Executor;
 use nimbus_wm::sys::screen::{self, ScreenCache};
-use nimbus_wm::sys::window_server::{self, get_window, WindowServerId};
+use nimbus_wm::sys::window_server::{self, WindowServerId, get_window};
 use nimbus_wm::sys::{self};
 use objc2_app_kit::{NSScreen, NSWindow, NSWindowNumberListOptions};
 use objc2_foundation::MainThreadMarker;
-use tokio::sync::mpsc::{self, unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 struct Opt {
@@ -231,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap()?;
         }
         Command::Mouse(Mouse::Clicks) => {
-            use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+            use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
             use core_graphics::event::{
                 CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
             };

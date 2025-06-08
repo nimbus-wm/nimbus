@@ -1,6 +1,6 @@
 use core_graphics::base::CGError;
 use core_graphics::display::{
-    kCGNullDirectDisplayID, CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition,
+    CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition, kCGNullDirectDisplayID,
 };
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
@@ -79,9 +79,5 @@ pub fn show_mouse() -> Result<(), CGError> {
 }
 
 fn cg_result(err: CGError) -> Result<(), CGError> {
-    if err == 0 {
-        Ok(())
-    } else {
-        Err(err)
-    }
+    if err == 0 { Ok(()) } else { Err(err) }
 }

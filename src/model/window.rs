@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use accessibility_sys::pid_t;
 use serde::{Deserialize, Serialize};
 
-use super::tree::{NodeId, NodeMap};
 use super::LayoutId;
+use super::tree::{NodeId, NodeMap};
 use crate::actor::app::WindowId;
 use crate::collections::BTreeExt;
 use crate::model::layout_tree::TreeEvent;
