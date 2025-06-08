@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, io::Write, sync::Arc};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::sync::Arc;
 
 use accessibility_sys::pid_t;
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
@@ -6,18 +8,12 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, Span};
 
 use super::{Event, Reactor, Record, Requested, TransactionId};
-use crate::{
-    actor::{
-        app::{AppThreadHandle, Request, WindowId},
-        layout::LayoutManager,
-    },
-    config::Config,
-    sys::{
-        app::{AppInfo, WindowInfo},
-        geometry::SameAs,
-        window_server::{WindowServerId, WindowServerInfo},
-    },
-};
+use crate::actor::app::{AppThreadHandle, Request, WindowId};
+use crate::actor::layout::LayoutManager;
+use crate::config::Config;
+use crate::sys::app::{AppInfo, WindowInfo};
+use crate::sys::geometry::SameAs;
+use crate::sys::window_server::{WindowServerId, WindowServerInfo};
 
 impl Reactor {
     pub fn new_for_test(layout: LayoutManager) -> Reactor {

@@ -1,18 +1,17 @@
-use std::{f64, ffi::c_int, mem::MaybeUninit, num::NonZeroU64};
+use std::f64;
+use std::ffi::c_int;
+use std::mem::MaybeUninit;
+use std::num::NonZeroU64;
 
 use bitflags::bitflags;
-use core_foundation::{
-    array::{CFArray, CFArrayRef},
-    base::TCFType,
-    string::{CFString, CFStringRef},
-};
+use core_foundation::array::{CFArray, CFArrayRef};
+use core_foundation::base::TCFType;
+use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::display::{CGDisplayBounds, CGGetActiveDisplayList};
 use core_graphics_types::base::{kCGErrorSuccess, CGError};
-use icrate::{
-    objc2::{msg_send, ClassType},
-    AppKit::NSScreen,
-    Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber},
-};
+use icrate::objc2::{msg_send, ClassType};
+use icrate::AppKit::NSScreen;
+use icrate::Foundation::{ns_string, CGPoint, CGRect, MainThreadMarker, NSNumber};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 

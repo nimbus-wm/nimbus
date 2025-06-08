@@ -1,4 +1,8 @@
-use std::{borrow::Cow, ffi::c_void, marker::PhantomData, mem::ManuallyDrop, ptr};
+use std::borrow::Cow;
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
+use std::ptr;
 
 use accessibility::AXUIElement;
 use accessibility_sys::{
@@ -6,12 +10,10 @@ use accessibility_sys::{
     AXObserverGetRunLoopSource, AXObserverGetTypeID, AXObserverRef, AXObserverRemoveNotification,
     AXUIElementRef,
 };
-use core_foundation::{
-    base::TCFType,
-    declare_TCFType, impl_TCFType,
-    runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent},
-    string::{CFString, CFStringRef},
-};
+use core_foundation::base::TCFType;
+use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent};
+use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::{declare_TCFType, impl_TCFType};
 
 declare_TCFType!(AXObserver, AXObserverRef);
 impl_TCFType!(AXObserver, AXObserverRef, AXObserverGetTypeID);

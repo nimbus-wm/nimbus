@@ -1,4 +1,8 @@
-use std::{cell::RefCell, mem::replace, rc::Rc, sync::Arc, time::Instant};
+use std::cell::RefCell;
+use std::mem::replace;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
@@ -8,15 +12,11 @@ use icrate::Foundation::{CGPoint, MainThreadMarker, NSInteger};
 use tracing::{debug, error, trace, warn, Span};
 
 use super::reactor::{self, Event};
-use crate::{
-    config::Config,
-    sys::{
-        event,
-        geometry::ToICrate,
-        screen::CoordinateConverter,
-        window_server::{self, get_window, WindowServerId},
-    },
-};
+use crate::config::Config;
+use crate::sys::event;
+use crate::sys::geometry::ToICrate;
+use crate::sys::screen::CoordinateConverter;
+use crate::sys::window_server::{self, get_window, WindowServerId};
 
 #[derive(Debug)]
 pub enum Request {

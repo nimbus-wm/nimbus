@@ -1,18 +1,15 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
-use nimbus_wm::{
-    actor::{
-        layout::LayoutManager,
-        mouse::{self, Mouse},
-        notification_center::NotificationCenter,
-        reactor::{self, Reactor},
-        wm_controller::{self, WmController},
-    },
-    config::{config_file, restore_file, Config},
-    log,
-    sys::executor::Executor,
-};
+use nimbus_wm::actor::layout::LayoutManager;
+use nimbus_wm::actor::mouse::{self, Mouse};
+use nimbus_wm::actor::notification_center::NotificationCenter;
+use nimbus_wm::actor::reactor::{self, Reactor};
+use nimbus_wm::actor::wm_controller::{self, WmController};
+use nimbus_wm::config::{config_file, restore_file, Config};
+use nimbus_wm::log;
+use nimbus_wm::sys::executor::Executor;
 use tokio::join;
 
 #[derive(Parser)]

@@ -1,21 +1,18 @@
 //! Defines the [`LayoutManager`] actor.
 
-use std::{
-    fs::{self, File},
-    io::{Read, Write},
-    path::PathBuf,
-};
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use icrate::Foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::{
-    actor::app::{pid_t, WindowId},
-    collections::{hash_map::Entry, BTreeExt, BTreeSet, HashMap, HashSet},
-    model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation},
-    sys::screen::SpaceId,
-};
+use crate::actor::app::{pid_t, WindowId};
+use crate::collections::hash_map::Entry;
+use crate::collections::{BTreeExt, BTreeSet, HashMap, HashSet};
+use crate::model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation};
+use crate::sys::screen::SpaceId;
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]

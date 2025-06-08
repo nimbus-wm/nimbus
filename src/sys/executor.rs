@@ -1,14 +1,12 @@
 //! A simple async executor that integrates with CFRunLoop.
 
-use std::{
-    cell::RefCell,
-    future::Future,
-    mem,
-    pin::Pin,
-    rc::{Rc, Weak},
-    sync::{Arc, Mutex},
-    task::{Context, Poll, Wake},
-};
+use std::cell::RefCell;
+use std::future::Future;
+use std::mem;
+use std::pin::Pin;
+use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake};
 
 use core_foundation::runloop::CFRunLoop;
 
@@ -103,13 +101,10 @@ impl Wake for WakerImpl {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        future,
-        panic::{catch_unwind, AssertUnwindSafe},
-        thread,
-        time::Duration,
-    };
+    use std::cell::Cell;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::time::Duration;
+    use std::{future, thread};
 
     use super::*;
 

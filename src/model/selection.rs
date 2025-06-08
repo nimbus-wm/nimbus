@@ -2,10 +2,8 @@ use std::iter;
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    layout_tree::TreeEvent,
-    tree::{NodeId, NodeMap},
-};
+use super::layout_tree::TreeEvent;
+use super::tree::{NodeId, NodeMap};
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Selection {
@@ -117,10 +115,10 @@ impl Selection {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        actor::app::WindowId,
-        model::{layout::LayoutKind, layout_tree::LayoutTree, Direction},
-    };
+    use crate::actor::app::WindowId;
+    use crate::model::layout::LayoutKind;
+    use crate::model::layout_tree::LayoutTree;
+    use crate::model::Direction;
 
     #[test]
     fn it_moves_as_nodes_are_added_and_removed() {

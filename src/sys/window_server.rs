@@ -2,34 +2,26 @@ use std::ffi::c_int;
 
 use accessibility::AXUIElement;
 use accessibility_sys::{kAXErrorSuccess, pid_t, AXError, AXUIElementRef};
-use core_foundation::{
-    array::CFArray,
-    base::{CFType, CFTypeRef, ItemRef, TCFType},
-    boolean::CFBoolean,
-    dictionary::CFDictionary,
-    number::CFNumber,
-    string::{CFString, CFStringRef},
+use core_foundation::array::CFArray;
+use core_foundation::base::{CFType, CFTypeRef, ItemRef, TCFType};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::{CFString, CFStringRef};
+use core_graphics::base::CGError;
+use core_graphics::display::{
+    kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
 };
-use core_graphics::{
-    base::CGError,
-    display::{
-        kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
-    },
-    window::{
-        kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowNumber,
-        kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
-    },
+use core_graphics::window::{
+    kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements, kCGWindowNumber,
+    kCGWindowOwnerPID, CGWindowListCreateDescriptionFromArray,
 };
-use icrate::{
-    AppKit::NSWindow,
-    Foundation::{CGPoint, CGRect, MainThreadMarker},
-};
+use icrate::AppKit::NSWindow;
+use icrate::Foundation::{CGPoint, CGRect, MainThreadMarker};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    geometry::{CGRectDef, ToICrate},
-    screen::CoordinateConverter,
-};
+use super::geometry::{CGRectDef, ToICrate};
+use super::screen::CoordinateConverter;
 
 /// The window ID used by the window server.
 ///

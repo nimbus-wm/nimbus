@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::{
-    layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
-};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer, Registry};
 use tracing_timing::{group, Histogram};
 use tracing_tree::time::UtcDateTime;
 

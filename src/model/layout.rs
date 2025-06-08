@@ -4,11 +4,10 @@ use std::mem;
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    layout_tree::TreeEvent,
-    tree::{NodeId, NodeMap},
-};
-use crate::{actor::app::WindowId, sys::geometry::Round};
+use super::layout_tree::TreeEvent;
+use super::tree::{NodeId, NodeMap};
+use crate::actor::app::WindowId;
+use crate::sys::geometry::Round;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Layout {

@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use accessibility_sys::pid_t;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    tree::{NodeId, NodeMap},
-    LayoutId,
-};
-use crate::{actor::app::WindowId, collections::BTreeExt, model::layout_tree::TreeEvent};
+use super::tree::{NodeId, NodeMap};
+use super::LayoutId;
+use crate::actor::app::WindowId;
+use crate::collections::BTreeExt;
+use crate::model::layout_tree::TreeEvent;
 
 /// Maintains a two-way mapping between leaf nodes and window ids.
 #[derive(Default, Serialize, Deserialize)]

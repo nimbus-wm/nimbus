@@ -3,16 +3,12 @@
 //!
 //! These APIs support reading and writing window states like position and size.
 
-use std::{
-    fmt::Debug,
-    num::NonZeroU32,
-    sync::{
-        atomic::{AtomicI32, Ordering},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use std::fmt::Debug;
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use accessibility::{AXAttribute, AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
@@ -22,35 +18,29 @@ use accessibility_sys::{
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
 };
-use core_foundation::{runloop::CFRunLoop, string::CFString};
-use icrate::{
-    objc2::rc::Id,
-    AppKit::NSRunningApplication,
-    Foundation::{CGPoint, CGRect},
-};
+use core_foundation::runloop::CFRunLoop;
+use core_foundation::string::CFString;
+use icrate::objc2::rc::Id;
+use icrate::AppKit::NSRunningApplication;
+use icrate::Foundation::{CGPoint, CGRect};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{
-    mpsc::{
-        unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
-    },
-    oneshot,
+use tokio::sync::mpsc::{
+    unbounded_channel as channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
 };
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
+use crate::actor::reactor::{self, Event, Requested, TransactionId};
+use crate::collections::HashMap;
+use crate::sys::app::NSRunningApplicationExt;
 pub use crate::sys::app::{pid_t, AppInfo, WindowInfo};
-use crate::{
-    actor::reactor::{self, Event, Requested, TransactionId},
-    collections::HashMap,
-    sys::{
-        app::NSRunningApplicationExt,
-        event,
-        executor::Executor,
-        geometry::{ToCGType, ToICrate},
-        observer::Observer,
-        window_server::{self, WindowServerId},
-    },
-};
+use crate::sys::event;
+use crate::sys::executor::Executor;
+use crate::sys::geometry::{ToCGType, ToICrate};
+use crate::sys::observer::Observer;
+use crate::sys::window_server::{self, WindowServerId};
 
 /// An identifier representing a window.
 ///

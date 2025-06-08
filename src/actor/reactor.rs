@@ -11,7 +11,9 @@ mod replay;
 #[cfg(test)]
 mod testing;
 
-use std::{collections::BTreeMap, mem, sync::Arc, thread};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::{mem, thread};
 
 use animation::Animation;
 use icrate::Foundation::{CGPoint, CGRect};
@@ -19,26 +21,23 @@ use main_window::MainWindowTracker;
 pub use replay::{replay, Record};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use tokio::sync::{mpsc::unbounded_channel, oneshot};
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, instrument, trace, warn, Span};
 
 use super::mouse;
-use crate::{
-    actor::{
-        app::{pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo},
-        layout::{self, LayoutCommand, LayoutEvent, LayoutManager},
-    },
-    collections::{HashMap, HashSet},
-    config::Config,
-    log::{self, MetricsCommand},
-    sys::{
-        event::MouseState,
-        executor::Executor,
-        geometry::{CGRectDef, CGRectExt, Round, SameAs},
-        screen::SpaceId,
-        window_server::{WindowServerId, WindowServerInfo},
-    },
+use crate::actor::app::{
+    pid_t, AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo,
 };
+use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
+use crate::collections::{HashMap, HashSet};
+use crate::config::Config;
+use crate::log::{self, MetricsCommand};
+use crate::sys::event::MouseState;
+use crate::sys::executor::Executor;
+use crate::sys::geometry::{CGRectDef, CGRectExt, Round, SameAs};
+use crate::sys::screen::SpaceId;
+use crate::sys::window_server::{WindowServerId, WindowServerInfo};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Event)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, Event)>;
@@ -675,12 +674,12 @@ pub mod tests {
     use icrate::Foundation::{CGPoint, CGSize};
     use test_log::test;
 
-    use super::{testing::*, *};
-    use crate::{
-        actor::{app::Request, layout::LayoutManager},
-        model::Direction,
-        sys::window_server::WindowServerId,
-    };
+    use super::testing::*;
+    use super::*;
+    use crate::actor::app::Request;
+    use crate::actor::layout::LayoutManager;
+    use crate::model::Direction;
+    use crate::sys::window_server::WindowServerId;
 
     #[test]
     fn it_ignores_stale_resize_events() {
@@ -1100,7 +1099,8 @@ pub mod tests {
         use Event::*;
         use LayoutCommand::*;
 
-        use super::{Command::*, Reactor};
+        use super::Command::*;
+        use super::Reactor;
         let mut apps = Apps::new();
         let mut reactor = Reactor::new_for_test(LayoutManager::new());
         let space = SpaceId::new(1);

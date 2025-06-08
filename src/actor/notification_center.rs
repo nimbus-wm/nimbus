@@ -1,24 +1,23 @@
 //! This actor manages the global notification queue, which tells us when an
 //! application is launched or focused or the screen state changes.
 
-use std::{cell::RefCell, future, mem};
+use std::cell::RefCell;
+use std::{future, mem};
 
-use icrate::{
-    objc2::{
-        declare_class, msg_send_id, mutability,
-        rc::{Allocated, Id},
-        sel, ClassType, DeclaredClass, Encode, Encoding,
-    },
-    AppKit::{self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey},
-    Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject},
+use icrate::objc2::rc::{Allocated, Id};
+use icrate::objc2::{
+    declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass, Encode, Encoding,
 };
+use icrate::AppKit::{
+    self, NSApplication, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
+};
+use icrate::Foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject};
 use tracing::{info_span, trace, warn, Span};
 
 use super::wm_controller::{self, WmEvent};
-use crate::{
-    actor::app::AppInfo,
-    sys::{app::NSRunningApplicationExt, screen::ScreenCache},
-};
+use crate::actor::app::AppInfo;
+use crate::sys::app::NSRunningApplicationExt;
+use crate::sys::screen::ScreenCache;
 
 #[repr(C)]
 struct Instance {

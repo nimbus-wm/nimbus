@@ -1,9 +1,7 @@
-use std::{
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::bail;
 use livesplit_hotkey::Hotkey;

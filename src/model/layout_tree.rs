@@ -4,16 +4,12 @@ use icrate::Foundation::CGRect;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::{
-    layout::{Direction, Layout, LayoutKind},
-    selection::Selection,
-    tree::{self, Tree},
-    window::Window,
-};
-use crate::{
-    actor::app::{pid_t, WindowId},
-    model::tree::{NodeId, NodeMap, OwnedNode},
-};
+use super::layout::{Direction, Layout, LayoutKind};
+use super::selection::Selection;
+use super::tree::{self, Tree};
+use super::window::Window;
+use crate::actor::app::{pid_t, WindowId};
+use crate::model::tree::{NodeId, NodeMap, OwnedNode};
 
 /// The layout tree.
 ///
@@ -643,7 +639,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::{actor::app::pid_t, model::LayoutTree};
+    use crate::actor::app::pid_t;
+    use crate::model::LayoutTree;
 
     fn w(pid: pid_t, idx: u32) -> WindowId {
         WindowId::new(pid, idx)

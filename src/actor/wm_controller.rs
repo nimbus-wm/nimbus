@@ -2,13 +2,12 @@
 //! window manager on certain spaces and launching app threads. It also
 //! controls hotkey registration.
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use accessibility_sys::pid_t;
-use icrate::{
-    AppKit::NSScreen,
-    Foundation::{CGRect, MainThreadMarker},
-};
+use icrate::AppKit::NSScreen;
+use icrate::Foundation::{CGRect, MainThreadMarker};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, Span};
 
@@ -17,16 +16,13 @@ type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use super::mouse;
-use crate::{
-    actor::{self, app::AppInfo, reactor},
-    collections::HashSet,
-    sys::{
-        self,
-        event::HotkeyManager,
-        screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId},
-        window_server::WindowServerInfo,
-    },
-};
+use crate::actor::app::AppInfo;
+use crate::actor::{self, reactor};
+use crate::collections::HashSet;
+use crate::sys::event::HotkeyManager;
+use crate::sys::screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId};
+use crate::sys::window_server::WindowServerInfo;
+use crate::sys::{self};
 
 #[derive(Debug)]
 pub enum WmEvent {
@@ -120,7 +116,9 @@ impl WmController {
         debug!("handle_event");
         use reactor::Event;
 
-        use self::{WmCmd::*, WmCommand::*, WmEvent::*};
+        use self::WmCmd::*;
+        use self::WmCommand::*;
+        use self::WmEvent::*;
         match event {
             AppEventsRegistered => {
                 for (pid, info) in sys::app::running_apps(None) {

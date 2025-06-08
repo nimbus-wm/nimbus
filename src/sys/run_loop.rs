@@ -1,14 +1,13 @@
 //! Helpers for managing run loops.
 
-use std::{ffi::c_void, mem, ptr};
+use std::ffi::c_void;
+use std::{mem, ptr};
 
-use core_foundation::{
-    base::TCFType,
-    mach_port::CFIndex,
-    runloop::{
-        kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext,
-        CFRunLoopSourceCreate, CFRunLoopSourceSignal, CFRunLoopWakeUp,
-    },
+use core_foundation::base::TCFType;
+use core_foundation::mach_port::CFIndex;
+use core_foundation::runloop::{
+    kCFRunLoopCommonModes, CFRunLoop, CFRunLoopSource, CFRunLoopSourceContext,
+    CFRunLoopSourceCreate, CFRunLoopSourceSignal, CFRunLoopWakeUp,
 };
 
 /// A core foundation run loop source.
@@ -119,14 +118,10 @@ impl WakeupHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
-            mpsc::{channel, Receiver, Sender},
-            Arc,
-        },
-        thread::JoinHandle,
-    };
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
 
     use core_foundation::runloop::CFRunLoop;
 

@@ -1,20 +1,18 @@
-use core_graphics::{
-    base::CGError,
-    display::{
-        kCGNullDirectDisplayID, CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition,
-    },
+use core_graphics::base::CGError;
+use core_graphics::display::{
+    kCGNullDirectDisplayID, CGDisplayHideCursor, CGDisplayShowCursor, CGWarpMouseCursorPosition,
 };
-use icrate::{AppKit::NSEvent, Foundation::CGPoint};
+use icrate::AppKit::NSEvent;
+use icrate::Foundation::CGPoint;
 use livesplit_hotkey::{ConsumePreference, Hook};
 pub use livesplit_hotkey::{Hotkey, KeyCode, Modifiers};
 use serde::{Deserialize, Serialize};
 use tracing::info_span;
 
-use super::{geometry::ToCGType, screen::CoordinateConverter};
-use crate::actor::{
-    reactor::Command,
-    wm_controller::{Sender, WmCommand, WmEvent},
-};
+use super::geometry::ToCGType;
+use super::screen::CoordinateConverter;
+use crate::actor::reactor::Command;
+use crate::actor::wm_controller::{Sender, WmCommand, WmEvent};
 
 pub struct HotkeyManager {
     hook: Hook,

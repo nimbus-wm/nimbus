@@ -2,13 +2,11 @@
 //!
 //! This is used in development.
 
-use std::{
-    cell::RefCell,
-    fs::File,
-    io::{BufRead, BufReader, Write},
-    path::Path,
-    sync::Arc,
-};
+use std::cell::RefCell;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(test)]
 use tempfile::NamedTempFile;
@@ -16,13 +14,9 @@ use tokio::sync::mpsc::unbounded_channel;
 use tracing::Span;
 
 use super::{Event, Reactor};
-use crate::{
-    actor::{
-        app::{AppThreadHandle, Request},
-        layout::LayoutManager,
-    },
-    config::Config,
-};
+use crate::actor::app::{AppThreadHandle, Request};
+use crate::actor::layout::LayoutManager;
+use crate::config::Config;
 
 thread_local! {
     static DESERIALIZE_THREAD_HANDLE: RefCell<Option<AppThreadHandle>> = RefCell::new(None);

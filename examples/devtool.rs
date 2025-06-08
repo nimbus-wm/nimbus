@@ -1,41 +1,36 @@
 //! This tool is used to exercise nimbus and system APIs during development.
 
-use std::{future::Future, path::PathBuf, ptr, time::Instant};
+use std::future::Future;
+use std::path::PathBuf;
+use std::ptr;
+use std::time::Instant;
 
 use accessibility::{AXUIElement, AXUIElementAttributes};
 use accessibility_sys::{pid_t, AXUIElementCopyElementAtPosition, AXUIElementRef};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use core_foundation::{
-    array::CFArray,
-    base::{FromMutVoid, TCFType},
-    dictionary::CFDictionaryRef,
+use core_foundation::array::CFArray;
+use core_foundation::base::{FromMutVoid, TCFType};
+use core_foundation::dictionary::CFDictionaryRef;
+use core_graphics::display::{CGDisplayBounds, CGMainDisplayID};
+use core_graphics::window::{
+    kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
 };
-use core_graphics::{
-    display::{CGDisplayBounds, CGMainDisplayID},
-    window::{
-        kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowID, CGWindowListCopyWindowInfo,
-    },
-};
-use icrate::{
-    AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications},
-    Foundation::MainThreadMarker,
-};
+use icrate::AppKit::{NSScreen, NSWindow, NSWindowNumberListAllApplications};
+use icrate::Foundation::MainThreadMarker;
 use livesplit_hotkey::{ConsumePreference, Modifiers};
-use nimbus_wm::{
-    actor::reactor,
-    sys::{
-        self,
-        app::WindowInfo,
-        event::{self, get_mouse_pos},
-        executor::Executor,
-        screen::{self, ScreenCache},
-        window_server::{self, get_window, WindowServerId},
-    },
-};
+use nimbus_wm::actor::reactor;
+use nimbus_wm::sys::app::WindowInfo;
+use nimbus_wm::sys::event::{self, get_mouse_pos};
+use nimbus_wm::sys::executor::Executor;
+use nimbus_wm::sys::screen::{self, ScreenCache};
+use nimbus_wm::sys::window_server::{self, get_window, WindowServerId};
+use nimbus_wm::sys::{self};
 use tokio::sync::mpsc::{self, unbounded_channel, UnboundedReceiver};
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 struct Opt {

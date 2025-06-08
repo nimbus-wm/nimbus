@@ -1,7 +1,5 @@
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use icrate::Foundation::{CGPoint, CGRect, CGSize};
 
