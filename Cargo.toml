@@ -41,7 +41,11 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "NSWindow",
     "NSWorkspace",
 ] }
-objc2-core-foundation = { version = "0.3.1", features = ["CFCGTypes"] }
+objc2-core-foundation = { version = "0.3.1", features = [
+    "CFCGTypes",
+    "CFRunLoop",
+    "CFDate",
+] }
 objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "NSArray",
     "NSEnumerator",
