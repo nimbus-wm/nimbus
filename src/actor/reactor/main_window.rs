@@ -82,6 +82,8 @@ impl MainWindowTracker {
             | Event::SpaceChanged(..)
             | Event::MouseUp
             | Event::MouseMovedOverWindow(..)
+            | Event::RaiseCompleted { .. }
+            | Event::RaiseTimeout { .. }
             | Event::Command(..) => return None,
         };
         if Some(event_pid) == self.global_frontmost && quiet_edge == Quiet::No {

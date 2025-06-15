@@ -217,18 +217,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Command::Replay(Replay { path }) => {
-            // We have to spawn a thread because the reactor uses a blocking receive.
-            tokio::task::spawn_blocking(move || {
-                reactor::replay(&path, |_span, request| {
-                    info!(?request);
-                    match request {
-                        nimbus_wm::actor::app::Request::Raise(_, _, Some(ch), _) => _ = ch.send(()),
-                        _ => (),
-                    }
-                })
-            })
-            .await
-            .unwrap()?;
+            reactor::replay(&path, |_span, request| {
+                info!(?request);
+            })?;
         }
         Command::Mouse(Mouse::Clicks) => {
             use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};

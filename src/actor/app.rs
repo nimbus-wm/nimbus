@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{
     UnboundedReceiver as Receiver, UnboundedSender as Sender, unbounded_channel as channel,
 };
-use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Span, debug, error, info, instrument, trace, warn};
@@ -104,7 +103,7 @@ pub enum Request {
     ///
     /// Events attributed to this request will have the [`Quiet`] parameter
     /// attached to them.
-    Raise(WindowId, RaiseToken, Option<oneshot::Sender<()>>, Quiet),
+    Raise(WindowId, RaiseToken, u64, Quiet),
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -163,7 +162,7 @@ struct State {
     windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
     main_window: Option<WindowId>,
-    last_activated: Option<(Instant, Quiet, Option<oneshot::Sender<()>>)>,
+    last_activated: Option<(Instant, Quiet, Option<Event>)>,
     is_frontmost: bool,
 }
 
@@ -389,8 +388,8 @@ impl State {
                     None,
                 ));
             }
-            &mut Request::Raise(wid, ref token, ref mut done, quiet) => {
-                self.handle_raise_request(wid, token, done, quiet)?;
+            &mut Request::Raise(wid, ref token, sequence_id, quiet) => {
+                self.handle_raise_request(wid, token, sequence_id, quiet)?;
             }
         }
         Ok(false)
@@ -466,7 +465,7 @@ impl State {
         &mut self,
         wid: WindowId,
         token: &RaiseToken,
-        done: &mut Option<oneshot::Sender<()>>,
+        sequence_id: u64,
         quiet: Quiet,
     ) -> Result<(), accessibility::Error> {
         // This request could be handled out of order with respect to
@@ -514,7 +513,9 @@ impl State {
                 );
                 if result.is_err() {
                     warn!(?self.pid, "Failed to activate app");
-                } else if !is_frontmost {
+                }
+                let event = Event::RaiseCompleted { window_id: wid, sequence_id };
+                if !is_frontmost && result.is_ok() && is_standard {
                     // We should be getting an activation event from make_key_window.
                     // Record the activation so we can match against its
                     // notification and correctly mark it as quiet.
@@ -525,9 +526,9 @@ impl State {
                     // As a temporary workaround, don't expect activation events
                     // for non-standard windows or we will hit the deadlock
                     // mentioned above.
-                    if is_standard {
-                        self.last_activated = Some((Instant::now(), quiet, done.take()));
-                    }
+                    self.last_activated = Some((Instant::now(), quiet, Some(event)));
+                } else {
+                    self.send_event(event);
                 }
                 Ok(())
             })
@@ -613,9 +614,9 @@ impl State {
             let quiet = match self.last_activated.take() {
                 // Idea: Maybe we can control the timeout in client and use the send
                 // result to decide whether `quiet` applies.
-                Some((ts, quiet, done)) if ts.elapsed() < Duration::from_millis(1000) => {
+                Some((ts, quiet, event)) if ts.elapsed() < Duration::from_millis(1000) => {
                     // Initiated by us.
-                    _ = done.map(|s| s.send(()));
+                    _ = event.map(|e| self.send_event(e));
                     quiet
                 }
                 _ => {
