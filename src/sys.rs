@@ -7,4 +7,5 @@ pub mod geometry;
 pub mod observer;
 pub mod run_loop;
 pub mod screen;
+pub mod timer;
 pub mod window_server;
