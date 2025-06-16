@@ -155,7 +155,7 @@ unsafe extern "C" {
     fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
 }
 
-/// Sets the given window as the key window of the window server.
+/// Set the key window of the window server and application.
 pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
     // See https://github.com/Hammerspoon/hammerspoon/issues/370#issuecomment-545545468.
     #[allow(non_upper_case_globals)]

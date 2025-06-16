@@ -5,8 +5,7 @@
 
 use std::fmt::Debug;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,6 +30,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Span, debug, error, info, instrument, trace, warn};
 
+use crate::actor::raise_manager::RaiseToken;
 use crate::actor::reactor::{self, Event, Requested, TransactionId};
 use crate::collections::HashMap;
 use crate::sys::app::NSRunningApplicationExt;
@@ -111,37 +111,6 @@ pub enum Quiet {
     Yes,
     #[default]
     No,
-}
-
-/// Prevents stale activation requests from happening after more recent ones.
-///
-/// This token holds the pid of the latest activation request from the reactor,
-/// and provides synchronization between the app threads to ensure that multiple
-/// requests aren't handled simultaneously.
-///
-/// It is also designed not to block the main reactor thread.
-#[derive(Clone, Debug, Default)]
-pub struct RaiseToken(Arc<(Mutex<()>, AtomicI32)>);
-
-impl RaiseToken {
-    /// Checks if the most recent activation request was for `pid`. Calls the
-    /// supplied closure if it was.
-    pub fn with<R>(&self, pid: pid_t, f: impl FnOnce() -> R) -> Option<R> {
-        let _lock = trace_misc("RT lock", || self.0.0.lock()).unwrap();
-        if pid == self.0.1.load(Ordering::SeqCst) {
-            Some(f())
-        } else {
-            None
-        }
-    }
-
-    pub fn set_pid(&self, pid: pid_t) {
-        // Even though we don't hold the lock, we know that the app servicing
-        // the Raise request will have to hold it while it activates itself.
-        // This means any apps that are first in the queue have either completed
-        // their activation request or timed out.
-        self.0.1.store(pid, Ordering::SeqCst)
-    }
 }
 
 pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
@@ -471,70 +440,92 @@ impl State {
         // This request could be handled out of order with respect to
         // later requests sent to other apps by the reactor. To avoid
         // raising ourselves after a later request was processed to
-        // raise a different app, we check the last-raised pid while
-        // holding a lock that ensures no other apps are executing a
-        // raise request at the same time.
+        // raise a different app, we check the raise token for cancellation.
+        if token.is_cancelled() {
+            return Ok(());
+        }
+
+        let window = self.window(wid)?;
+
+        // This read acts as a "warm up" to make sure the app is responsive
+        // before we hold the mutex.
+        let is_standard =
+            window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false);
+        // Check for cancellation again in case the request took too long.
+        if token.is_cancelled() {
+            return Ok(());
+        }
+
+        // Enforce exclusivity in the following section. This is needed because
+        // the `raise` method is only effective when the app is actually
+        // frontmost. The lock ensures that concurrent requests do not
+        // steal focus from us until we complete the raise action.
+        static MUTEX: Mutex<()> = Mutex::new(());
+        let mutex_guard = MUTEX.lock().unwrap();
+        // Check for cancellation again in case acquiring the mutex took too long.
+        if token.is_cancelled() {
+            return Ok(());
+        }
+
+        // Check whether the app thinks it is frontmost. This tells us whether
+        // to expect an activation event. We read the value directly instead of
+        // using the cached value because it's possible the cache is outdated.
         //
-        // FIXME: Unfonrtunately this is still very racy in that we now
-        // use the unsynchronized NSRunningApplication API to raise the
-        // application, which still relies on the application itself to
-        // see and respond to a request, and there is no apparent
-        // ordering between this and the accessibility messaging. The
-        // only way to know whether a raise request was processed is
-        // to wait for an event telling us the app has been activated.
-        // We can hold the token until then, but will need to time out
-        // just in case the activation silently fails for some reason.
-        token
-            .with(self.pid, || {
-                // Check whether the app thinks it is frontmost. If it
-                // does we won't get an activated event.
-                //
-                // We read the value directly instead of using the
-                // cached value because it's possible the cache is
-                // outdated and the app is no longer frontmost. If that
-                // happens, it's important that we activate the app or
-                // the window may never be raised.
-                //
-                // Note that it is possible for the app to be outdated
-                // since the window server is the source of truth. For
-                // now we don't handle this case. We could handle it
-                // by looking at the window list and seeing whether
-                // the requested window is indeed frontmost.
-                let is_frontmost: bool =
-                    trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
-                let window = self.window(wid)?;
-                let is_standard =
-                    window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false);
-                // Make this the key window regardless of is_frontmost. This
-                // ensures that the window has focus and can receive keyboard events.
-                let result = window_server::make_key_window(
-                    self.pid,
-                    WindowServerId::try_from(&self.window(wid)?.elem)?,
-                );
-                if result.is_err() {
-                    warn!(?self.pid, "Failed to activate app");
-                }
-                let event = Event::RaiseCompleted { window_id: wid, sequence_id };
-                if !is_frontmost && result.is_ok() && is_standard {
-                    // We should be getting an activation event from make_key_window.
-                    // Record the activation so we can match against its
-                    // notification and correctly mark it as quiet.
-                    //
-                    // FIXME: We might not get the activation event, and
-                    // this will deadlock the reactor.
-                    //
-                    // As a temporary workaround, don't expect activation events
-                    // for non-standard windows or we will hit the deadlock
-                    // mentioned above.
-                    self.last_activated = Some((Instant::now(), quiet, Some(event)));
-                } else {
-                    self.send_event(event);
-                }
-                Ok(())
-            })
-            .unwrap_or(Ok(()))?;
+        // Note that it is still possible for the app to be outdated since the
+        // window server is the source of truth. If the app thinks it is frontmost
+        // but it isn't, possibly due to concurrent raise requests being handled
+        // by other apps, the worst that can happen is that we fail to mark the
+        // activation event as quiet.
+        //
+        // If the app thinks it isn't frontmost but it is, we'll never get a
+        // notification we expect and will time out the raise request. This
+        // should be *much* more rare since it would require some external
+        // intervention between when we read this and when we call
+        // make_key_window.
+        let is_frontmost: bool = trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
+
+        // Make this the key window. This ensures that the window has focus and
+        // can receive keyboard events, and activates the app if it isn't already.
+        //
+        // Note that this uses private APIs. If those stop working we would
+        // replace it with NSRunningApplication. We might be able to make
+        // certain assumptions about the state after calling make_key_window,
+        // but try to avoid that because we would not have the same guarantees
+        // with NSRunningApplication, which dispatches a request to the
+        // application and does not wait for it to complete.
+        let make_key_result = window_server::make_key_window(
+            self.pid,
+            WindowServerId::try_from(&self.window(wid)?.elem)?,
+        );
+        if make_key_result.is_err() {
+            warn!(?self.pid, "Failed to activate app");
+        }
+
+        // Raise the window to be on top. Only does something when the app is
+        // frontmost.
         let window = self.window(wid)?;
         trace("raise", &window.elem, || window.elem.raise())?;
+        drop(mutex_guard);
+
+        let event = Event::RaiseCompleted { window_id: wid, sequence_id };
+        if !is_frontmost && make_key_result.is_ok() && is_standard {
+            // We should be getting an activation event from make_key_window.
+            // Record the activation so we can match against its
+            // notification and correctly mark it as quiet.
+            //
+            // Workaround: Don't expect activation events for
+            // non-standard windows or we may time out waiting for it.
+            //
+            // FIXME: This should be a queue instead of a single value.
+            self.last_activated = Some((Instant::now(), quiet, Some(event)));
+            debug!("Replaced last_activated: {:?}", self.last_activated);
+        } else {
+            // Don't expect an activation event; send the raise completion right
+            // away.
+            debug!("Sending activation immediately: {event:?}");
+            self.send_event(event);
+        }
+
         let quiet_if = (quiet == Quiet::Yes).then_some(wid);
         let main_window = self.on_main_window_changed(quiet_if);
         if main_window != Some(wid) {
@@ -794,13 +785,5 @@ fn trace<T>(
         let app = elem.parent();
         debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
     }
-    out
-}
-
-fn trace_misc<T>(desc: &str, f: impl FnOnce() -> T) -> T {
-    let start = Instant::now();
-    let out = f();
-    let end = Instant::now();
-    trace!(time = ?(end - start), "{desc:12}");
     out
 }
