@@ -32,6 +32,7 @@ use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 
 use tokio::sync::mpsc;
 
+use crate::actor::raise_manager::{self, RaiseRequest};
 use crate::collections::{HashMap, HashSet};
 use crate::config::Config;
 use crate::log::{self, MetricsCommand};
@@ -161,7 +162,7 @@ pub enum ReactorCommand {
     SaveAndExit,
 }
 
-use crate::actor::raise_manager::{RaiseManager, RaiseManagerMessage};
+use crate::actor::raise_manager::RaiseManager;
 
 pub struct Reactor {
     config: Arc<Config>,
@@ -177,7 +178,7 @@ pub struct Reactor {
     in_drag: bool,
     record: Record,
     mouse_tx: Option<mouse::Sender>,
-    raise_manager_tx: mpsc::UnboundedSender<RaiseManagerMessage>,
+    raise_manager_tx: mpsc::UnboundedSender<raise_manager::Event>,
 }
 
 #[derive(Debug)]
@@ -255,6 +256,7 @@ impl Reactor {
     pub fn new(config: Arc<Config>, layout: LayoutManager, mut record: Record) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         record.start(&config, &layout);
+        let (raise_manager_tx, _rx) = mpsc::unbounded_channel();
         Reactor {
             config,
             apps: HashMap::default(),
@@ -269,8 +271,7 @@ impl Reactor {
             in_drag: false,
             record,
             mouse_tx: None,
-            // TODO: wire this up correctly
-            raise_manager_tx: Self::create_raise_manager_sender(),
+            raise_manager_tx,
         }
     }
 
@@ -461,13 +462,13 @@ impl Reactor {
                 self.raise_window(wid, Quiet::No, None);
             }
             Event::RaiseCompleted { window_id, sequence_id } => {
-                let msg = RaiseManagerMessage::RaiseCompleted { window_id, sequence_id };
+                let msg = raise_manager::Event::RaiseCompleted { window_id, sequence_id };
                 if let Err(e) = self.raise_manager_tx.send(msg) {
                     error!("Failed to send raise completion to raise manager: {:?}", e);
                 }
             }
             Event::RaiseTimeout { sequence_id } => {
-                let msg = RaiseManagerMessage::RaiseTimeout { sequence_id };
+                let msg = raise_manager::Event::RaiseTimeout { sequence_id };
                 if let Err(e) = self.raise_manager_tx.send(msg) {
                     error!("Failed to send raise timeout to raise manager: {:?}", e);
                 }
@@ -660,12 +661,12 @@ impl Reactor {
                 (wid, warp)
             });
 
-            let msg = RaiseManagerMessage::ProcessLayoutResponse {
+            let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
                 raise_windows,
                 focus_window: focus_window_with_warp,
                 app_handles,
                 raise_token: self.raise_token.clone(),
-            };
+            });
 
             if let Err(e) = self.raise_manager_tx.send(msg) {
                 error!("Failed to send layout response to raise manager: {:?}", e);
@@ -691,13 +692,6 @@ impl Reactor {
                 _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
             }
         }
-    }
-
-    /// Creates a sender for the raise manager (placeholder during initialization)
-    // TODO: Remove.
-    fn create_raise_manager_sender() -> mpsc::UnboundedSender<RaiseManagerMessage> {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        tx
     }
 
     /// The main window of the active app, if any.
