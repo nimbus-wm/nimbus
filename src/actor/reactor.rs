@@ -25,9 +25,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tracing::{Span, debug, error, info, instrument, trace, warn};
 
 use super::mouse;
-use crate::actor::app::{
-    AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo, pid_t,
-};
+use crate::actor::app::{AppInfo, AppThreadHandle, Quiet, Request, WindowId, WindowInfo, pid_t};
 use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 
 use tokio::sync::mpsc;
@@ -173,7 +171,6 @@ pub struct Reactor {
     window_ids: HashMap<WindowServerId, WindowId>,
     visible_windows: HashSet<WindowServerId>,
     screens: Vec<Screen>,
-    raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
     record: Record,
@@ -266,7 +263,6 @@ impl Reactor {
             window_server_info: HashMap::default(),
             visible_windows: HashSet::default(),
             screens: vec![],
-            raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
             record,
@@ -665,7 +661,6 @@ impl Reactor {
                 raise_windows,
                 focus_window: focus_window_with_warp,
                 app_handles,
-                raise_token: self.raise_token.clone(),
             });
 
             if let Err(e) = self.raise_manager_tx.send(msg) {
@@ -674,24 +669,17 @@ impl Reactor {
         }
     }
 
-    // TODO: Remove
     #[instrument(skip(self))]
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Option<CGPoint>) {
-        self.raise_token.set_pid(wid.pid);
-        let Some(app) = self.apps.get_mut(&wid.pid) else { return };
-        let Ok(()) = app.handle.send(Request::Raise(
-            wid,
-            self.raise_token.clone(),
-            0, // No sequence ID for direct raises
-            quiet,
-        )) else {
-            return;
-        };
-        if let Some(point) = warp {
-            if let Some(mouse_tx) = &self.mouse_tx {
-                _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
-            }
+        let mut app_handles = HashMap::default();
+        if let Some(app) = self.apps.get(&wid.pid) {
+            app_handles.insert(wid.pid, app.handle.clone());
         }
+        _ = self.raise_manager_tx.send(raise_manager::Event::RaiseRequest(RaiseRequest {
+            raise_windows: vec![],
+            focus_window: Some((wid, warp)),
+            app_handles: app_handles,
+        }));
     }
 
     /// The main window of the active app, if any.

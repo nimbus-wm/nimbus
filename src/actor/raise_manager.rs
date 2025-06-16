@@ -3,16 +3,40 @@
 //! This actor sits behind the Reactor and is responsible for managing raise requests.
 //! It ensures that windows are raised in the correct order and handles timeouts.
 
-use crate::actor::app::{AppThreadHandle, Quiet, RaiseToken, Request, WindowId};
+use crate::actor::app::{AppThreadHandle, Quiet, Request, WindowId};
 use crate::actor::reactor::Sender;
 use crate::actor::{mouse, reactor};
 use crate::sys::timer::Timer;
 use objc2_core_foundation::CGPoint;
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::{Acquire, Release};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{Span, debug, info, trace, warn};
+
+#[derive(Clone, Debug)]
+pub struct RaiseToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RaiseToken {
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Acquire)
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Release);
+    }
+}
 
 /// Messages that can be sent to the raise manager
 #[derive(Debug)]
@@ -33,7 +57,6 @@ pub struct RaiseRequest {
     pub raise_windows: Vec<WindowId>,
     pub focus_window: Option<(WindowId, Option<CGPoint>)>,
     pub app_handles: HashMap<i32, AppThreadHandle>,
-    pub raise_token: RaiseToken,
 }
 
 pub struct RaiseManager {
@@ -119,7 +142,6 @@ impl RaiseManager {
                 raise_windows,
                 focus_window,
                 app_handles,
-                raise_token,
             }) => {
                 debug!(
                     "Processing layout response with {} raise_windows",
@@ -131,7 +153,6 @@ impl RaiseManager {
                     raise_windows,
                     focus_window,
                     app_handles,
-                    raise_token,
                 });
             }
             Event::RaiseCompleted { window_id, sequence_id } => {
@@ -151,11 +172,11 @@ impl RaiseManager {
                 if let Some(sequence) = &mut self.active_sequence {
                     if sequence.sequence_id == sequence_id {
                         warn!(
-                            "Sequence {} timed out, clearing {} pending raises",
-                            sequence_id,
-                            sequence.pending_raises.len()
+                            "Sequence {} timed out, clearing pending raises: {:?}",
+                            sequence_id, sequence.pending_raises
                         );
                         sequence.pending_raises.clear();
+                        sequence.raise_token.cancel();
                     }
                 }
             }
@@ -188,7 +209,6 @@ impl RaiseManager {
             raise_windows,
             focus_window,
             app_handles,
-            raise_token,
         }: RaiseRequest,
     ) {
         let sequence_id = self.next_sequence_id;
@@ -196,10 +216,9 @@ impl RaiseManager {
 
         // Send all raise requests with completion notification
         let mut pending_raises = HashSet::default();
+        let raise_token = RaiseToken::new();
 
         for wid in raise_windows {
-            raise_token.set_pid(wid.pid);
-
             if let Some(app_handle) = app_handles.get(&wid.pid) {
                 if app_handle
                     .send(Request::Raise(wid, raise_token.clone(), sequence_id, Quiet::Yes))
@@ -240,8 +259,6 @@ impl RaiseManager {
             info!(focus_window = ?wid);
             let app_handle = sequence.app_handles.get(&wid.pid);
             if let Some(handle) = app_handle {
-                sequence.raise_token.set_pid(wid.pid);
-
                 if handle
                     .send(Request::Raise(
                         wid,
@@ -279,7 +296,7 @@ impl RaiseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actor::app::{AppThreadHandle, RaiseToken, WindowId};
+    use crate::actor::app::{AppThreadHandle, WindowId};
     use crate::sys::executor::Executor;
     use tokio::sync::mpsc;
 
@@ -303,7 +320,6 @@ mod tests {
             raise_windows,
             focus_window,
             app_handles,
-            raise_token: RaiseToken::default(),
         })
     }
 
