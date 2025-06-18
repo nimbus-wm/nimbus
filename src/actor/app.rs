@@ -485,7 +485,8 @@ impl State {
         let is_frontmost: bool = trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
 
         // Make this the key window. This ensures that the window has focus and
-        // can receive keyboard events, and activates the app if it isn't already.
+        // can receive keyboard events, and activates the app if it isn't
+        // already. It does nothing to the window order.
         //
         // Note that this uses private APIs. If those stop working we would
         // replace it with NSRunningApplication. We might be able to make
@@ -501,8 +502,9 @@ impl State {
             warn!(?self.pid, "Failed to activate app");
         }
 
-        // Raise the window to be on top. Only does something when the app is
-        // frontmost.
+        // Raise the window to be on top. This only affects the global window
+        // order if the app is already frontmost. Otherwise it affects the
+        // order of windows within that app only.
         let window = self.window(wid)?;
         trace("raise", &window.elem, || window.elem.raise())?;
         drop(mutex_guard);
