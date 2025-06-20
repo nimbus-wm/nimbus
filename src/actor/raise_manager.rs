@@ -77,6 +77,7 @@ pub struct ActiveSequence {
     app_handles: HashMap<i32, AppThreadHandle>,
     raise_token: RaiseToken,
     started_at: Instant,
+    timed_out: bool,
 }
 
 const TIMEOUT_DURATION: Duration = Duration::from_millis(250);
@@ -92,11 +93,19 @@ impl RaiseManager {
         raise_manager.mouse_tx = mouse_tx;
         let mut timeout_timer = Timer::manual();
 
+        let sequence_timeout = |sequence: &ActiveSequence| {
+            if !sequence.timed_out {
+                let elapsed = sequence.started_at.elapsed();
+                TIMEOUT_DURATION.saturating_sub(elapsed)
+            } else {
+                Duration::MAX
+            }
+        };
+
         loop {
             // Calculate next timeout timer if we have an active sequence.
             let timeout = if let Some(sequence) = &raise_manager.active_sequence {
-                let elapsed = sequence.started_at.elapsed();
-                TIMEOUT_DURATION.saturating_sub(elapsed)
+                sequence_timeout(sequence)
             } else {
                 Duration::MAX
             };
@@ -111,11 +120,12 @@ impl RaiseManager {
                 // Handle timeout - send timeout event to reactor
                 _ = timeout_timer.next() => {
                     // Send timeout event for the active sequence
-                    if let Some(sequence) = &raise_manager.active_sequence {
-                        if sequence.started_at.elapsed() >= TIMEOUT_DURATION {
+                    if let Some(sequence) = &mut raise_manager.active_sequence {
+                        if sequence_timeout(sequence) <= Duration::ZERO {
                             // Send timeout event to reactor; this will get
                             // relayed back to us. We send these events through
                             // the reactor so that we can record/replay them.
+                            sequence.timed_out = true;
                             let _ = events_tx.send((
                                 tracing::Span::current(),
                                 reactor::Event::RaiseTimeout { sequence_id: sequence.sequence_id }
@@ -240,6 +250,7 @@ impl RaiseManager {
                 app_handles,
                 raise_token,
                 started_at: Instant::now(),
+                timed_out: false,
             });
         }
     }
