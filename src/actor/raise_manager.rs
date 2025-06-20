@@ -10,33 +10,10 @@ use crate::sys::timer::Timer;
 use objc2_core_foundation::CGPoint;
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::{Acquire, Release};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{Span, debug, info, trace, warn};
-
-#[derive(Clone, Debug)]
-pub struct RaiseToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl RaiseToken {
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Acquire)
-    }
-
-    fn cancel(&self) {
-        self.cancelled.store(true, Release);
-    }
-}
 
 /// Messages that can be sent to the raise manager
 #[derive(Debug)]
@@ -75,7 +52,7 @@ pub struct ActiveSequence {
     pending_raises: HashSet<WindowId>,
     focus_window: Option<(WindowId, Option<CGPoint>)>,
     app_handles: HashMap<i32, AppThreadHandle>,
-    raise_token: RaiseToken,
+    raise_token: CancellationToken,
     started_at: Instant,
     timed_out: bool,
 }
@@ -226,7 +203,7 @@ impl RaiseManager {
 
         // Send all raise requests with completion notification
         let mut pending_raises = HashSet::default();
-        let raise_token = RaiseToken::new();
+        let raise_token = CancellationToken::new();
 
         for wid in raise_windows {
             if let Some(app_handle) = app_handles.get(&wid.pid) {

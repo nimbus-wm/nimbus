@@ -3,9 +3,10 @@
 //!
 //! These APIs support reading and writing window states like position and size.
 
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::num::NonZeroU32;
-use std::sync::Mutex;
+use std::sync::LazyLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,11 +27,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{
     UnboundedReceiver as Receiver, UnboundedSender as Sender, unbounded_channel as channel,
 };
+use tokio::sync::oneshot;
+use tokio::{join, select};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Span, debug, error, info, instrument, trace, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span, debug, error, info, instrument, trace, warn};
 
-use crate::actor::raise_manager::RaiseToken;
 use crate::actor::reactor::{self, Event, Requested, TransactionId};
 use crate::collections::HashMap;
 use crate::sys::app::NSRunningApplicationExt;
@@ -103,8 +106,10 @@ pub enum Request {
     ///
     /// Events attributed to this request will have the [`Quiet`] parameter
     /// attached to them.
-    Raise(WindowId, RaiseToken, u64, Quiet),
+    Raise(WindowId, CancellationToken, u64, Quiet),
 }
+
+struct RaiseRequest(WindowId, CancellationToken, u64, Quiet);
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Quiet {
@@ -131,8 +136,9 @@ struct State {
     windows: HashMap<WindowId, WindowState>,
     last_window_idx: u32,
     main_window: Option<WindowId>,
-    last_activated: Option<(Instant, Quiet, Option<Event>)>,
+    last_activated: Option<(Instant, Quiet, oneshot::Sender<()>)>,
     is_frontmost: bool,
+    raises_tx: Sender<(Span, RaiseRequest)>,
 }
 
 struct WindowState {
@@ -166,12 +172,25 @@ impl State {
         requests_tx: Sender<(Span, Request)>,
         requests_rx: Receiver<(Span, Request)>,
         notifications_rx: Receiver<(AXUIElement, String)>,
+        raises_rx: Receiver<(Span, RaiseRequest)>,
     ) {
         let handle = AppThreadHandle { requests_tx };
         if !self.init(handle, info) {
             return;
         }
 
+        let this = RefCell::new(self);
+        join!(
+            Self::handle_incoming(&this, requests_rx, notifications_rx),
+            Self::handle_raises(&this, raises_rx),
+        );
+    }
+
+    async fn handle_incoming(
+        this: &RefCell<Self>,
+        requests_rx: Receiver<(Span, Request)>,
+        notifications_rx: Receiver<(AXUIElement, String)>,
+    ) {
         pub enum Incoming {
             Notification((AXUIElement, String)),
             Request((Span, Request)),
@@ -183,21 +202,38 @@ impl State {
         );
 
         while let Some(incoming) = merged.next().await {
+            let mut this = this.borrow_mut();
             match incoming {
                 Incoming::Request((span, mut request)) => {
                     let _guard = span.enter();
-                    debug!(?self.bundle_id, ?self.pid, ?request, "Got request");
-                    match self.handle_request(&mut request) {
+                    debug!(?this.bundle_id, ?this.pid, ?request, "Got request");
+                    match this.handle_request(&mut request) {
                         Ok(should_terminate) if should_terminate => break,
                         Ok(_) => (),
                         Err(err) => {
-                            error!(?self.bundle_id, ?self.pid, ?request, "Error handling request: {err}");
+                            error!(?this.bundle_id, ?this.pid, ?request, "Error handling request: {err}");
                         }
                     }
                 }
                 Incoming::Notification((elem, notif)) => {
-                    self.handle_notification(elem, &notif);
+                    this.handle_notification(elem, &notif);
                 }
+            }
+        }
+    }
+
+    // Raise requests from the client are queued into a separate channel to be
+    // handled asynchronously. We handle one raise request at a time. Each
+    // request has a CancellationToken in case the request is cancelled before
+    // we get to it.
+    async fn handle_raises(this: &RefCell<Self>, mut rx: Receiver<(Span, RaiseRequest)>) {
+        while let Some((span, raise)) = rx.recv().await {
+            let RaiseRequest(wid, token, sequence_id, quiet) = raise;
+            if let Err(e) = Self::handle_raise_request(this, wid, &token, sequence_id, quiet)
+                .instrument(span)
+                .await
+            {
+                debug!("Raise request failed: {e:?}");
             }
         }
     }
@@ -358,7 +394,12 @@ impl State {
                 ));
             }
             &mut Request::Raise(wid, ref token, sequence_id, quiet) => {
-                self.handle_raise_request(wid, token, sequence_id, quiet)?;
+                self.raises_tx
+                    .send((
+                        Span::current(),
+                        RaiseRequest(wid, token.clone(), sequence_id, quiet),
+                    ))
+                    .unwrap();
             }
         }
         Ok(false)
@@ -369,7 +410,6 @@ impl State {
         trace!(?notif, ?elem, "Got notification");
         #[allow(non_upper_case_globals)]
         #[forbid(non_snake_case)]
-        // TODO: Handle all of these.
         match notif {
             kAXApplicationActivatedNotification | kAXApplicationDeactivatedNotification => {
                 _ = self.on_activation_changed();
@@ -421,6 +461,7 @@ impl State {
                     Some(event::get_mouse_state()),
                 ));
             }
+            // TODO: Handle all of these.
             kAXWindowMiniaturizedNotification => {}
             kAXWindowDeminiaturizedNotification => {}
             kAXTitleChangedNotification => {}
@@ -429,43 +470,63 @@ impl State {
             }
         }
     }
+}
 
-    fn handle_raise_request(
-        &mut self,
+#[derive(Debug)]
+#[allow(dead_code, reason = "used by Debug impls")]
+enum RaiseError {
+    RaiseCancelled,
+    AXError(accessibility::Error),
+}
+
+impl From<accessibility::Error> for RaiseError {
+    fn from(value: accessibility::Error) -> Self {
+        Self::AXError(value)
+    }
+}
+
+impl State {
+    async fn handle_raise_request(
+        this_ref: &RefCell<Self>,
         wid: WindowId,
-        token: &RaiseToken,
+        token: &CancellationToken,
         sequence_id: u64,
         quiet: Quiet,
-    ) -> Result<(), accessibility::Error> {
+    ) -> Result<(), RaiseError> {
         // This request could be handled out of order with respect to
         // later requests sent to other apps by the reactor. To avoid
         // raising ourselves after a later request was processed to
         // raise a different app, we check the raise token for cancellation.
-        if token.is_cancelled() {
-            return Ok(());
-        }
-
-        let window = self.window(wid)?;
+        let check_cancel = || {
+            if token.is_cancelled() {
+                return Err(RaiseError::RaiseCancelled);
+            }
+            Ok(())
+        };
+        check_cancel()?;
 
         // This read acts as a "warm up" to make sure the app is responsive
-        // before we hold the mutex.
-        let is_standard =
-            window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false);
+        // before we hold the mutex. If there are many raise requests triggered
+        // at once they will queue up in the mutex in FIFO order, starting with
+        // the fastest app to respond.
+        let is_standard = {
+            let this = this_ref.borrow();
+            let window = this.window(wid)?;
+            window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false)
+        };
         // Check for cancellation again in case the request took too long.
-        if token.is_cancelled() {
-            return Ok(());
-        }
+        check_cancel()?;
 
         // Enforce exclusivity in the following section. This is needed because
         // the `raise` method is only effective when the app is actually
         // frontmost. The lock ensures that concurrent requests do not
         // steal focus from us until we complete the raise action.
-        static MUTEX: Mutex<()> = Mutex::new(());
-        let mutex_guard = MUTEX.lock().unwrap();
+        static MUTEX: LazyLock<tokio::sync::Mutex<()>> =
+            LazyLock::new(|| tokio::sync::Mutex::new(()));
+        let mutex_guard = MUTEX.lock().await;
         // Check for cancellation again in case acquiring the mutex took too long.
-        if token.is_cancelled() {
-            return Ok(());
-        }
+        check_cancel()?;
+        let mut this = this_ref.borrow_mut();
 
         // Check whether the app thinks it is frontmost. This tells us whether
         // to expect an activation event. We read the value directly instead of
@@ -473,69 +534,93 @@ impl State {
         //
         // Note that it is still possible for the app to be outdated since the
         // window server is the source of truth. If the app thinks it is frontmost
-        // but it isn't, possibly due to concurrent raise requests being handled
-        // by other apps, the worst that can happen is that we fail to mark the
-        // activation event as quiet.
+        // but it isn't, we won't wait for the activation event triggered by
+        // make_key_window as we should, which would arrive after a deactivation
+        // event the app hasn't seen yet. The activation event won't be marked
+        // as quiet when it's sent to the reactor, and our raise action below
+        // might be ineffective if it happens before the activation takes
+        // effect.
         //
-        // If the app thinks it isn't frontmost but it is, we'll never get a
-        // notification we expect and will time out the raise request. This
-        // should be *much* more rare since it would require some external
-        // intervention between when we read this and when we call
-        // make_key_window.
-        let is_frontmost: bool = trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
+        // If the app thinks it isn't frontmost but it is, it will get a
+        // notification soon and we'll match out against it, incorrectly marking
+        // it as quiet. Otherwise nothing bad happens.
+        let is_frontmost: bool = trace("is_frontmost", &this.app, || this.app.frontmost())?.into();
 
         // Make this the key window. This ensures that the window has focus and
         // can receive keyboard events, and activates the app if it isn't
         // already. It does nothing to the window order.
         //
-        // Note that this uses private APIs. If those stop working we would
-        // replace it with NSRunningApplication. We might be able to make
-        // certain assumptions about the state after calling make_key_window,
-        // but try to avoid that because we would not have the same guarantees
-        // with NSRunningApplication, which dispatches a request to the
-        // application and does not wait for it to complete.
+        // Note that this uses private APIs for multi-screen support. If those
+        // stop working we would replace it with NSRunningApplication. We might
+        // be able to make assumptions about the state after calling
+        // make_key_window, but try to avoid that because we would not have the
+        // same guarantees with NSRunningApplication, which dispatches a request
+        // to the application and does not wait for it to complete.
         let make_key_result = window_server::make_key_window(
-            self.pid,
-            WindowServerId::try_from(&self.window(wid)?.elem)?,
+            this.pid,
+            WindowServerId::try_from(&this.window(wid)?.elem)?,
         );
         if make_key_result.is_err() {
-            warn!(?self.pid, "Failed to activate app");
+            warn!(?this.pid, "Failed to activate app");
+        }
+
+        // We should be getting an activation event from make_key_window. Record
+        // the activation so we can match against its notification and correctly
+        // mark it as quiet, and wait for it so we know the raise action below
+        // will be effective.
+        //
+        // Workaround: Don't expect activation events for non-standard windows
+        // or we may time out waiting for them.
+        if !is_frontmost && make_key_result.is_ok() && is_standard {
+            let (tx, rx) = oneshot::channel();
+            trace!("Awaiting activation");
+            this.last_activated = Some((Instant::now(), quiet, tx));
+            drop(this); // Don't use RefCell across await.
+            select! {
+                _ = rx => {}
+                _ = token.cancelled() => {
+                    debug!("Raise cancelled while awaiting activation event");
+                    return Err(RaiseError::RaiseCancelled);
+                }
+            }
+            trace!("Activation complete");
+            this = this_ref.borrow_mut();
+        } else {
+            // Don't expect an activation event; send the raise completion right
+            // away.
+            trace!(
+                "Not awaiting activation event. is_frontmost={is_frontmost:?} \
+                make_key_result={make_key_result:?} is_standard={is_standard:?}"
+            )
         }
 
         // Raise the window to be on top. This only affects the global window
         // order if the app is already frontmost. Otherwise it affects the
         // order of windows within that app only.
-        let window = self.window(wid)?;
+        //
+        // TODO: We could raise multiple windows here if we need more from this
+        // app.
+        let window = this.window(wid)?;
         trace("raise", &window.elem, || window.elem.raise())?;
+
+        trace!("Sending completion");
+        this.send_event(Event::RaiseCompleted { window_id: wid, sequence_id });
+
+        // At this point we should be able to unlock the mutex.
         drop(mutex_guard);
 
-        let event = Event::RaiseCompleted { window_id: wid, sequence_id };
-        if !is_frontmost && make_key_result.is_ok() && is_standard {
-            // We should be getting an activation event from make_key_window.
-            // Record the activation so we can match against its
-            // notification and correctly mark it as quiet.
-            //
-            // Workaround: Don't expect activation events for
-            // non-standard windows or we may time out waiting for it.
-            //
-            // FIXME: This should be a queue instead of a single value.
-            self.last_activated = Some((Instant::now(), quiet, Some(event)));
-            debug!("Replaced last_activated: {:?}", self.last_activated);
-        } else {
-            // Don't expect an activation event; send the raise completion right
-            // away.
-            debug!("Sending activation immediately: {event:?}");
-            self.send_event(event);
-        }
-
+        // Observe the main window change and send the event if applicable.
         let quiet_if = (quiet == Quiet::Yes).then_some(wid);
-        let main_window = self.on_main_window_changed(quiet_if);
+        let main_window = this.on_main_window_changed(quiet_if);
         if main_window != Some(wid) {
             warn!(
-                "Raise request failed to raise {desired:?}; instead got {main_window:?}",
-                desired = self.window(wid)?.elem
+                "Raise request failed to raise {desired:?}; instead got main_window={main_window:?}",
+                desired = this.window(wid)?.elem
             );
         }
+
+        // TODO: Check the frontmost (layer 0) window of the window server and retry.
+
         Ok(())
     }
 
@@ -589,42 +674,58 @@ impl State {
     fn on_activation_changed(&mut self) -> Result<(), accessibility::Error> {
         // Regardless of the notification we received, read the current activation
         // and base our event on that. This has the effect of "collapsing" old
-        // stale events, ensuring that they don't interfere with the matching
-        // we do below.
+        // stale events.
+        //
+        // TODO: I'm not sure this is necessary, for activation events at least.
         let is_frontmost: bool = trace("is_frontmost", &self.app, || self.app.frontmost())?.into();
-        if is_frontmost == self.is_frontmost {
-            return Ok(());
-        }
-        self.is_frontmost = is_frontmost;
+        let old_frontmost = std::mem::replace(&mut self.is_frontmost, is_frontmost);
+        debug!(
+            "on_activation_changed, pid={:?}, is_frontmost={:?}, old_frontmost={:?}",
+            self.pid, is_frontmost, old_frontmost
+        );
 
-        if is_frontmost {
+        let event = if is_frontmost {
             // Suppress events from our own activation by attempting to match up
             // the event with `self.last_activated`.
             //
-            // Since it is possible for an activation to not happen for some reason,
-            // we are stuck with using a timeout so we don't suppress real events
-            // in the future.
+            // It's important to do this even if the event is getting
+            // "collapsed" anyway. If the raise action sets self.last_activated
+            // it's because it observed the app not being frontmost, and even if
+            // we haven't, we need to tell it that the app is activated again.
             let quiet = match self.last_activated.take() {
-                // Idea: Maybe we can control the timeout in client and use the send
-                // result to decide whether `quiet` applies.
-                Some((ts, quiet, event)) if ts.elapsed() < Duration::from_millis(1000) => {
+                // Since it is possible for an activation to not happen for some
+                // reason, we are stuck with using a timeout so we don't
+                // suppress real events in the future.
+                //
+                // This is independent of the raise request cancellation,
+                // which can be caused by outside factors. If last_activated was
+                // set, it's because we initiated an activation event, so we
+                // still want to mark it as quiet if applicable.
+                Some((ts, quiet, tx)) if ts.elapsed() < Duration::from_millis(1000) => {
                     // Initiated by us.
-                    _ = event.map(|e| self.send_event(e));
+                    trace!("by us");
+                    _ = tx.send(());
                     quiet
                 }
                 _ => {
                     // Initiated by the user or system.
+                    //
                     // Unfortunately, if the user clicks on a new main window to
                     // activate this app, we get this notification before getting
                     // the main window changed notification. First read the main
                     // window and send a notification if it changed.
+                    trace!("by user");
                     self.on_main_window_changed(None);
                     Quiet::No
                 }
             };
-            self.send_event(Event::ApplicationActivated(self.pid, quiet));
+            Event::ApplicationActivated(self.pid, quiet)
         } else {
-            self.send_event(Event::ApplicationDeactivated(self.pid));
+            Event::ApplicationDeactivated(self.pid)
+        };
+
+        if old_frontmost != is_frontmost {
+            self.send_event(event);
         }
         Ok(())
     }
@@ -756,6 +857,7 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         observer.install(move |elem, notif| _ = notifications_tx.send((elem, notif.to_owned())));
 
     // Create our app state.
+    let (raises_tx, raises_rx) = channel();
     let state = State {
         pid,
         running_app,
@@ -768,10 +870,11 @@ fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
         main_window: None,
         last_activated: None,
         is_frontmost: false,
+        raises_tx,
     };
 
     let (requests_tx, requests_rx) = channel();
-    Executor::run(state.run(info, requests_tx, requests_rx, notifications_rx));
+    Executor::run(state.run(info, requests_tx, requests_rx, notifications_rx, raises_rx));
 }
 
 fn trace<T>(
@@ -782,6 +885,8 @@ fn trace<T>(
     let start = Instant::now();
     let out = f();
     let end = Instant::now();
+    // FIXME: ?elem here can change system behavior because it sends requests
+    // to the app.
     trace!(time = ?(end - start), ?elem, "{desc:12}");
     if let Err(err) = &out {
         let app = elem.parent();
