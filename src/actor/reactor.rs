@@ -22,14 +22,15 @@ pub use replay::{Record, replay};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::oneshot;
 use tracing::{Span, debug, error, info, instrument, trace, warn};
 
 use super::mouse;
-use crate::actor::app::{
-    AppInfo, AppThreadHandle, Quiet, RaiseToken, Request, WindowId, WindowInfo, pid_t,
-};
+use crate::actor::app::{AppInfo, AppThreadHandle, Quiet, Request, WindowId, WindowInfo, pid_t};
 use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
+
+use tokio::sync::mpsc;
+
+use crate::actor::raise_manager::{self, RaiseRequest};
 use crate::collections::{HashMap, HashSet};
 use crate::config::Config;
 use crate::log::{self, MetricsCommand};
@@ -124,6 +125,19 @@ pub enum Event {
     /// mouse is enabled.
     MouseMovedOverWindow(WindowServerId),
 
+    /// A raise request completed. Used by the raise manager to track when
+    /// all raise requests in a sequence have finished.
+    RaiseCompleted {
+        window_id: WindowId,
+        sequence_id: u64,
+    },
+
+    /// A raise sequence timed out. Used by the raise manager to clean up
+    /// pending raises that took too long.
+    RaiseTimeout {
+        sequence_id: u64,
+    },
+
     Command(Command),
 }
 
@@ -146,6 +160,8 @@ pub enum ReactorCommand {
     SaveAndExit,
 }
 
+use crate::actor::raise_manager::RaiseManager;
+
 pub struct Reactor {
     config: Arc<Config>,
     apps: HashMap<pid_t, AppState>,
@@ -155,11 +171,11 @@ pub struct Reactor {
     window_ids: HashMap<WindowServerId, WindowId>,
     visible_windows: HashSet<WindowServerId>,
     screens: Vec<Screen>,
-    raise_token: RaiseToken,
     main_window_tracker: MainWindowTracker,
     in_drag: bool,
     record: Record,
     mouse_tx: Option<mouse::Sender>,
+    raise_manager_tx: raise_manager::Sender,
 }
 
 #[derive(Debug)]
@@ -222,12 +238,13 @@ impl Reactor {
         mouse_tx: mouse::Sender,
     ) -> Sender {
         let (events_tx, events) = unbounded_channel();
+        let events_tx_clone = events_tx.clone();
         thread::Builder::new()
             .name("reactor".to_string())
             .spawn(move || {
                 let mut reactor = Reactor::new(config, layout, record);
                 reactor.mouse_tx.replace(mouse_tx);
-                Executor::run(reactor.run(events));
+                Executor::run(reactor.run(events, events_tx_clone));
             })
             .unwrap();
         events_tx
@@ -236,6 +253,7 @@ impl Reactor {
     pub fn new(config: Arc<Config>, layout: LayoutManager, mut record: Record) -> Reactor {
         // FIXME: Remove apps that are no longer running from restored state.
         record.start(&config, &layout);
+        let (raise_manager_tx, _rx) = mpsc::unbounded_channel();
         Reactor {
             config,
             apps: HashMap::default(),
@@ -245,15 +263,26 @@ impl Reactor {
             window_server_info: HashMap::default(),
             visible_windows: HashSet::default(),
             screens: vec![],
-            raise_token: RaiseToken::default(),
             main_window_tracker: MainWindowTracker::default(),
             in_drag: false,
             record,
             mouse_tx: None,
+            raise_manager_tx,
         }
     }
 
-    pub async fn run(mut self, mut events: Receiver) {
+    pub async fn run(mut self, events: Receiver, events_tx: Sender) {
+        let (raise_manager_tx, raise_manager_rx) = mpsc::unbounded_channel();
+        self.raise_manager_tx = raise_manager_tx.clone();
+
+        let mouse_tx = self.mouse_tx.clone();
+        let reactor_task = self.run_reactor_loop(events);
+        let raise_manager_task = RaiseManager::run(raise_manager_rx, events_tx, mouse_tx);
+
+        let _ = tokio::join!(reactor_task, raise_manager_task);
+    }
+
+    async fn run_reactor_loop(mut self, mut events: Receiver) {
         while let Some((span, event)) = events.recv().await {
             let _guard = span.enter();
             self.handle_event(event);
@@ -421,6 +450,14 @@ impl Reactor {
                 }
                 self.raise_window(wid, Quiet::No, None);
             }
+            Event::RaiseCompleted { window_id, sequence_id } => {
+                let msg = raise_manager::Event::RaiseCompleted { window_id, sequence_id };
+                _ = self.raise_manager_tx.send((Span::current(), msg));
+            }
+            Event::RaiseTimeout { sequence_id } => {
+                let msg = raise_manager::Event::RaiseTimeout { sequence_id };
+                _ = self.raise_manager_tx.send((Span::current(), msg));
+            }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
                 let visible_spaces =
@@ -586,37 +623,53 @@ impl Reactor {
 
     fn handle_layout_response(&mut self, response: layout::EventResponse) {
         let layout::EventResponse { raise_windows, focus_window } = response;
-        for wid in raise_windows {
-            info!(raise_window = ?wid);
-            self.raise_window(wid, Quiet::Yes, None);
-        }
-        if let Some(wid) = focus_window {
-            let warp = match self.config.settings.mouse_follows_focus {
-                true => self.windows.get(&wid).map(|w| w.frame_monotonic.mid()),
-                false => None,
-            };
-            self.raise_window(wid, Quiet::No, warp);
+
+        if !raise_windows.is_empty() || focus_window.is_some() {
+            // Collect app handles for all windows that need to be raised
+            let mut app_handles = HashMap::default();
+            for &wid in &raise_windows {
+                if let Some(app) = self.apps.get(&wid.pid) {
+                    app_handles.insert(wid.pid, app.handle.clone());
+                }
+            }
+            if let Some(wid) = focus_window {
+                if let Some(app) = self.apps.get(&wid.pid) {
+                    app_handles.insert(wid.pid, app.handle.clone());
+                }
+            }
+
+            let focus_window_with_warp = focus_window.map(|wid| {
+                let warp = match self.config.settings.mouse_follows_focus {
+                    true => self.windows.get(&wid).map(|w| w.frame_monotonic.mid()),
+                    false => None,
+                };
+                (wid, warp)
+            });
+
+            let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
+                raise_windows,
+                focus_window: focus_window_with_warp,
+                app_handles,
+            });
+
+            _ = self.raise_manager_tx.send((Span::current(), msg));
         }
     }
 
     #[instrument(skip(self))]
     fn raise_window(&mut self, wid: WindowId, quiet: Quiet, warp: Option<CGPoint>) {
-        self.raise_token.set_pid(wid.pid);
-        let (tx, rx) = oneshot::channel();
-        let Some(app) = self.apps.get_mut(&wid.pid) else { return };
-        let Ok(()) =
-            app.handle.send(Request::Raise(wid, self.raise_token.clone(), Some(tx), quiet))
-        else {
-            return;
-        };
-        if let Some(point) = warp {
-            if let Some(mouse_tx) = &self.mouse_tx {
-                _ = mouse_tx.send((Span::current(), mouse::Request::Warp(point)));
-            }
+        let mut app_handles = HashMap::default();
+        if let Some(app) = self.apps.get(&wid.pid) {
+            app_handles.insert(wid.pid, app.handle.clone());
         }
-        trace!("Blocking");
-        let _ = rx.blocking_recv();
-        trace!("Done blocking");
+        _ = self.raise_manager_tx.send((
+            Span::current(),
+            raise_manager::Event::RaiseRequest(RaiseRequest {
+                raise_windows: vec![],
+                focus_window: Some((wid, warp)),
+                app_handles: app_handles,
+            }),
+        ));
     }
 
     /// The main window of the active app, if any.
