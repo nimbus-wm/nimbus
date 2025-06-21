@@ -175,7 +175,7 @@ pub struct Reactor {
     in_drag: bool,
     record: Record,
     mouse_tx: Option<mouse::Sender>,
-    raise_manager_tx: mpsc::UnboundedSender<raise_manager::Event>,
+    raise_manager_tx: raise_manager::Sender,
 }
 
 #[derive(Debug)]
@@ -459,15 +459,11 @@ impl Reactor {
             }
             Event::RaiseCompleted { window_id, sequence_id } => {
                 let msg = raise_manager::Event::RaiseCompleted { window_id, sequence_id };
-                if let Err(e) = self.raise_manager_tx.send(msg) {
-                    error!("Failed to send raise completion to raise manager: {:?}", e);
-                }
+                _ = self.raise_manager_tx.send((Span::current(), msg));
             }
             Event::RaiseTimeout { sequence_id } => {
                 let msg = raise_manager::Event::RaiseTimeout { sequence_id };
-                if let Err(e) = self.raise_manager_tx.send(msg) {
-                    error!("Failed to send raise timeout to raise manager: {:?}", e);
-                }
+                _ = self.raise_manager_tx.send((Span::current(), msg));
             }
             Event::Command(Command::Layout(cmd)) => {
                 info!(?cmd);
@@ -663,9 +659,7 @@ impl Reactor {
                 app_handles,
             });
 
-            if let Err(e) = self.raise_manager_tx.send(msg) {
-                error!("Failed to send layout response to raise manager: {:?}", e);
-            }
+            _ = self.raise_manager_tx.send((Span::current(), msg));
         }
     }
 
@@ -675,11 +669,14 @@ impl Reactor {
         if let Some(app) = self.apps.get(&wid.pid) {
             app_handles.insert(wid.pid, app.handle.clone());
         }
-        _ = self.raise_manager_tx.send(raise_manager::Event::RaiseRequest(RaiseRequest {
-            raise_windows: vec![],
-            focus_window: Some((wid, warp)),
-            app_handles: app_handles,
-        }));
+        _ = self.raise_manager_tx.send((
+            Span::current(),
+            raise_manager::Event::RaiseRequest(RaiseRequest {
+                raise_windows: vec![],
+                focus_window: Some((wid, warp)),
+                app_handles: app_handles,
+            }),
+        ));
     }
 
     /// The main window of the active app, if any.
