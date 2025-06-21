@@ -4,7 +4,6 @@
 //! It ensures that windows are raised in the correct order and handles timeouts.
 
 use crate::actor::app::{AppThreadHandle, Quiet, Request, WindowId};
-use crate::actor::reactor::Sender;
 use crate::actor::{mouse, reactor};
 use crate::sys::timer::Timer;
 use objc2_core_foundation::CGPoint;
@@ -47,7 +46,7 @@ pub struct RaiseManager {
 
 /// Tracks an executing sequence of raises.
 #[derive(Debug)]
-pub struct ActiveSequence {
+struct ActiveSequence {
     sequence_id: u64,
     pending_raises: HashSet<WindowId>,
     focus_window: Option<(WindowId, Option<CGPoint>)>,
@@ -57,13 +56,16 @@ pub struct ActiveSequence {
     timed_out: bool,
 }
 
+pub type Sender = mpsc::UnboundedSender<(Span, Event)>;
+type Receiver = mpsc::UnboundedReceiver<(Span, Event)>;
+
 const TIMEOUT_DURATION: Duration = Duration::from_millis(250);
 
 impl RaiseManager {
     /// Run the raise manager task.
     pub async fn run(
-        mut rx: mpsc::UnboundedReceiver<Event>,
-        events_tx: Sender,
+        mut rx: Receiver,
+        events_tx: reactor::Sender,
         mouse_tx: Option<mouse::Sender>,
     ) {
         let mut raise_manager = RaiseManager::new();
@@ -90,7 +92,8 @@ impl RaiseManager {
 
             tokio::select! {
                 // Handle messages from reactor
-                Some(msg) = rx.recv() => {
+                Some((span, msg)) = rx.recv() => {
+                    let _guard = span.enter();
                     raise_manager.handle_message(msg);
                 }
 
