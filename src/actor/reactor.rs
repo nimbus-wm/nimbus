@@ -588,8 +588,8 @@ impl Reactor {
                 app_windows.remove(&space).unwrap_or_default(),
             ));
         }
-        // If it's possible we just added the main window to the layout, make sure the layout
-        // knows it's focused.
+        // If it's possible we just added the main window to the layout, make
+        // sure the layout knows it's focused.
         if let Some(main_window) = self.main_window() {
             if main_window.pid == pid {
                 let spaces = self.screens.iter().flat_map(|screen| screen.space).collect();
@@ -630,37 +630,41 @@ impl Reactor {
 
     fn handle_layout_response(&mut self, response: layout::EventResponse) {
         let layout::EventResponse { raise_windows, focus_window } = response;
-
-        if !raise_windows.is_empty() || focus_window.is_some() {
-            // Collect app handles for all windows that need to be raised
-            let mut app_handles = HashMap::default();
-            for &wid in &raise_windows {
-                if let Some(app) = self.apps.get(&wid.pid) {
-                    app_handles.insert(wid.pid, app.handle.clone());
-                }
-            }
-            if let Some(wid) = focus_window {
-                if let Some(app) = self.apps.get(&wid.pid) {
-                    app_handles.insert(wid.pid, app.handle.clone());
-                }
-            }
-
-            let focus_window_with_warp = focus_window.map(|wid| {
-                let warp = match self.config.settings.mouse_follows_focus {
-                    true => self.windows.get(&wid).map(|w| w.frame_monotonic.mid()),
-                    false => None,
-                };
-                (wid, warp)
-            });
-
-            let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
-                raise_windows,
-                focus_window: focus_window_with_warp,
-                app_handles,
-            });
-
-            _ = self.raise_manager_tx.send((Span::current(), msg));
+        if raise_windows.is_empty() && focus_window.is_none() {
+            return;
         }
+
+        let mut app_handles = HashMap::default();
+        for &wid in raise_windows.iter().chain(&focus_window) {
+            if let Some(app) = self.apps.get(&wid.pid) {
+                app_handles.insert(wid.pid, app.handle.clone());
+            }
+        }
+
+        let mut windows_by_app_and_screen = HashMap::default();
+        for &wid in &raise_windows {
+            let Some(window) = self.windows.get(&wid) else { continue };
+            windows_by_app_and_screen
+                .entry((wid.pid, self.best_space_for_window(&window.frame_monotonic)))
+                .or_insert(vec![])
+                .push(wid);
+        }
+
+        let focus_window_with_warp = focus_window.map(|wid| {
+            let warp = match self.config.settings.mouse_follows_focus {
+                true => self.windows.get(&wid).map(|w| w.frame_monotonic.mid()),
+                false => None,
+            };
+            (wid, warp)
+        });
+
+        let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
+            raise_windows: windows_by_app_and_screen.into_values().collect(),
+            focus_window: focus_window_with_warp,
+            app_handles,
+        });
+
+        _ = self.raise_manager_tx.send((Span::current(), msg));
     }
 
     #[instrument(skip(self))]
@@ -1034,6 +1038,87 @@ pub mod tests {
             MouseState::Up,
         ));
         reactor.handle_event(Event::WindowDestroyed(WindowId::new(1, 2)));
+    }
+
+    #[test]
+    fn handle_layout_response_groups_windows_by_app_and_screen() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
+        let (raise_manager_tx, mut raise_manager_rx) = mpsc::unbounded_channel();
+        reactor.raise_manager_tx = raise_manager_tx;
+
+        let screen1 = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        let screen2 = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+        reactor.handle_event(Event::ScreenParametersChanged(
+            vec![screen1, screen2],
+            vec![Some(SpaceId::new(1)), Some(SpaceId::new(2))],
+            vec![],
+        ));
+
+        reactor.handle_events(apps.make_app(1, make_windows(2)));
+
+        let mut windows = make_windows(2);
+        windows[1].frame.origin = CGPoint::new(1100., 100.);
+        reactor.handle_events(apps.make_app(2, windows));
+
+        let _events = apps.simulate_events();
+        while raise_manager_rx.try_recv().is_ok() {}
+
+        reactor.handle_layout_response(layout::EventResponse {
+            raise_windows: vec![
+                WindowId::new(1, 1),
+                WindowId::new(1, 2),
+                WindowId::new(2, 1),
+                WindowId::new(2, 2),
+            ],
+            focus_window: None,
+        });
+        let msg = raise_manager_rx.try_recv().expect("Should have sent an event").1;
+        match msg {
+            raise_manager::Event::RaiseRequest(RaiseRequest {
+                raise_windows,
+                focus_window,
+                app_handles: _,
+            }) => {
+                let raise_windows: HashSet<Vec<WindowId>> = raise_windows.into_iter().collect();
+                let expected = [
+                    vec![WindowId::new(1, 1), WindowId::new(1, 2)],
+                    vec![WindowId::new(2, 1)],
+                    vec![WindowId::new(2, 2)],
+                ]
+                .into_iter()
+                .collect();
+                assert_eq!(raise_windows, expected);
+                assert!(focus_window.is_none());
+            }
+            _ => panic!("Unexpected event: {msg:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_layout_response_includes_handles_for_raise_and_focus_windows() {
+        let mut apps = Apps::new();
+        let mut reactor = Reactor::new_for_test(LayoutManager::new());
+        let (raise_manager_tx, mut raise_manager_rx) = mpsc::unbounded_channel();
+        reactor.raise_manager_tx = raise_manager_tx;
+
+        reactor.handle_events(apps.make_app(1, make_windows(1)));
+        reactor.handle_events(apps.make_app(2, make_windows(1)));
+
+        let _events = apps.simulate_events();
+        while raise_manager_rx.try_recv().is_ok() {}
+        reactor.handle_layout_response(layout::EventResponse {
+            raise_windows: vec![WindowId::new(1, 1)],
+            focus_window: Some(WindowId::new(2, 1)),
+        });
+        let msg = raise_manager_rx.try_recv().expect("Should have sent an event").1;
+        match msg {
+            raise_manager::Event::RaiseRequest(RaiseRequest { app_handles, .. }) => {
+                assert!(app_handles.contains_key(&1));
+                assert!(app_handles.contains_key(&2));
+            }
+            _ => panic!("Unexpected event: {msg:?}"),
+        }
     }
 
     #[test]

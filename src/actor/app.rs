@@ -101,15 +101,15 @@ pub enum Request {
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
 
-    /// Raise the window by making it the main window of this app and then
-    /// making this app frontmost.
+    /// Raise the windows on the screen, in any order. All windows must be on
+    /// the same screen, or they will not be raised correctly.
     ///
     /// Events attributed to this request will have the [`Quiet`] parameter
     /// attached to them.
-    Raise(WindowId, CancellationToken, u64, Quiet),
+    Raise(Vec<WindowId>, CancellationToken, u64, Quiet),
 }
 
-struct RaiseRequest(WindowId, CancellationToken, u64, Quiet);
+struct RaiseRequest(Vec<WindowId>, CancellationToken, u64, Quiet);
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum Quiet {
@@ -228,8 +228,8 @@ impl State {
     // we get to it.
     async fn handle_raises(this: &RefCell<Self>, mut rx: Receiver<(Span, RaiseRequest)>) {
         while let Some((span, raise)) = rx.recv().await {
-            let RaiseRequest(wid, token, sequence_id, quiet) = raise;
-            if let Err(e) = Self::handle_raise_request(this, wid, &token, sequence_id, quiet)
+            let RaiseRequest(wids, token, sequence_id, quiet) = raise;
+            if let Err(e) = Self::handle_raise_request(this, wids, &token, sequence_id, quiet)
                 .instrument(span)
                 .await
             {
@@ -393,11 +393,11 @@ impl State {
                     None,
                 ));
             }
-            &mut Request::Raise(wid, ref token, sequence_id, quiet) => {
+            &mut Request::Raise(ref wids, ref token, sequence_id, quiet) => {
                 self.raises_tx
                     .send((
                         Span::current(),
-                        RaiseRequest(wid, token.clone(), sequence_id, quiet),
+                        RaiseRequest(wids.clone(), token.clone(), sequence_id, quiet),
                     ))
                     .unwrap();
             }
@@ -488,7 +488,7 @@ impl From<accessibility::Error> for RaiseError {
 impl State {
     async fn handle_raise_request(
         this_ref: &RefCell<Self>,
-        wid: WindowId,
+        wids: Vec<WindowId>,
         token: &CancellationToken,
         sequence_id: u64,
         quiet: Quiet,
@@ -509,9 +509,13 @@ impl State {
         // before we hold the mutex. If there are many raise requests triggered
         // at once they will queue up in the mutex in FIFO order, starting with
         // the fastest app to respond.
+        let Some(&first) = wids.first() else {
+            warn!("Got empty list of wids to raise; this might misbehave");
+            return Ok(());
+        };
         let is_standard = {
             let this = this_ref.borrow();
-            let window = this.window(wid)?;
+            let window = this.window(first)?;
             window.elem.subrole().map(|s| s == kAXStandardWindowSubrole).unwrap_or(false)
         };
         // Check for cancellation again in case the request took too long.
@@ -523,7 +527,7 @@ impl State {
         // steal focus from us until we complete the raise action.
         static MUTEX: LazyLock<tokio::sync::Mutex<()>> =
             LazyLock::new(|| tokio::sync::Mutex::new(()));
-        let mutex_guard = MUTEX.lock().await;
+        let mut mutex_guard = Some(MUTEX.lock().await);
         // Check for cancellation again in case acquiring the mutex took too long.
         check_cancel()?;
         let mut this = this_ref.borrow_mut();
@@ -558,7 +562,7 @@ impl State {
         // to the application and does not wait for it to complete.
         let make_key_result = window_server::make_key_window(
             this.pid,
-            WindowServerId::try_from(&this.window(wid)?.elem)?,
+            WindowServerId::try_from(&this.window(first)?.elem)?,
         );
         if make_key_result.is_err() {
             warn!(?this.pid, "Failed to activate app");
@@ -594,32 +598,38 @@ impl State {
             )
         }
 
-        // Raise the window to be on top. This only affects the global window
+        // Raise each window to be on top. This only affects the global window
         // order if the app is already frontmost. Otherwise it affects the
         // order of windows within that app only.
-        //
-        // TODO: We could raise multiple windows here if we need more from this
-        // app.
-        let window = this.window(wid)?;
-        trace("raise", &window.elem, || window.elem.raise())?;
+        for (i, &wid) in wids.iter().enumerate() {
+            debug_assert_eq!(wid.pid, this.pid);
+            let window = this.window(wid)?;
+            trace("raise", &window.elem, || window.elem.raise())?;
 
-        trace!("Sending completion");
-        this.send_event(Event::RaiseCompleted { window_id: wid, sequence_id });
+            // TODO: Check the frontmost (layer 0) window of the window server and retry if necessary.
 
-        // At this point we should be able to unlock the mutex.
-        drop(mutex_guard);
+            trace!("Sending completion");
+            this.send_event(Event::RaiseCompleted { window_id: wid, sequence_id });
 
-        // Observe the main window change and send the event if applicable.
-        let quiet_if = (quiet == Quiet::Yes).then_some(wid);
-        let main_window = this.on_main_window_changed(quiet_if);
-        if main_window != Some(wid) {
-            warn!(
-                "Raise request failed to raise {desired:?}; instead got main_window={main_window:?}",
-                desired = this.window(wid)?.elem
-            );
+            let is_last = i + 1 == wids.len();
+            if is_last {
+                // At this point we should be able to unlock the mutex and let
+                // another app go. Other apps won't interfere with reading our
+                // main window below, and if another raise request is queued for
+                // this app, it won't be processed until we return.
+                mutex_guard.take();
+            }
+
+            // Observe the main window change and send the event if applicable.
+            let quiet_if = (quiet == Quiet::Yes).then_some(wid);
+            let main_window = this.on_main_window_changed(quiet_if);
+            if main_window != Some(wid) {
+                warn!(
+                    "Raise request failed to raise {desired:?}; instead got main_window={main_window:?}",
+                    desired = this.window(wid).map(|w| &w.elem).ok(),
+                );
+            }
         }
-
-        // TODO: Check the frontmost (layer 0) window of the window server and retry.
 
         Ok(())
     }
