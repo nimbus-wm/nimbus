@@ -30,7 +30,10 @@ pub enum Event {
 /// A queued layout response waiting to be processed.
 #[derive(Debug)]
 pub struct RaiseRequest {
-    pub raise_windows: Vec<WindowId>,
+    /// A set of windows to raise concurrently. Each inner vec should contain a
+    /// set of windows from the same app and on the same screen.
+    pub raise_windows: Vec<Vec<WindowId>>,
+    /// The window to raise and focus last.
     pub focus_window: Option<(WindowId, Option<CGPoint>)>,
     pub app_handles: HashMap<i32, AppThreadHandle>,
 }
@@ -208,17 +211,26 @@ impl RaiseManager {
         let mut pending_raises = HashSet::default();
         let raise_token = CancellationToken::new();
 
-        for wid in raise_windows {
-            if let Some(app_handle) = app_handles.get(&wid.pid) {
-                if app_handle
-                    .send(Request::Raise(wid, raise_token.clone(), sequence_id, Quiet::Yes))
-                    .is_ok()
-                {
+        for wids in raise_windows {
+            let Some(WindowId { pid, .. }) = wids.first() else {
+                continue;
+            };
+            let Some(app_handle) = app_handles.get(pid) else {
+                warn!("App not found for pid {:?}", pid);
+                continue;
+            };
+            if app_handle
+                .send(Request::Raise(
+                    wids.clone(),
+                    raise_token.clone(),
+                    sequence_id,
+                    Quiet::Yes,
+                ))
+                .is_ok()
+            {
+                for wid in wids {
                     pending_raises.insert(wid);
                 }
-            } else {
-                // App not found
-                warn!("App not found for window {:?}", wid);
             }
         }
 
@@ -235,7 +247,7 @@ impl RaiseManager {
         }
     }
 
-    /// Process the active sequence, handling completed raises and focus windows
+    /// Process the active sequence, handling completed raises and focus windows.
     pub fn process_active_sequence(&mut self) -> bool {
         let Some(sequence) = &mut self.active_sequence else {
             return false;
@@ -252,14 +264,14 @@ impl RaiseManager {
             if let Some(handle) = app_handle {
                 if handle
                     .send(Request::Raise(
-                        wid,
+                        vec![wid],
                         sequence.raise_token.clone(),
                         sequence.sequence_id, // Use proper sequence ID for tracking
                         Quiet::No,
                     ))
                     .is_ok()
                 {
-                    // Add focus window to pending raises so we wait for completion
+                    // Add focus window to pending raises so we wait for completion.
                     sequence.pending_raises.insert(wid);
                     trace!("Focus window request sent and added to pending raises");
                 } else {
@@ -274,8 +286,12 @@ impl RaiseManager {
             }
         }
 
-        // If all raises (including focus) are complete, remove the active sequence
+        // If all raises (including focus) are complete, remove the active sequence.
         if sequence.pending_raises.is_empty() && sequence.focus_window.is_none() {
+            trace!(
+                "Raise sequence completed after {:?}",
+                sequence.started_at.elapsed(),
+            );
             self.active_sequence = None;
             changed = true;
         }
@@ -308,7 +324,7 @@ mod tests {
         app_handles: HashMap<i32, AppThreadHandle>,
     ) -> Event {
         Event::RaiseRequest(RaiseRequest {
-            raise_windows,
+            raise_windows: raise_windows.into_iter().map(|w| vec![w]).collect(),
             focus_window,
             app_handles,
         })
@@ -322,6 +338,7 @@ mod tests {
         requests
     }
 
+    #[track_caller]
     fn assert_raise_request(
         request: &Request,
         expected_wid: WindowId,
@@ -329,7 +346,7 @@ mod tests {
         expected_quiet: Quiet,
     ) {
         if let Request::Raise(wid, _, seq_id, quiet) = request {
-            assert_eq!(*wid, expected_wid);
+            assert_eq!(*wid, vec![expected_wid]);
             assert_eq!(*seq_id, expected_seq_id);
             assert_eq!(*quiet, expected_quiet);
         } else {
@@ -340,7 +357,7 @@ mod tests {
     fn find_raise_request(requests: &[Request], expected_wid: WindowId) -> bool {
         requests.iter().any(|r| {
             if let Request::Raise(wid, _, _, quiet) = r {
-                *wid == expected_wid && *quiet == Quiet::No
+                *wid == vec![expected_wid] && *quiet == Quiet::No
             } else {
                 false
             }
@@ -706,7 +723,7 @@ mod tests {
             let requests = collect_requests(&mut app_rx);
             let second_focus_sent = requests.iter().any(|r| {
                 if let Request::Raise(wid, _, seq_id, quiet) = r {
-                    *wid == WindowId::new(1, 3) && *seq_id == 2 && *quiet == Quiet::No
+                    *wid == vec![WindowId::new(1, 3)] && *seq_id == 2 && *quiet == Quiet::No
                 } else {
                     false
                 }
