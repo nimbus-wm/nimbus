@@ -63,11 +63,13 @@ impl<S: System> ScreenCache<S> {
         };
 
         // Ensure that the main screen is always first.
-        let main_screen_idx = cg_screens
-            .iter()
-            .position(|s| s.bounds.origin == CGPoint::ZERO)
-            .expect("Could not find the main screen");
-        cg_screens.swap(0, main_screen_idx);
+        if let Some(main_screen_idx) =
+            cg_screens.iter().position(|s| s.bounds.origin == CGPoint::ZERO)
+        {
+            cg_screens.swap(0, main_screen_idx);
+        } else {
+            warn!("Could not find main screen. cg_screens={cg_screens:?}");
+        }
 
         self.uuids = cg_screens
             .iter()
