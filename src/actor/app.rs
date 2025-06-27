@@ -897,7 +897,7 @@ fn trace<T>(
     let end = Instant::now();
     // FIXME: ?elem here can change system behavior because it sends requests
     // to the app.
-    trace!(time = ?(end - start), ?elem, "{desc:12}");
+    trace!(time = ?(end - start), /*?elem,*/ "{desc:12}");
     if let Err(err) = &out {
         let app = elem.parent();
         debug!("{desc} failed with {err} for element {elem:#?} with parent {app:#?}");
