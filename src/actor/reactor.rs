@@ -389,8 +389,15 @@ impl Reactor {
                 // FIXME: Update visible windows if space changed
             }
             Event::SpaceChanged(spaces, ws_info) => {
+                if spaces.len() != self.screens.len() {
+                    warn!(
+                        "Ignoring space change event: we have {} spaces, but {} screens",
+                        spaces.len(),
+                        self.screens.len()
+                    );
+                    return;
+                }
                 info!("space changed");
-                assert_eq!(spaces.len(), self.screens.len());
                 for (space, screen) in spaces.iter().zip(&mut self.screens) {
                     screen.space = *space;
                 }
