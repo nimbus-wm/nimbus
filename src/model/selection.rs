@@ -40,15 +40,23 @@ impl Selection {
         result.filter(|info| !info.stop_here).map(|info| info.selected_child)
     }
 
-    pub(super) fn select_locally(&mut self, map: &NodeMap, node: NodeId) {
+    /// Select the node within its parent.
+    ///
+    /// Returns whether the selection changed.
+    pub(super) fn select_locally(&mut self, map: &NodeMap, node: NodeId) -> bool {
         if let Some(parent) = node.parent(map) {
-            self.nodes.insert(
-                parent,
-                SelectionInfo {
-                    selected_child: node,
-                    stop_here: false,
-                },
-            );
+            self.nodes
+                .insert(
+                    parent,
+                    SelectionInfo {
+                        selected_child: node,
+                        stop_here: false,
+                    },
+                )
+                .map(|info| info.selected_child != node)
+                .unwrap_or(true)
+        } else {
+            false
         }
     }
 

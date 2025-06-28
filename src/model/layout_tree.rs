@@ -251,6 +251,37 @@ impl LayoutTree {
         .last()
     }
 
+    pub fn select_returning_surfaced_windows(&mut self, selection: NodeId) -> Vec<WindowId> {
+        let map = &self.tree.map;
+        let mut highest_revealed = None;
+        for (node, parent) in selection.ancestors_with_parent(map) {
+            let Some(parent) = parent else { continue };
+            if self.tree.data.selection.select_locally(map, node) {
+                if self.layout(parent).is_group() {
+                    highest_revealed = Some(node);
+                }
+            }
+        }
+        let Some(highest) = highest_revealed else {
+            return vec![];
+        };
+        self.visible_windows_under(highest)
+    }
+
+    pub fn visible_windows_under(&self, node: NodeId) -> Vec<WindowId> {
+        let mut stack = vec![node];
+        let mut windows = vec![];
+        while let Some(node) = stack.pop() {
+            if self.layout(node).is_group() {
+                stack.extend(self.tree.data.selection.local_selection(self.map(), node));
+            } else {
+                stack.extend(node.children(self.map()));
+            }
+            windows.extend(self.window_at(node));
+        }
+        windows
+    }
+
     fn move_over(&self, from: NodeId, direction: Direction) -> Option<NodeId> {
         let Some(parent) = from.parent(&self.tree.map) else {
             return None;
@@ -1150,5 +1181,160 @@ mod tests {
                 (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
             ],
         );
+    }
+
+    #[test]
+    fn visible_windows_under_simple() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let _a1 = tree.add_window_under(layout, root, w(1, 1));
+        let _a2 = tree.add_window_under(layout, root, w(1, 2));
+        let _a3 = tree.add_window_under(layout, root, w(1, 3));
+
+        let mut windows = tree.visible_windows_under(root);
+        windows.sort();
+        assert_eq!(windows, vec![w(1, 1), w(1, 2), w(1, 3)]);
+
+        let windows = tree.visible_windows_under(_a1);
+        assert_eq!(windows, vec![w(1, 1)]);
+    }
+
+    #[test]
+    fn visible_windows_under_with_groups() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+
+        let group = tree.add_container(root, LayoutKind::Stacked);
+        let _tab1 = tree.add_window_under(layout, group, w(1, 1));
+        let tab2 = tree.add_window_under(layout, group, w(1, 2));
+        let _tab3 = tree.add_window_under(layout, group, w(1, 3));
+
+        tree.select(tab2);
+
+        // visible_windows_under should only return the selected tab from the group
+        let windows = tree.visible_windows_under(group);
+        assert_eq!(windows, vec![w(1, 2)]);
+
+        // Add another non-group window
+        let _a1 = tree.add_window_under(layout, root, w(2, 1));
+
+        let mut windows = tree.visible_windows_under(root);
+        windows.sort();
+        assert_eq!(windows, vec![w(1, 2), w(2, 1)]);
+    }
+
+    #[test]
+    fn visible_windows_under_nested_groups() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+
+        // Create nested group structure
+        let outer_group = tree.add_container(root, LayoutKind::Stacked);
+        let inner_group = tree.add_container(outer_group, LayoutKind::Tabbed);
+        let tab1 = tree.add_window_under(layout, inner_group, w(1, 1));
+        let _tab2 = tree.add_window_under(layout, inner_group, w(1, 2));
+        let _outer_tab = tree.add_window_under(layout, outer_group, w(2, 1));
+
+        // Select tab1 in inner group - this should set up the selection path so
+        // that outer_group has inner_group selected, and inner_group has tab1
+        // selected.
+        tree.select(tab1);
+
+        let windows = tree.visible_windows_under(outer_group);
+        assert_eq!(windows, vec![w(1, 1)]);
+    }
+
+    #[test]
+    fn select_returning_surfaced_windows_no_groups() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+        let a1 = tree.add_window_under(layout, root, w(1, 1));
+        let a2 = tree.add_window_under(layout, root, w(1, 2));
+
+        // Selecting in a non-group structure should return empty
+        let windows = tree.select_returning_surfaced_windows(a1);
+        assert_eq!(windows, vec![]);
+
+        let windows = tree.select_returning_surfaced_windows(a2);
+        assert_eq!(windows, vec![]);
+    }
+
+    #[test]
+    fn select_returning_surfaced_windows_with_groups() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+
+        let group = tree.add_container(root, LayoutKind::Stacked);
+        let tab1 = tree.add_window_under(layout, group, w(1, 1));
+        let tab2 = tree.add_window_under(layout, group, w(1, 2));
+        let _tab3 = tree.add_window_under(layout, group, w(1, 3));
+        tree.select(tab1);
+
+        // Selecting tab2 should return all visible windows under the group
+        let windows = tree.select_returning_surfaced_windows(tab2);
+        assert_eq!(windows, vec![w(1, 2)]);
+        assert_eq!(tree.selection(layout), tab2);
+    }
+
+    #[test]
+    fn select_returning_surfaced_windows_nested_groups() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+
+        // Create nested structure with groups
+        let container = tree.add_container(root, LayoutKind::Horizontal);
+        let group1 = tree.add_container(container, LayoutKind::Tabbed);
+        let tab1 = tree.add_window_under(layout, group1, w(1, 1));
+        let _tab2 = tree.add_window_under(layout, group1, w(1, 2));
+
+        let group2 = tree.add_container(container, LayoutKind::Stacked);
+        let tab3 = tree.add_container(group2, LayoutKind::Horizontal);
+        let tab3_1 = tree.add_window_under(layout, tab3, w(2, 1));
+        let _tab3_2 = tree.add_window_under(layout, tab3, w(2, 2));
+        let _tab4 = tree.add_window_under(layout, group2, w(2, 3));
+
+        tree.select(tab1);
+
+        // Now select tab3 in group2 - this should reveal the group containing tab3
+        let mut windows = tree.select_returning_surfaced_windows(tab3_1);
+        windows.sort();
+        assert_eq!(windows, vec![w(2, 1), w(2, 2)]);
+        assert_eq!(tree.selection(layout), tab3_1);
+    }
+
+    #[test]
+    fn select_returning_surfaced_windows_highest_group_revealed() {
+        let mut tree = LayoutTree::new();
+        let layout = tree.create_layout();
+        let root = tree.root(layout);
+
+        // Create deeply nested groups
+        let outer_group = tree.add_container(root, LayoutKind::Stacked);
+        let middle_container = tree.add_container(outer_group, LayoutKind::Horizontal);
+        let inner_group = tree.add_container(middle_container, LayoutKind::Stacked);
+        let tab1 = tree.add_window_under(layout, inner_group, w(1, 1));
+        let tab2 = tree.add_window_under(layout, inner_group, w(1, 2));
+        let _other_window = tree.add_window_under(layout, middle_container, w(2, 1));
+        let outer_tab = tree.add_window_under(layout, outer_group, w(3, 1));
+
+        tree.select(tab1);
+
+        // Should surface windows from the inner group since that's the highest
+        // group that changed.
+        let windows = tree.select_returning_surfaced_windows(tab2);
+        assert_eq!(windows, vec![w(1, 2)]);
+
+        tree.select(outer_tab);
+
+        // Should surface any visible windows in middle_container.
+        let mut windows = tree.select_returning_surfaced_windows(tab2);
+        windows.sort();
+        assert_eq!(windows, vec![w(1, 2), w(2, 1)]);
     }
 }

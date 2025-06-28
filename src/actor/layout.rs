@@ -400,21 +400,16 @@ impl LayoutManager {
                 )
             }
             LayoutCommand::MoveFocus(direction) => {
-                let new = self
-                    .tree
-                    .traverse(self.tree.selection(layout), direction)
-                    .or_else(|| {
+                let new_focus =
+                    self.tree.traverse(self.tree.selection(layout), direction).or_else(|| {
                         let layout = self.layout(next_space(direction)?);
                         Some(self.tree.selection(layout))
-                    })
-                    .and_then(|new| self.tree.window_at(new));
-                let Some(new) = new else {
-                    return EventResponse::default();
-                };
-                EventResponse {
-                    focus_window: Some(new),
-                    ..Default::default()
-                }
+                    });
+                let focus_window = new_focus.and_then(|new| self.tree.window_at(new));
+                let raise_windows = new_focus
+                    .map(|new| self.tree.select_returning_surfaced_windows(new))
+                    .unwrap_or_default();
+                EventResponse { focus_window, raise_windows }
             }
             LayoutCommand::Ascend => {
                 self.tree.ascend_selection(layout);
