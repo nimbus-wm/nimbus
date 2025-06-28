@@ -331,13 +331,7 @@ impl LayoutManager {
         if let LayoutCommand::ToggleFocusFloating = &command {
             if is_floating {
                 let selection = self.tree.window_at(self.tree.selection(layout));
-                let tree_windows = self
-                    .tree
-                    .root(layout)
-                    .traverse_postorder(self.tree.map())
-                    .flat_map(|node| self.tree.window_at(node));
-                let mut raise_windows: Vec<_> =
-                    tree_windows.filter(|&wid| Some(wid) != selection).collect();
+                let mut raise_windows = self.tree.visible_windows_under(self.tree.root(layout));
                 // We need to focus some window to transition into floating
                 // mode. If there is no selection, pick a window.
                 let focus_window = selection.or_else(|| raise_windows.pop());
