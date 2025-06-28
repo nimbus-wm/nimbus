@@ -746,7 +746,10 @@ mod tests {
 
         // Toggle back to the tiled windows.
         let response = mgr.handle_command(Some(space), &[space], ToggleFocusFloating);
-        assert_eq!(vec![WindowId::new(pid, 3)], response.raise_windows);
+        assert_eq!(
+            vec![WindowId::new(pid, 3), WindowId::new(pid, 2)],
+            response.raise_windows
+        );
         assert_eq!(Some(WindowId::new(pid, 2)), response.focus_window);
         if let Some(focus) = response.focus_window {
             _ = mgr.handle_event(WindowFocused(vec![space], focus));
@@ -759,7 +762,7 @@ mod tests {
 
         // Toggle back to tiled.
         let response = mgr.handle_command(Some(space), &[space], ToggleFocusFloating);
-        assert!(response.raise_windows.is_empty());
+        assert_eq!(vec![WindowId::new(pid, 3)], response.raise_windows);
         assert_eq!(Some(WindowId::new(pid, 3)), response.focus_window);
         if let Some(focus) = response.focus_window {
             _ = mgr.handle_event(WindowFocused(vec![space], focus));

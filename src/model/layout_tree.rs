@@ -253,19 +253,16 @@ impl LayoutTree {
 
     pub fn select_returning_surfaced_windows(&mut self, selection: NodeId) -> Vec<WindowId> {
         let map = &self.tree.map;
-        let mut highest_revealed = None;
+        let mut highest_revealed = selection;
         for (node, parent) in selection.ancestors_with_parent(map) {
-            let Some(parent) = parent else { continue };
+            let Some(parent) = parent else { break };
             if self.tree.data.selection.select_locally(map, node) {
                 if self.layout(parent).is_group() {
-                    highest_revealed = Some(node);
+                    highest_revealed = node;
                 }
             }
         }
-        let Some(highest) = highest_revealed else {
-            return vec![];
-        };
-        self.visible_windows_under(highest)
+        self.visible_windows_under(highest_revealed)
     }
 
     pub fn visible_windows_under(&self, node: NodeId) -> Vec<WindowId> {
@@ -1255,12 +1252,12 @@ mod tests {
         let a1 = tree.add_window_under(layout, root, w(1, 1));
         let a2 = tree.add_window_under(layout, root, w(1, 2));
 
-        // Selecting in a non-group structure should return empty
+        // Selecting in a non-group structure should return only the selected window.
         let windows = tree.select_returning_surfaced_windows(a1);
-        assert_eq!(windows, vec![]);
+        assert_eq!(windows, vec![w(1, 1)]);
 
         let windows = tree.select_returning_surfaced_windows(a2);
-        assert_eq!(windows, vec![]);
+        assert_eq!(windows, vec![w(1, 2)]);
     }
 
     #[test]
