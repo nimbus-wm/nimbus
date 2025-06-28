@@ -211,7 +211,11 @@ impl RaiseManager {
         let mut pending_raises = HashSet::default();
         let raise_token = CancellationToken::new();
 
-        for wids in raise_windows {
+        for mut wids in raise_windows {
+            wids.retain(|wid| {
+                // Don't raise the focus window twice.
+                !matches!(focus_window, Some((w, _)) if w == *wid)
+            });
             let Some(WindowId { pid, .. }) = wids.first() else {
                 continue;
             };
@@ -228,23 +232,22 @@ impl RaiseManager {
                 ))
                 .is_ok()
             {
-                for wid in wids {
-                    pending_raises.insert(wid);
-                }
+                pending_raises.extend(wids);
             }
         }
 
-        if !pending_raises.is_empty() || focus_window.is_some() {
-            self.active_sequence = Some(ActiveSequence {
-                sequence_id,
-                pending_raises,
-                focus_window,
-                app_handles,
-                raise_token,
-                started_at: Instant::now(),
-                timed_out: false,
-            });
+        if pending_raises.is_empty() && focus_window.is_none() {
+            return;
         }
+        self.active_sequence = Some(ActiveSequence {
+            sequence_id,
+            pending_raises,
+            focus_window,
+            app_handles,
+            raise_token,
+            started_at: Instant::now(),
+            timed_out: false,
+        });
     }
 
     /// Process the active sequence, handling completed raises and focus windows.
@@ -746,7 +749,11 @@ mod tests {
             // Create a raise request with batched windows from the same app
             let batched_windows = vec![
                 vec![WindowId::new(1, 1), WindowId::new(1, 2)], // First batch
-                vec![WindowId::new(1, 3), WindowId::new(1, 4)], // Second batch
+                vec![
+                    WindowId::new(1, 3),
+                    WindowId::new(1, 4),
+                    WindowId::new(1, 5), // same as the focus window
+                ], // Second batch
             ];
             let raise_request = Event::RaiseRequest(RaiseRequest {
                 raise_windows: batched_windows,
@@ -774,6 +781,7 @@ mod tests {
             }
 
             // Verify second batch
+            // The focus_window should have been filtered out.
             if let Request::Raise(wids, _, seq_id, quiet) = &requests[1] {
                 assert_eq!(*wids, vec![WindowId::new(1, 3), WindowId::new(1, 4)]);
                 assert_eq!(*seq_id, 1);
