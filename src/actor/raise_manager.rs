@@ -734,4 +734,79 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn test_concurrent_window_raising_with_batched_windows() {
+        // Test that the raise manager correctly handles batched windows
+        // by sending multiple windows from the same app/screen as a single request
+        Executor::run(async {
+            let mut raise_manager = RaiseManager::new();
+            let (app_handles, mut app_rx) = create_test_app_handles();
+
+            // Create a raise request with batched windows from the same app
+            let batched_windows = vec![
+                vec![WindowId::new(1, 1), WindowId::new(1, 2)], // First batch
+                vec![WindowId::new(1, 3), WindowId::new(1, 4)], // Second batch
+            ];
+            let raise_request = Event::RaiseRequest(RaiseRequest {
+                raise_windows: batched_windows,
+                focus_window: Some((WindowId::new(1, 5), None)),
+                app_handles,
+            });
+
+            // Handle the batched raise request
+            raise_manager.handle_message(raise_request);
+
+            // Verify that both batches were sent as separate requests
+            let requests = collect_requests(&mut app_rx);
+
+            // Should have 2 batch raise requests sent to the app actor (one for each batch)
+            // This verifies that batched windows are sent together rather than individually
+            assert_eq!(requests.len(), 2);
+
+            // Verify first batch
+            if let Request::Raise(wids, _, seq_id, quiet) = &requests[0] {
+                assert_eq!(*wids, vec![WindowId::new(1, 1), WindowId::new(1, 2)]);
+                assert_eq!(*seq_id, 1);
+                assert_eq!(*quiet, Quiet::Yes);
+            } else {
+                panic!("Expected Raise request for first batch");
+            }
+
+            // Verify second batch
+            if let Request::Raise(wids, _, seq_id, quiet) = &requests[1] {
+                assert_eq!(*wids, vec![WindowId::new(1, 3), WindowId::new(1, 4)]);
+                assert_eq!(*seq_id, 1);
+                assert_eq!(*quiet, Quiet::Yes);
+            } else {
+                panic!("Expected Raise request for second batch");
+            }
+
+            // Complete all raises from both batches
+            for wid in [
+                WindowId::new(1, 1),
+                WindowId::new(1, 2),
+                WindowId::new(1, 3),
+                WindowId::new(1, 4),
+            ] {
+                let completion_msg = Event::RaiseCompleted { window_id: wid, sequence_id: 1 };
+                raise_manager.handle_message(completion_msg);
+            }
+
+            // Process the sequence to trigger focus window
+            raise_manager.process_active_sequence();
+
+            // After all batch raises complete, the focus window should be sent as a separate request
+            let focus_requests = collect_requests(&mut app_rx);
+            assert_eq!(focus_requests.len(), 1);
+
+            if let Request::Raise(wids, _, seq_id, quiet) = &focus_requests[0] {
+                assert_eq!(*wids, vec![WindowId::new(1, 5)]);
+                assert_eq!(*seq_id, 1);
+                assert_eq!(*quiet, Quiet::No);
+            } else {
+                panic!("Expected focus window raise request");
+            }
+        });
+    }
 }
