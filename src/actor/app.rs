@@ -101,11 +101,12 @@ pub enum Request {
     /// event are sent immediately upon receiving the request.
     EndWindowAnimation(WindowId),
 
-    /// Raise the windows on the screen, in any order. All windows must be on
-    /// the same screen, or they will not be raised correctly.
+    /// Raise the windows on the screen, in the given order. All windows must be
+    /// on the same screen, or they will not be raised correctly.
     ///
-    /// Events attributed to this request will have the [`Quiet`] parameter
-    /// attached to them.
+    /// Events attributed to this request will use the provided [`Quiet`]
+    /// parameter for the last window only. Events for other windows will be
+    /// marked `Quiet::Yes` automatically.
     Raise(Vec<WindowId>, CancellationToken, u64, Quiet),
 }
 
@@ -577,9 +578,11 @@ impl State {
         // or we may time out waiting for them.
         if !is_frontmost && make_key_result.is_ok() && is_standard {
             let (tx, rx) = oneshot::channel();
-            trace!("Awaiting activation");
-            this.last_activated = Some((Instant::now(), quiet, tx));
+            // `quiet` only applies to the last window.
+            let quiet_activation = if wids.len() == 1 { quiet } else { Quiet::Yes };
+            this.last_activated = Some((Instant::now(), quiet_activation, tx));
             drop(this); // Don't use RefCell across await.
+            trace!("Awaiting activation");
             select! {
                 _ = rx => {}
                 _ = token.cancelled() => {
@@ -612,16 +615,19 @@ impl State {
             this.send_event(Event::RaiseCompleted { window_id: wid, sequence_id });
 
             let is_last = i + 1 == wids.len();
-            if is_last {
+            let quiet_if = if is_last {
                 // At this point we should be able to unlock the mutex and let
                 // another app go. Other apps won't interfere with reading our
                 // main window below, and if another raise request is queued for
                 // this app, it won't be processed until we return.
                 mutex_guard.take();
-            }
+                (quiet == Quiet::Yes).then_some(wid)
+            } else {
+                // `quiet` only applies to the last window.
+                None
+            };
 
             // Observe the main window change and send the event if applicable.
-            let quiet_if = (quiet == Quiet::Yes).then_some(wid);
             let main_window = this.on_main_window_changed(quiet_if);
             if main_window != Some(wid) {
                 warn!(
