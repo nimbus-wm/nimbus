@@ -1,5 +1,5 @@
-# This is the default configuration. Nimbus will load this file if you do not
-# have a .nimbus.toml file in your home directory. You should copy this file
+# This is the default configuration. Glide will load this file if you do not
+# have a .glide.toml file in your home directory. You should copy this file
 # to $HOME and modify it to suit your needs.
 
 [settings]
@@ -24,7 +24,7 @@ mouse_hides_on_focus = true
 [keys]
 # Modifier and key names must be capitalized.
 
-# Toggle whether the current space is managed by Nimbus.
+# Toggle whether the current space is managed by Glide.
 "Alt + Z" = "toggle_space_activated"
 
 # Focus the window in the specified direction.
@@ -75,9 +75,9 @@ mouse_hides_on_focus = true
 #
 
 # Save the current state to the restore file and exit.
-# Restore this with the --restore option when starting nimbus.
+# Restore this with the --restore option when starting glide.
 # Note that the restore file is only useful when upgrading or restarting
-# nimbus itself; it is not valid after the user logs out or restarts.
+# glide itself; it is not valid after the user logs out or restarts.
 "Alt + Shift + E" = "save_and_exit"
 
 # Print the current layout in the logs.

@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
-use nimbus_wm::sys::window_server::{self, WindowServerId};
+use glide_wm::sys::window_server::{self, WindowServerId};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};

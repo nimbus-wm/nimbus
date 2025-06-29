@@ -1,4 +1,4 @@
-//! This tool is used to exercise nimbus and system APIs during development.
+//! This tool is used to exercise glide and system APIs during development.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -16,14 +16,14 @@ use core_graphics::display::{CGDisplayBounds, CGMainDisplayID};
 use core_graphics::window::{
     CGWindowID, CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
 };
+use glide_wm::actor::reactor;
+use glide_wm::sys::app::WindowInfo;
+use glide_wm::sys::event::{self, get_mouse_pos};
+use glide_wm::sys::executor::Executor;
+use glide_wm::sys::screen::{self, ScreenCache};
+use glide_wm::sys::window_server::{self, WindowServerId, get_window};
+use glide_wm::sys::{self};
 use livesplit_hotkey::{ConsumePreference, Modifiers};
-use nimbus_wm::actor::reactor;
-use nimbus_wm::sys::app::WindowInfo;
-use nimbus_wm::sys::event::{self, get_mouse_pos};
-use nimbus_wm::sys::executor::Executor;
-use nimbus_wm::sys::screen::{self, ScreenCache};
-use nimbus_wm::sys::window_server::{self, WindowServerId, get_window};
-use nimbus_wm::sys::{self};
 use objc2_app_kit::{NSScreen, NSWindow, NSWindowNumberListOptions};
 use objc2_foundation::MainThreadMarker;
 use tokio::sync::mpsc::{self, UnboundedReceiver, unbounded_channel};
@@ -115,7 +115,7 @@ enum Mouse {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(nimbus_wm::log::tree_layer())
+        .with(glide_wm::log::tree_layer())
         .with(EnvFilter::from_default_env())
         .init();
     let opt: Opt = Parser::parse();

@@ -667,6 +667,46 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
+name = "glide-wm"
+version = "0.1.0"
+dependencies = [
+ "accessibility",
+ "accessibility-sys",
+ "anyhow",
+ "ascii_tree",
+ "bitflags 2.9.1",
+ "clap",
+ "core-foundation",
+ "core-graphics 0.23.2",
+ "core-graphics-types",
+ "dirs",
+ "livesplit-hotkey",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "pretty_assertions",
+ "rand",
+ "ron",
+ "rustc-hash",
+ "serde",
+ "serde_with",
+ "slotmap",
+ "static_assertions",
+ "tempfile",
+ "test-log",
+ "test_bin",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-timing",
+ "tracing-tree",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -902,46 +942,6 @@ dependencies = [
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "nimbus-wm"
-version = "0.1.0"
-dependencies = [
- "accessibility",
- "accessibility-sys",
- "anyhow",
- "ascii_tree",
- "bitflags 2.9.1",
- "clap",
- "core-foundation",
- "core-graphics 0.23.2",
- "core-graphics-types",
- "dirs",
- "livesplit-hotkey",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-foundation",
- "pretty_assertions",
- "rand",
- "ron",
- "rustc-hash",
- "serde",
- "serde_with",
- "slotmap",
- "static_assertions",
- "tempfile",
- "test-log",
- "test_bin",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tracing-timing",
- "tracing-tree",
 ]
 
 [[package]]

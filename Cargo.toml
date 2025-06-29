@@ -1,12 +1,12 @@
 [package]
-name = "nimbus-wm"
+name = "glide-wm"
 version = "0.1.0"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]]
-name = "nimbus"
+name = "glide"
 test = false
 
 # We don't have a need for unwinding, and aborting means we don't have to worry

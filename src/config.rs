@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::actor::wm_controller::WmCommand;
 
 pub fn data_dir() -> PathBuf {
-    dirs::home_dir().unwrap().join(".nimbus")
+    dirs::home_dir().unwrap().join(".glide")
 }
 
 pub fn restore_file() -> PathBuf {
@@ -19,7 +19,7 @@ pub fn restore_file() -> PathBuf {
 }
 
 pub fn config_file() -> PathBuf {
-    dirs::home_dir().unwrap().join(".nimbus.toml")
+    dirs::home_dir().unwrap().join(".glide.toml")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,7 +66,7 @@ impl Config {
     }
 
     pub fn default() -> Config {
-        Self::parse(include_str!("../nimbus.default.toml")).unwrap()
+        Self::parse(include_str!("../glide.default.toml")).unwrap()
     }
 
     fn parse(buf: &str) -> anyhow::Result<Config> {

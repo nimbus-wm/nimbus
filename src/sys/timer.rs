@@ -10,8 +10,8 @@
 //!
 //! ```rust
 //! use std::time::Duration;
-//! use nimbus_wm::sys::timer::Timer;
-//! use nimbus_wm::sys::executor::Executor;
+//! use glide_wm::sys::timer::Timer;
+//! use glide_wm::sys::executor::Executor;
 //!
 //! Executor::run(async {
 //!     println!("Starting...");
@@ -24,7 +24,7 @@
 //!
 //! ```rust
 //! use std::time::Duration;
-//! use nimbus_wm::sys::timer::Timer;
+//! use glide_wm::sys::timer::Timer;
 //!
 //! async fn with_timeout() {
 //!     let timeout = Timer::sleep(Duration::from_secs(5));
@@ -44,7 +44,7 @@
 //!
 //! ```rust
 //! use std::time::Duration;
-//! use nimbus_wm::sys::timer::Timer;
+//! use glide_wm::sys::timer::Timer;
 //!
 //! async fn monitoring_loop() {
 //!     let mut monitor = Timer::repeating(
@@ -71,7 +71,7 @@
 //!
 //! ```rust
 //! use std::time::Duration;
-//! use nimbus_wm::sys::timer::Timer;
+//! use glide_wm::sys::timer::Timer;
 //!
 //! async fn cancellable_operation() {
 //!     let timer = Timer::sleep(Duration::from_secs(10));
@@ -115,7 +115,7 @@ use tokio_stream::Stream;
 ///
 /// ```rust
 /// use std::time::Duration;
-/// use nimbus_wm::sys::timer::Timer;
+/// use glide_wm::sys::timer::Timer;
 ///
 /// async fn example() {
 ///     // Simple delay

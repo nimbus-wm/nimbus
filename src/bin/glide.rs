@@ -2,14 +2,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use nimbus_wm::actor::layout::LayoutManager;
-use nimbus_wm::actor::mouse::{self, Mouse};
-use nimbus_wm::actor::notification_center::NotificationCenter;
-use nimbus_wm::actor::reactor::{self, Reactor};
-use nimbus_wm::actor::wm_controller::{self, WmController};
-use nimbus_wm::config::{Config, config_file, restore_file};
-use nimbus_wm::log;
-use nimbus_wm::sys::executor::Executor;
+use glide_wm::actor::layout::LayoutManager;
+use glide_wm::actor::mouse::{self, Mouse};
+use glide_wm::actor::notification_center::NotificationCenter;
+use glide_wm::actor::reactor::{self, Reactor};
+use glide_wm::actor::wm_controller::{self, WmController};
+use glide_wm::config::{Config, config_file, restore_file};
+use glide_wm::log;
+use glide_wm::sys::executor::Executor;
 use tokio::join;
 
 #[derive(Parser)]
