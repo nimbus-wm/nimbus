@@ -16,14 +16,13 @@ pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
-use super::mouse;
 use crate::actor::app::AppInfo;
-use crate::actor::{self, reactor};
+use crate::actor::{self, mouse, reactor};
 use crate::collections::HashSet;
+use crate::sys;
 use crate::sys::event::HotkeyManager;
 use crate::sys::screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId};
 use crate::sys::window_server::WindowServerInfo;
-use crate::sys::{self};
 
 #[derive(Debug)]
 pub enum WmEvent {
@@ -159,7 +158,7 @@ impl WmController {
                 ));
                 _ = self.mouse_tx.send((
                     Span::current(),
-                    mouse::Request::ScreenParametersChanged(converter),
+                    mouse::Request::ScreenParametersChanged(frames, converter),
                 ));
             }
             SpaceChanged(mut spaces) => {

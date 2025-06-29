@@ -8,14 +8,14 @@ use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
 };
-use objc2_core_foundation::CGPoint;
+use objc2_core_foundation::{CGPoint, CGRect};
 use objc2_foundation::{MainThreadMarker, NSInteger};
 use tracing::{Span, debug, error, trace, warn};
 
 use super::reactor::{self, Event};
 use crate::config::Config;
 use crate::sys::event;
-use crate::sys::geometry::ToICrate;
+use crate::sys::geometry::{CGRectExt, ToICrate};
 use crate::sys::screen::CoordinateConverter;
 use crate::sys::window_server::{self, WindowServerId, get_window};
 
@@ -26,7 +26,7 @@ pub enum Request {
     /// application changes. WmController sends us this request when that
     /// happens, so we can re-hide the mouse if it is supposed to be hidden.
     EnforceHidden,
-    ScreenParametersChanged(CoordinateConverter),
+    ScreenParametersChanged(Vec<CGRect>, CoordinateConverter),
 }
 
 pub struct Mouse {
@@ -42,6 +42,7 @@ struct State {
     above_window: Option<WindowServerId>,
     above_window_level: NSWindowLevel,
     converter: CoordinateConverter,
+    screens: Vec<CGRect>,
 }
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, Request)>;
@@ -133,7 +134,10 @@ impl Mouse {
                     }
                 }
             }
-            Request::ScreenParametersChanged(converter) => state.converter = converter,
+            Request::ScreenParametersChanged(frames, converter) => {
+                state.screens = frames;
+                state.converter = converter;
+            }
         }
     }
 
@@ -174,26 +178,37 @@ impl State {
         if self.above_window == new_window {
             return None;
         }
+        debug!("Mouse is now above window {new_window:?} at {loc:?}");
 
-        debug!("Mouse is now above window {new_window:?}");
+        // There is a gap between the menu bar and the actual menu pop-ups when
+        // a menu is opened. When the mouse goes over this gap, the system
+        // reports it to be over whatever window happens to be below the menu
+        // bar and behind the pop-up. Ignore anything in this gap so we don't
+        // dismiss the pop-up. Strangely, it only seems to happen when the mouse
+        // travels down from the menu bar and not when it travels back up.
+        // First observed on 13.5.2.
+        if self.above_window_level == NSMainMenuWindowLevel {
+            const WITHIN: f64 = 1.0;
+            for screen in &self.screens {
+                // The menu bar is just above the frame of the screen.
+                if screen.contains(CGPoint::new(loc.x, loc.y + WITHIN))
+                    && loc.y < screen.min().y + WITHIN
+                {
+                    return None;
+                }
+            }
+        }
+
         let old_window = replace(&mut self.above_window, new_window);
         let new_window_level = new_window
             .and_then(|id| trace_misc("get_window", || get_window(id)))
             .map(|info| info.layer as NSWindowLevel)
             .unwrap_or(NSWindowLevel::MIN);
         let old_window_level = replace(&mut self.above_window_level, new_window_level);
-
         debug!(?old_window, ?old_window_level, ?new_window, ?new_window_level);
 
         // Don't dismiss popups when the mouse moves off them.
-        //
-        // The only reason this is NSMainMenuWindowLevel and not
-        // NSPopUpMenuWindowLevel is that there seems to be a gap between the
-        // menu bar and the actual menu pop-ups when a menu is opened. When the
-        // mouse goes over this gap, the system reports it to be over whatever
-        // window happens to be below the menu bar and behind the pop-up, and so
-        // we would dismiss the pop-up. First observed on 13.5.2.
-        if old_window_level >= NSMainMenuWindowLevel {
+        if old_window_level >= NSPopUpMenuWindowLevel {
             return None;
         }
 
