@@ -5,6 +5,8 @@ import catppuccin from "@catppuccin/starlight";
 
 // https://astro.build/config
 export default defineConfig({
+  site: "https://glide-wm.github.io",
+  base: "glide",
   integrations: [
     starlight({
       title: "glide",
