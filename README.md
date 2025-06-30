@@ -1,3 +1,4 @@
+<!-- GUIDE_EXCLUDE_START -->
 [![GHA Status]][GitHub Actions]
 
 # Glide
@@ -8,6 +9,7 @@ managers like i3, Sway, and Hyprland.
 #### Status
 
 Glide is in early development and is not recommended for use.
+<!-- GUIDE_EXCLUDE_END -->
 
 ## Quick start
 
@@ -35,6 +37,7 @@ cargo run --release -- --restore
 
 Note that this does not work across machine restarts.
 
+<!-- GUIDE_EXCLUDE_START -->
 #### License and usage notes
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
@@ -42,3 +45,4 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 
 [GitHub Actions]: https://github.com/glide-wm/glide/actions
 [GHA Status]: https://github.com/glide-wm/glide/actions/workflows/rust.yml/badge.svg
+<!-- GUIDE_EXCLUDE_END -->
