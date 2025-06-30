@@ -18,7 +18,15 @@ export default defineConfig({
           href: "https://github.com/glide-wm/glide",
         },
       ],
-      plugins: [catppuccin()],
+      editLink: {
+        baseUrl: "https://github.com/glide-wm/glide/edit/main/site/",
+      },
+      plugins: [
+        catppuccin({
+          dark: { accent: "lavender" },
+          light: { accent: "blue" },
+        }),
+      ],
       sidebar: [
         {
           label: "Guides",
