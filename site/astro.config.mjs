@@ -11,6 +11,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "glide",
+      logo: {
+        light: "./src/assets/parachute.svg",
+        dark: "./src/assets/parachute-dark.svg",
+        alt: "glide logo",
+      },
       social: [
         {
           icon: "github",
@@ -23,7 +28,7 @@ export default defineConfig({
       },
       plugins: [
         catppuccin({
-          dark: { accent: "lavender" },
+          dark: { accent: "blue" },
           light: { accent: "blue" },
         }),
       ],
