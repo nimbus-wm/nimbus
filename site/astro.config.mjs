@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import catppuccin from "@catppuccin/starlight";
+import { remarkReadmeImport } from "./src/plugins/remark-readme-import.ts";
 
 // https://astro.build/config
 export default defineConfig({
@@ -23,6 +24,7 @@ export default defineConfig({
           label: "Guides",
           items: [
             // Each item here is one entry in the navigation menu.
+            { label: "Getting Started", slug: "guides/getting-started" },
             { label: "Example Guide", slug: "guides/example" },
           ],
         },
@@ -33,4 +35,9 @@ export default defineConfig({
       ],
     }),
   ],
+  markdown: {
+    remarkPlugins: [
+      [remarkReadmeImport, { githubUrl: "https://github.com/glide-wm/glide" }],
+    ],
+  },
 });
