@@ -28,7 +28,7 @@ export default defineConfig({
       },
       plugins: [
         catppuccin({
-          dark: { accent: "blue" },
+          dark: { accent: "lavender" },
           light: { accent: "blue" },
         }),
       ],
