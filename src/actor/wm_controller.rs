@@ -10,7 +10,7 @@ use objc2_app_kit::NSScreen;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
-use tracing::{Span, debug, instrument};
+use tracing::{Span, debug, instrument, warn};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
@@ -188,6 +188,9 @@ impl WmController {
 
     fn new_app(&mut self, pid: pid_t, info: AppInfo) {
         if info.bundle_id.as_deref() == Some("com.apple.loginwindow") {
+            if let Some(prev) = self.login_window_pid {
+                warn!("Multiple loginwindow instances found: {prev:?} and {pid:?}");
+            }
             self.login_window_pid = Some(pid);
         }
         actor::app::spawn_app_thread(pid, info, self.events_tx.clone());
