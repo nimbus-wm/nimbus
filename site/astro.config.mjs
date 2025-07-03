@@ -32,6 +32,7 @@ export default defineConfig({
           light: { accent: "blue" },
         }),
       ],
+      customCss: ["./src/style.css"],
       sidebar: [
         {
           label: "Guides",
