@@ -1,7 +1,7 @@
 :root {
     /* Make the logo bigger and closer to the title. */
     --sl-nav-pad-y: 0.4rem;
-    --sl-nav-gap: 0.75rem;
+    --sl-nav-gap: 0.6rem;
 }
 
 :root[data-theme="light"] {
@@ -10,8 +10,7 @@
 }
 
 .site-title {
-    /* Monospace, less colorful title. */
-    font-size: var(--sl-text-2xl);
-    font-family: var(--__sl-font-mono);
+    /* Bigger, less colorful title. */
+    font-size: var(--sl-text-3xl);
     color: var(--sl-color-white);
 }
