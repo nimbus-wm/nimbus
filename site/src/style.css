@@ -1,0 +1,6 @@
+:root {
+    /* Make the logo bigger. */
+    --sl-nav-pad-y: 0.4rem;
+
+    --sl-color-text-accent: hsl(214 100% 60% / 1);
+}
