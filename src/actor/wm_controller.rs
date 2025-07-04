@@ -10,7 +10,7 @@ use objc2_app_kit::NSScreen;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
-use tracing::{Span, debug, instrument, warn};
+use tracing::{Span, debug, info, instrument, trace, warn};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
@@ -75,6 +75,7 @@ pub struct WmController {
     disabled_spaces: HashSet<SpaceId>,
     enabled_spaces: HashSet<SpaceId>,
     login_window_pid: Option<pid_t>,
+    login_window_active: bool,
     hotkeys: Option<HotkeyManager>,
     mtm: MainThreadMarker,
 }
@@ -98,6 +99,7 @@ impl WmController {
             disabled_spaces: HashSet::default(),
             enabled_spaces: HashSet::default(),
             login_window_pid: None,
+            login_window_active: false,
             hotkeys: None,
             mtm: MainThreadMarker::new().unwrap(),
         };
@@ -131,29 +133,34 @@ impl WmController {
             AppGloballyActivated(pid) => {
                 // Make sure the mouse cursor stays hidden after app switch.
                 _ = self.mouse_tx.send((Span::current(), mouse::Request::EnforceHidden));
+                if self.login_window_pid == Some(pid) {
+                    // While the login screen is active AX APIs do not work.
+                    // Disable all spaces to prevent errors.
+                    info!("Login window activated");
+                    self.login_window_active = true;
+                    self.send_event(Event::SpaceChanged(self.active_spaces(), self.get_windows()));
+                }
                 self.send_event(Event::ApplicationGloballyActivated(pid));
             }
             AppGloballyDeactivated(pid) => {
-                self.send_event(Event::ApplicationGloballyDeactivated(pid));
                 if self.login_window_pid == Some(pid) {
-                    // While the login screen is active AX APIs do not work.
-                    // When it's dismissed, simulate a space change to update
+                    // Re-enable spaces; this also causes the reactor to update
                     // the set of visible windows on screen and their positions.
-                    let mut spaces = self.cur_space.clone();
-                    self.apply_space_activation(&mut spaces);
-                    self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+                    info!("Login window deactivated");
+                    self.login_window_active = false;
+                    self.send_event(Event::SpaceChanged(self.active_spaces(), self.get_windows()));
                 }
+                self.send_event(Event::ApplicationGloballyDeactivated(pid));
             }
             AppTerminated(pid) => {
                 self.send_event(Event::ApplicationTerminated(pid));
             }
-            ScreenParametersChanged(frames, ids, converter, mut spaces) => {
+            ScreenParametersChanged(frames, ids, converter, spaces) => {
                 self.cur_screen_id = ids;
-                self.handle_space_changed(&spaces);
-                self.apply_space_activation(&mut spaces);
+                self.handle_space_changed(spaces);
                 self.send_event(Event::ScreenParametersChanged(
                     frames.clone(),
-                    spaces,
+                    self.active_spaces(),
                     self.get_windows(),
                 ));
                 _ = self.mouse_tx.send((
@@ -161,10 +168,9 @@ impl WmController {
                     mouse::Request::ScreenParametersChanged(frames, converter),
                 ));
             }
-            SpaceChanged(mut spaces) => {
-                self.handle_space_changed(&spaces);
-                self.apply_space_activation(&mut spaces);
-                self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+            SpaceChanged(spaces) => {
+                self.handle_space_changed(spaces);
+                self.send_event(Event::SpaceChanged(self.active_spaces(), self.get_windows()));
             }
             Command(Wm(ToggleSpaceActivated)) => {
                 let Some(space) = self.get_focused_space() else { return };
@@ -176,9 +182,7 @@ impl WmController {
                 if !toggle_set.remove(&space) {
                     toggle_set.insert(space);
                 }
-                let mut spaces = self.cur_space.clone();
-                self.apply_space_activation(&mut spaces);
-                self.send_event(Event::SpaceChanged(spaces, self.get_windows()));
+                self.send_event(Event::SpaceChanged(self.active_spaces(), self.get_windows()));
             }
             Command(ReactorCommand(cmd)) => {
                 self.send_event(Event::Command(cmd));
@@ -203,9 +207,11 @@ impl WmController {
         *self.cur_screen_id.iter().zip(&self.cur_space).find(|(id, _)| **id == number)?.1
     }
 
-    fn handle_space_changed(&mut self, spaces: &[Option<SpaceId>]) {
-        self.cur_space = spaces.iter().copied().collect();
-        let Some(&Some(space)) = spaces.first() else { return };
+    fn handle_space_changed(&mut self, spaces: Vec<Option<SpaceId>>) {
+        self.cur_space = spaces;
+        let Some(&Some(space)) = self.cur_space.first() else {
+            return;
+        };
         if self.starting_space.is_none() {
             self.starting_space = Some(space);
             self.register_hotkeys();
@@ -218,9 +224,11 @@ impl WmController {
         }
     }
 
-    fn apply_space_activation(&self, spaces: &mut [Option<SpaceId>]) {
-        for space in spaces {
+    fn active_spaces(&self) -> Vec<Option<SpaceId>> {
+        let mut spaces = self.cur_space.clone();
+        for space in &mut spaces {
             let enabled = match space {
+                _ if self.login_window_active => false,
                 Some(_) if self.config.one_space && *space != self.starting_space => false,
                 Some(sp) if self.disabled_spaces.contains(sp) => false,
                 Some(sp) if self.enabled_spaces.contains(sp) => true,
@@ -231,9 +239,11 @@ impl WmController {
                 *space = None;
             }
         }
+        spaces
     }
 
     fn send_event(&mut self, event: reactor::Event) {
+        trace!(?event, "Sending event");
         _ = self.events_tx.send((Span::current().clone(), event));
     }
 
