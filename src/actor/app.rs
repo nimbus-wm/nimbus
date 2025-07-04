@@ -143,6 +143,7 @@ struct State {
 
 struct WindowState {
     elem: AXUIElement,
+    is_standard: bool,
     last_seen_txid: TransactionId,
 }
 
@@ -395,7 +396,7 @@ impl State {
                 self.stop_notifications_for_animation(&window.elem);
             }
             &mut Request::EndWindowAnimation(wid) => {
-                let &WindowState { ref elem, last_seen_txid } = self.window(wid)?;
+                let &WindowState { ref elem, last_seen_txid, .. } = self.window(wid)?;
                 self.restart_notifications_after_animation(elem);
                 let frame = trace("frame", elem, || elem.frame())?;
                 self.send_event(Event::WindowFrameChanged(
@@ -642,10 +643,22 @@ impl State {
             // Observe the main window change and send the event if applicable.
             let main_window = this.on_main_window_changed(quiet_if);
             if main_window != Some(wid) {
-                warn!(
-                    "Raise request failed to raise {desired:?}; instead got main_window={main_window:?}",
-                    desired = this.window(wid).map(|w| &w.elem).ok(),
-                );
+                let desired = this.window(wid).map(|w| &w.elem).ok();
+                if let Some(id) = main_window
+                    && let Ok(window) = this.window(id)
+                    && !window.is_standard
+                {
+                    // For non-standard windows we normally suppress this log.
+                    debug!(
+                        "Raise request failed to raise {desired:?} (non-standard); \
+                        instead got main_window={main_window:?}",
+                    );
+                } else {
+                    warn!(
+                        "Raise request failed to raise {desired:?}; \
+                        instead got main_window={main_window:?}",
+                    );
+                };
             }
         }
 
@@ -796,6 +809,7 @@ impl State {
             WindowState {
                 elem,
                 last_seen_txid: TransactionId::default(),
+                is_standard: info.is_standard,
             },
         );
         assert!(old.is_none(), "Duplicate window id {wid:?}");
