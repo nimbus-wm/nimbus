@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use accessibility::{AXAttribute, AXUIElement, AXUIElementActions, AXUIElementAttributes};
 use accessibility_sys::{
     kAXApplicationActivatedNotification, kAXApplicationDeactivatedNotification,
-    kAXMainWindowChangedNotification, kAXStandardWindowSubrole, kAXTitleChangedNotification,
-    kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
+    kAXErrorCannotComplete, kAXMainWindowChangedNotification, kAXStandardWindowSubrole,
+    kAXTitleChangedNotification, kAXUIElementDestroyedNotification, kAXWindowCreatedNotification,
     kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
     kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowRole,
 };
@@ -129,7 +129,6 @@ pub fn spawn_app_thread(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
 struct State {
     pid: pid_t,
     bundle_id: Option<String>,
-    #[expect(dead_code, reason = "unused for now")]
     running_app: Retained<NSRunningApplication>,
     app: AXUIElement,
     observer: Observer,
@@ -211,8 +210,21 @@ impl State {
                     match this.handle_request(&mut request) {
                         Ok(should_terminate) if should_terminate => break,
                         Ok(_) => (),
+                        #[allow(non_upper_case_globals)]
+                        Err(accessibility::Error::Ax(kAXErrorCannotComplete))
+                            // SAFETY: NSRunningApplication is thread-safe.
+                            if unsafe { this.running_app.isTerminated() } =>
+                        {
+                            // The app does not appear to be running anymore.
+                            // Normally this would be noticed by notification_center,
+                            // but the notification doesn't always happen.
+                            warn!(?this.bundle_id, ?this.pid, "Application terminated without notification");
+                            // End the thread immediately so we don't keep logging errors.
+                            this.send_event(Event::ApplicationThreadTerminated(this.pid));
+                            break;
+                        }
                         Err(err) => {
-                            error!(?this.bundle_id, ?this.pid, ?request, "Error handling request: {err}");
+                            warn!(?this.bundle_id, ?this.pid, ?request, "Error handling request: {err}");
                         }
                     }
                 }
