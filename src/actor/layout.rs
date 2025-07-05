@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use objc2_core_foundation::{CGRect, CGSize};
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::actor::app::{WindowId, pid_t};
-use crate::collections::hash_map::Entry;
 use crate::collections::{BTreeExt, BTreeSet, HashMap, HashSet};
-use crate::model::{ContainerKind, Direction, LayoutId, LayoutTree, Orientation};
+use crate::model::{
+    ContainerKind, Direction, LayoutId, LayoutTree, Orientation, SpaceLayoutMapping,
+};
 use crate::sys::screen::SpaceId;
 
 #[allow(dead_code)]
@@ -72,7 +73,7 @@ pub struct EventResponse {
 #[derive(Serialize, Deserialize)]
 pub struct LayoutManager {
     tree: LayoutTree,
-    space_layouts: HashMap<SpaceId, SpaceLayoutInfo>,
+    layout_mapping: HashMap<SpaceId, SpaceLayoutMapping>,
     floating_windows: BTreeSet<WindowId>,
     #[serde(skip)]
     active_floating_windows: HashMap<SpaceId, HashMap<pid_t, HashSet<WindowId>>>,
@@ -81,49 +82,11 @@ pub struct LayoutManager {
     last_floating_focus: Option<WindowId>,
 }
 
-/// The set of layouts for a given space, keyed by screen size.
-///
-/// These layouts all track approximately the same windows, but we save one per
-/// screen size so that users can change how their windows are laid out in
-/// different configurations.
-///
-/// To keep the number of configurations manageable, we only save a unique
-/// layout for a screen size if it was modified by user commands under that
-/// screen size.
-#[derive(Serialize, Deserialize, Debug)]
-struct SpaceLayoutInfo {
-    configurations: HashMap<Size, LayoutId>,
-    active_size: Size,
-    /// The last layout for this space that has had any structural changes made.
-    last_saved: Option<LayoutId>,
-}
-
-impl SpaceLayoutInfo {
-    fn active(&self) -> Option<LayoutId> {
-        self.configurations.get(&self.active_size).copied()
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Debug)]
-struct Size {
-    width: i32,
-    height: i32,
-}
-
-impl From<CGSize> for Size {
-    fn from(value: CGSize) -> Self {
-        Self {
-            width: value.width.round() as i32,
-            height: value.height.round() as i32,
-        }
-    }
-}
-
 impl LayoutManager {
     pub fn new() -> Self {
         LayoutManager {
             tree: LayoutTree::new(),
-            space_layouts: Default::default(),
+            layout_mapping: Default::default(),
             floating_windows: Default::default(),
             active_floating_windows: Default::default(),
             focused_window: None,
@@ -136,7 +99,7 @@ impl LayoutManager {
     }
 
     pub fn debug_tree_desc(&self, space: SpaceId, desc: &'static str, print: bool) {
-        if let Some(layout) = self.space_layouts.get(&space).and_then(|l| l.active()) {
+        if let Some(layout) = self.try_layout(space) {
             if print {
                 println!("Tree {desc}\n{}", self.tree.draw_tree(layout).trim());
             } else {
@@ -152,49 +115,10 @@ impl LayoutManager {
         match event {
             LayoutEvent::SpaceExposed(space, size) => {
                 self.debug_tree(space);
-                debug!(space_layout = ?self.space_layouts.entry(space));
-                let size = size.into();
-                let (space_layout, mut unchanged) = match self.space_layouts.entry(space) {
-                    Entry::Vacant(entry) => {
-                        let info = entry.insert(SpaceLayoutInfo {
-                            active_size: size,
-                            configurations: Default::default(),
-                            last_saved: None,
-                        });
-                        (info, None)
-                    }
-                    Entry::Occupied(entry) => {
-                        // Clear the active layout if it was not changed.
-                        let info = entry.into_mut();
-                        let mut unchanged = None;
-                        if info.active() != info.last_saved {
-                            unchanged = info.configurations.remove(&info.active_size);
-                        }
-                        info.active_size = size;
-                        (info, unchanged)
-                    }
-                };
-                let layout = match space_layout.configurations.entry(size) {
-                    Entry::Vacant(entry) => *entry.insert(if let Some(source) = unchanged.take() {
-                        debug!("Reusing unchanged layout {source:?}");
-                        source
-                    } else if let Some(source) = space_layout.last_saved {
-                        debug!("Cloning layout {source:?}");
-                        self.tree.clone_layout(source)
-                    } else {
-                        debug!("Creating new layout");
-                        self.tree.create_layout()
-                    }),
-                    Entry::Occupied(entry) => {
-                        // Mark the preexisting entry as used.
-                        space_layout.last_saved = Some(*entry.get());
-                        *entry.get()
-                    }
-                };
-                if let Some(removed) = unchanged {
-                    self.tree.remove_layout(removed);
-                }
-                debug!("Using layout {layout:?} on space {space:?}");
+                self.layout_mapping
+                    .entry(space)
+                    .or_insert_with(|| SpaceLayoutMapping::new(size))
+                    .create_or_activate_layout(size, &mut self.tree);
             }
             LayoutEvent::WindowsOnScreenUpdated(space, pid, mut windows) => {
                 self.debug_tree(space);
@@ -325,8 +249,20 @@ impl LayoutManager {
         let Some(space) = space else {
             return EventResponse::default();
         };
-        let space_layout = self.space_layouts.get_mut(&space).unwrap();
-        let layout = space_layout.active().unwrap();
+        let Some(mapping) = self.layout_mapping.get_mut(&space) else {
+            error!(
+                ?command, ?self.layout_mapping,
+                "Could not find layout mapping for current space");
+            return EventResponse::default();
+        };
+        let Some(layout) = mapping.active_layout() else {
+            error!(
+                ?command,
+                ?mapping,
+                "Could not find active layout for current space"
+            );
+            return EventResponse::default();
+        };
 
         if let LayoutCommand::ToggleFocusFloating = &command {
             if is_floating {
@@ -414,7 +350,7 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
-                space_layout.last_saved.replace(layout);
+                mapping.mark_changed();
                 let selection = self.tree.selection(layout);
                 if !self.tree.move_node(layout, selection, direction) {
                     if let Some(new_space) = next_space(direction) {
@@ -432,14 +368,14 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
-                space_layout.last_saved.replace(layout);
+                mapping.mark_changed();
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     self.tree.set_container_kind(parent, ContainerKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
-                space_layout.last_saved.replace(layout);
+                mapping.mark_changed();
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     if self.tree.container_kind(parent).is_group() {
                         self.tree.set_container_kind(
@@ -478,8 +414,12 @@ impl LayoutManager {
         self.tree.calculate_layout(layout, screen)
     }
 
+    fn try_layout(&self, space: SpaceId) -> Option<LayoutId> {
+        self.layout_mapping.get(&space).and_then(|m| m.active_layout())
+    }
+
     fn layout(&self, space: SpaceId) -> LayoutId {
-        self.space_layouts[&space].active().unwrap()
+        self.try_layout(space).unwrap()
     }
 
     pub fn load(path: PathBuf) -> anyhow::Result<Self> {
