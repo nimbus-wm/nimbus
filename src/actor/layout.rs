@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::actor::app::{WindowId, pid_t};
 use crate::collections::hash_map::Entry;
 use crate::collections::{BTreeExt, BTreeSet, HashMap, HashSet};
-use crate::model::{Direction, LayoutId, LayoutKind, LayoutTree, Orientation};
+use crate::model::{ContainerKind, Direction, LayoutId, LayoutTree, Orientation};
 use crate::sys::screen::SpaceId;
 
 #[allow(dead_code)]
@@ -428,21 +428,24 @@ impl LayoutManager {
                 // Don't mark as written yet, since merely splitting doesn't
                 // usually have a visible effect.
                 let selection = self.tree.selection(layout);
-                self.tree.nest_in_container(layout, selection, LayoutKind::from(orientation));
+                self.tree.nest_in_container(layout, selection, ContainerKind::from(orientation));
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
                 space_layout.last_saved.replace(layout);
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
-                    self.tree.set_layout(parent, LayoutKind::group(orientation));
+                    self.tree.set_container_kind(parent, ContainerKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
                 space_layout.last_saved.replace(layout);
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
-                    if self.tree.layout(parent).is_group() {
-                        self.tree.set_layout(parent, self.tree.last_ungrouped_layout(parent))
+                    if self.tree.container_kind(parent).is_group() {
+                        self.tree.set_container_kind(
+                            parent,
+                            self.tree.last_ungrouped_container_kind(parent),
+                        )
                     }
                 }
                 EventResponse::default()

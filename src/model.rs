@@ -1,12 +1,11 @@
-//! This module defines the [`Tree`][tree::Tree] data structure, on which all
-//! layout logic is defined.
+//! This module defines the [`LayoutTree`][layout_tree::LayoutTree] data
+//! structure, on which all layout logic is defined.
 
-mod layout;
 mod layout_tree;
 mod selection;
+mod size;
 mod tree;
 mod window;
 
-#[allow(unused_imports)]
-pub use layout::{Direction, LayoutKind, Orientation};
 pub use layout_tree::{LayoutId, LayoutTree};
+pub use size::{ContainerKind, Direction, Orientation};

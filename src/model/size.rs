@@ -10,14 +10,14 @@ use crate::actor::app::WindowId;
 use crate::sys::geometry::Round;
 
 #[derive(Default, Serialize, Deserialize)]
-pub struct Layout {
+pub struct Size {
     info: slotmap::SecondaryMap<NodeId, LayoutInfo>,
 }
 
 #[allow(unused)]
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LayoutKind {
+pub enum ContainerKind {
     #[default]
     Horizontal,
     Vertical,
@@ -25,18 +25,18 @@ pub enum LayoutKind {
     Stacked,
 }
 
-impl LayoutKind {
+impl ContainerKind {
     pub fn from(orientation: Orientation) -> Self {
         match orientation {
-            Orientation::Horizontal => LayoutKind::Horizontal,
-            Orientation::Vertical => LayoutKind::Vertical,
+            Orientation::Horizontal => ContainerKind::Horizontal,
+            Orientation::Vertical => ContainerKind::Vertical,
         }
     }
 
     pub fn group(orientation: Orientation) -> Self {
         match orientation {
-            Orientation::Horizontal => LayoutKind::Tabbed,
-            Orientation::Vertical => LayoutKind::Stacked,
+            Orientation::Horizontal => ContainerKind::Tabbed,
+            Orientation::Vertical => ContainerKind::Stacked,
         }
     }
 }
@@ -48,9 +48,9 @@ pub enum Orientation {
     Vertical,
 }
 
-impl LayoutKind {
+impl ContainerKind {
     pub fn orientation(self) -> Orientation {
-        use LayoutKind::*;
+        use ContainerKind::*;
         match self {
             Horizontal | Tabbed => Orientation::Horizontal,
             Vertical | Stacked => Orientation::Vertical,
@@ -58,7 +58,7 @@ impl LayoutKind {
     }
 
     pub fn is_group(self) -> bool {
-        use LayoutKind::*;
+        use ContainerKind::*;
         match self {
             Stacked | Tabbed => true,
             _ => false,
@@ -119,15 +119,15 @@ struct LayoutInfo {
     /// The total size of all children.
     total: f32,
     /// The orientation of this node. Not used for leaf nodes.
-    kind: LayoutKind,
+    kind: ContainerKind,
     /// The last ungrouped layout of this node.
-    last_ungrouped_kind: LayoutKind,
+    last_ungrouped_kind: ContainerKind,
     /// Whether the node is fullscreen.
     #[serde(default)]
     is_fullscreen: bool,
 }
 
-impl Layout {
+impl Size {
     pub(super) fn handle_event(&mut self, map: &NodeMap, event: TreeEvent) {
         match event {
             TreeEvent::AddedToForest(node) => {
@@ -157,18 +157,18 @@ impl Layout {
         self.info[new].size = mem::replace(&mut self.info[old].size, 0.0);
     }
 
-    pub(super) fn set_kind(&mut self, node: NodeId, kind: LayoutKind) {
+    pub(super) fn set_kind(&mut self, node: NodeId, kind: ContainerKind) {
         self.info[node].kind = kind;
         if !kind.is_group() {
             self.info[node].last_ungrouped_kind = kind;
         }
     }
 
-    pub(super) fn kind(&self, node: NodeId) -> LayoutKind {
+    pub(super) fn kind(&self, node: NodeId) -> ContainerKind {
         self.info[node].kind
     }
 
-    pub(super) fn last_ungrouped_kind(&self, node: NodeId) -> LayoutKind {
+    pub(super) fn last_ungrouped_kind(&self, node: NodeId) -> ContainerKind {
         self.info[node].last_ungrouped_kind
     }
 
@@ -240,7 +240,7 @@ impl Layout {
             return;
         }
 
-        use LayoutKind::*;
+        use ContainerKind::*;
         match info.kind {
             Tabbed | Stacked => {
                 for child in node.children(map) {
@@ -305,7 +305,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let _a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(1, 2));
         let _b2 = tree.add_window_under(layout, a2, WindowId::new(1, 3));
         let _a3 = tree.add_window_under(layout, root, WindowId::new(1, 4));

@@ -125,7 +125,7 @@ impl Selection {
 mod tests {
     use crate::actor::app::WindowId;
     use crate::model::Direction;
-    use crate::model::layout::LayoutKind;
+    use crate::model::size::ContainerKind;
     use crate::model::layout_tree::LayoutTree;
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let a2 = tree.add_container(root, ContainerKind::Horizontal);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(1, 2));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(1, 3));
         let _b3 = tree.add_window_under(layout, a2, WindowId::new(1, 4));
@@ -189,7 +189,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let _a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let a2 = tree.add_container(root, ContainerKind::Horizontal);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(1, 2));
         tree.select(b1);
         assert_eq!(tree.selection(layout), b1);

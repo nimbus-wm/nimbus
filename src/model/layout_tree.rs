@@ -4,8 +4,8 @@ use objc2_core_foundation::CGRect;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::layout::{Direction, Layout, LayoutKind};
 use super::selection::Selection;
+use super::size::{ContainerKind, Direction, Size};
 use super::tree::{self, Tree};
 use super::window::Window;
 use crate::actor::app::{WindowId, pid_t};
@@ -180,9 +180,9 @@ impl LayoutTree {
     }
 
     #[allow(dead_code)]
-    pub fn add_container(&mut self, parent: NodeId, kind: LayoutKind) -> NodeId {
+    pub fn add_container(&mut self, parent: NodeId, kind: ContainerKind) -> NodeId {
         let node = self.tree.mk_node().push_back(parent);
-        self.tree.data.layout.set_kind(node, kind);
+        self.tree.data.size.set_kind(node, kind);
         node
     }
 
@@ -213,15 +213,15 @@ impl LayoutTree {
     }
 
     pub fn set_fullscreen(&mut self, node: NodeId, is_fullscreen: bool) {
-        self.tree.data.layout.set_fullscreen(node, is_fullscreen)
+        self.tree.data.size.set_fullscreen(node, is_fullscreen)
     }
 
     pub fn toggle_fullscreen(&mut self, node: NodeId) -> bool {
-        self.tree.data.layout.toggle_fullscreen(node)
+        self.tree.data.size.toggle_fullscreen(node)
     }
 
     pub fn calculate_layout(&self, layout: LayoutId, frame: CGRect) -> Vec<(WindowId, CGRect)> {
-        self.tree.data.layout.get_sizes(
+        self.tree.data.size.get_sizes(
             &self.tree.map,
             &self.tree.data.window,
             self.root(layout),
@@ -239,7 +239,7 @@ impl LayoutTree {
         // Descend as far down as we can go, keeping close to the direction we're
         // moving from.
         iter::successors(node, |&node| {
-            if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
+            if self.tree.data.size.kind(node).orientation() == direction.orientation() {
                 match direction {
                     Direction::Up | Direction::Left => node.last_child(map),
                     Direction::Down | Direction::Right => node.first_child(map),
@@ -257,7 +257,7 @@ impl LayoutTree {
         for (node, parent) in selection.ancestors_with_parent(map) {
             let Some(parent) = parent else { break };
             if self.tree.data.selection.select_locally(map, node) {
-                if self.layout(parent).is_group() {
+                if self.container_kind(parent).is_group() {
                     highest_revealed = node;
                 }
             }
@@ -269,7 +269,7 @@ impl LayoutTree {
         let mut stack = vec![node];
         let mut windows = vec![];
         while let Some(node) = stack.pop() {
-            if self.layout(node).is_group() {
+            if self.container_kind(node).is_group() {
                 stack.extend(self.tree.data.selection.local_selection(self.map(), node));
             } else {
                 stack.extend(node.children(self.map()));
@@ -283,7 +283,7 @@ impl LayoutTree {
         let Some(parent) = from.parent(&self.tree.map) else {
             return None;
         };
-        if self.tree.data.layout.kind(parent).orientation() == direction.orientation() {
+        if self.tree.data.size.kind(parent).orientation() == direction.orientation() {
             match direction {
                 Direction::Up | Direction::Left => from.prev_sibling(&self.tree.map),
                 Direction::Down | Direction::Right => from.next_sibling(&self.tree.map),
@@ -337,7 +337,7 @@ impl LayoutTree {
                 else {
                     break node;
                 };
-                if self.tree.data.layout.kind(node).orientation() == direction.orientation() {
+                if self.tree.data.size.kind(node).orientation() == direction.orientation() {
                     break next;
                 }
                 node = next;
@@ -357,7 +357,7 @@ impl LayoutTree {
                 .skip(1) // We already tried moving at the current level.
                 .skip_while(|(_node, parent)| {
                     parent
-                        .map(|p| self.layout(p).orientation() != direction.orientation())
+                        .map(|p| self.container_kind(p).orientation() != direction.orientation())
                         // If we get all the way to the root, give up and skip it too.
                         .unwrap_or(true)
                 })
@@ -369,13 +369,17 @@ impl LayoutTree {
                 // We went all the way to the root and couldn't move in the
                 // desired direction, so we'll make a new container level above it.
                 let old_root = moving_node.ancestors(map).last().unwrap();
-                if self.tree.data.layout.kind(old_root).orientation() == direction.orientation() {
+                if self.tree.data.size.kind(old_root).orientation() == direction.orientation() {
                     // Arguably it's not that useful to do this in the same direction as the root,
                     // so let's stop here. (This will become a screen move if there are
                     // multiple screens.)
                     return false;
                 }
-                self.nest_in_container(layout, old_root, LayoutKind::from(direction.orientation()));
+                self.nest_in_container(
+                    layout,
+                    old_root,
+                    ContainerKind::from(direction.orientation()),
+                );
                 destination = Destination::Ahead(old_root);
             }
         }
@@ -400,23 +404,23 @@ impl LayoutTree {
         &self.tree.map
     }
 
-    pub fn layout(&self, node: NodeId) -> LayoutKind {
-        self.tree.data.layout.kind(node)
+    pub fn container_kind(&self, node: NodeId) -> ContainerKind {
+        self.tree.data.size.kind(node)
     }
 
-    pub fn last_ungrouped_layout(&self, node: NodeId) -> LayoutKind {
-        self.tree.data.layout.last_ungrouped_kind(node)
+    pub fn last_ungrouped_container_kind(&self, node: NodeId) -> ContainerKind {
+        self.tree.data.size.last_ungrouped_kind(node)
     }
 
-    pub fn set_layout(&mut self, node: NodeId, kind: LayoutKind) {
-        self.tree.data.layout.set_kind(node, kind);
+    pub fn set_container_kind(&mut self, node: NodeId, kind: ContainerKind) {
+        self.tree.data.size.set_kind(node, kind);
     }
 
     pub fn nest_in_container(
         &mut self,
         layout: LayoutId,
         node: NodeId,
-        kind: LayoutKind,
+        kind: ContainerKind,
     ) -> NodeId {
         let old_parent = node.parent(&self.tree.map);
         let parent = if node.prev_sibling(&self.tree.map).is_none()
@@ -429,7 +433,7 @@ impl LayoutTree {
                 let is_selection =
                     self.tree.data.selection.local_selection(self.map(), old_parent) == Some(node);
                 let new_parent = self.tree.mk_node().insert_before(node);
-                self.tree.data.layout.assume_size_of(new_parent, node, &self.tree.map);
+                self.tree.data.size.assume_size_of(new_parent, node, &self.tree.map);
                 node.detach(&mut self.tree).push_back(new_parent);
                 if is_selection {
                     self.tree.data.selection.select_locally(&self.tree.map, new_parent);
@@ -444,7 +448,7 @@ impl LayoutTree {
             self.tree.data.selection.select_locally(&self.tree.map, node);
             new_parent
         };
-        self.tree.data.layout.set_kind(parent, kind);
+        self.tree.data.size.set_kind(parent, kind);
         parent
     }
 
@@ -454,7 +458,7 @@ impl LayoutTree {
             let Some(parent) = node.parent(&self.tree.map) else {
                 return false;
             };
-            !self.tree.data.layout.kind(parent).is_group()
+            !self.tree.data.size.kind(parent).is_group()
                 && self.move_over(node, direction).is_some()
         };
         let Some(resizing_node) = node.ancestors(&self.tree.map).filter(can_resize).next() else {
@@ -467,24 +471,22 @@ impl LayoutTree {
         let exchange_rate = resizing_node.ancestors(&self.tree.map).skip(1).fold(1.0, |r, node| {
             match node.parent(&self.tree.map) {
                 Some(parent)
-                    if self.tree.data.layout.kind(parent).orientation()
+                    if self.tree.data.size.kind(parent).orientation()
                         == direction.orientation()
-                        && !self.tree.data.layout.kind(parent).is_group() =>
+                        && !self.tree.data.size.kind(parent).is_group() =>
                 {
-                    r * self.tree.data.layout.proportion(&self.tree.map, node).unwrap()
+                    r * self.tree.data.size.proportion(&self.tree.map, node).unwrap()
                 }
                 _ => r,
             }
         });
         let local_ratio = f64::from(screen_ratio)
-            * self.tree.data.layout.total(resizing_node.parent(&self.tree.map).unwrap())
+            * self.tree.data.size.total(resizing_node.parent(&self.tree.map).unwrap())
             / exchange_rate;
-        self.tree.data.layout.take_share(
-            &self.tree.map,
-            resizing_node,
-            sibling,
-            local_ratio as f32,
-        );
+        self.tree
+            .data
+            .size
+            .take_share(&self.tree.map, resizing_node, sibling, local_ratio as f32);
 
         true
     }
@@ -558,8 +560,8 @@ impl LayoutTree {
         };
         let desc = format!("{status}{node:?}",);
         let desc = match self.window_at(node) {
-            Some(wid) => format!("{desc} {wid:?} {}", self.tree.data.layout.debug(node, false)),
-            None => format!("{desc} {}", self.tree.data.layout.debug(node, true)),
+            Some(wid) => format!("{desc} {wid:?} {}", self.tree.data.size.debug(node, false)),
+            None => format!("{desc} {}", self.tree.data.size.debug(node, true)),
         };
         let children: Vec<_> =
             node.children(&self.tree.map).map(|c| self.get_ascii_tree(c)).collect();
@@ -580,10 +582,12 @@ impl Drop for LayoutTree {
     }
 }
 
+/// The components of our data model own slices of information attached to every
+/// node.
 #[derive(Default, Serialize, Deserialize)]
 struct Components {
     selection: Selection,
-    layout: Layout,
+    size: Size,
     window: Window,
 }
 
@@ -613,7 +617,7 @@ pub(super) enum TreeEvent {
 impl Components {
     fn dispatch_event(&mut self, map: &NodeMap, event: TreeEvent) {
         self.selection.handle_event(map, event);
-        self.layout.handle_event(map, event);
+        self.size.handle_event(map, event);
         self.window.handle_event(map, event);
     }
 }
@@ -647,7 +651,7 @@ impl tree::Observer for Components {
                 .insert_after(parent)
                 .with(|child_id, tree| {
                     // Assume the size of the parent before culling it.
-                    tree.data.layout.assume_size_of(child_id, parent, &tree.map)
+                    tree.data.size.assume_size_of(child_id, parent, &tree.map)
                 })
                 // Notify that the child was removed; this will cull the parent.
                 .finish();
@@ -680,7 +684,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, w(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let b1 = tree.add_window_under(layout, a2, w(2, 1));
         let b2 = tree.add_window_after(layout, b1, w(2, 2));
         let b3 = tree.add_window_after(layout, b2, w(2, 3));
@@ -725,7 +729,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
         let b3 = tree.add_window_under(layout, a2, WindowId::new(2, 3));
@@ -765,7 +769,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let a2 = tree.add_container(root, ContainerKind::Horizontal);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
         let b3 = tree.add_window_under(layout, a2, WindowId::new(2, 3));
@@ -802,7 +806,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
         let b3 = tree.add_window_under(layout, a2, WindowId::new(2, 3));
@@ -850,7 +854,7 @@ mod tests {
         let (old_root, root) = (root, tree.root(layout));
         tree.assert_children_are([b1, old_root], root);
         tree.assert_children_are([b2, b3, a3, a1], old_root);
-        assert_eq!(LayoutKind::Vertical, tree.layout(root));
+        assert_eq!(ContainerKind::Vertical, tree.container_kind(root));
         assert_eq!(a3, tree.selection(layout));
         assert_eq!(Some(b1), tree.window_node(layout, WindowId::new(2, 1)));
 
@@ -863,7 +867,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Horizontal);
+        let a2 = tree.add_container(root, ContainerKind::Horizontal);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
         let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
@@ -893,7 +897,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
         tree.assert_children_are([a1, a2, a3], root);
@@ -908,7 +912,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let b2 = tree.add_window_under(layout, a2, WindowId::new(2, 2));
         let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
@@ -924,7 +928,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
         let a3 = tree.add_window_under(layout, root, WindowId::new(1, 3));
         tree.assert_children_are([a1, a2, a3], root);
@@ -959,8 +963,8 @@ mod tests {
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
 
         // Calling on only child updates the (root) parent.
-        assert_eq!(root, tree.nest_in_container(layout, a1, LayoutKind::Vertical));
-        assert_eq!(LayoutKind::Vertical, tree.tree.data.layout.kind(root));
+        assert_eq!(root, tree.nest_in_container(layout, a1, ContainerKind::Vertical));
+        assert_eq!(ContainerKind::Vertical, tree.tree.data.size.kind(root));
 
         let a2 = tree.add_window_under(layout, root, WindowId::new(1, 2));
         tree.resize(a2, 0.10, Direction::Up);
@@ -970,13 +974,13 @@ mod tests {
         // To keep the naming scheme consistent, rename the node a1 to b1
         // once it's nested a level deeper.
         tree.select(a1);
-        let (b1, a1) = (a1, tree.nest_in_container(layout, a1, LayoutKind::Horizontal));
+        let (b1, a1) = (a1, tree.nest_in_container(layout, a1, ContainerKind::Horizontal));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b1], a1);
         assert_eq!(b1, tree.selection(layout));
 
         tree.select(a2);
-        let (b2, a2) = (a2, tree.nest_in_container(layout, a2, LayoutKind::Horizontal));
+        let (b2, a2) = (a2, tree.nest_in_container(layout, a2, ContainerKind::Horizontal));
         assert_eq!(b2, tree.selection(layout));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
@@ -987,13 +991,16 @@ mod tests {
         assert_eq!(b2, tree.selection(layout));
 
         // Calling on only child updates the (non-root) parent.
-        assert_eq!(a2, tree.nest_in_container(layout, b2, LayoutKind::Horizontal));
+        assert_eq!(a2, tree.nest_in_container(layout, b2, ContainerKind::Horizontal));
         tree.assert_children_are([a1, a2], root);
         tree.assert_children_are([b2], a2);
         assert_eq!(b2, tree.selection(layout));
 
         // Calling on root works too.
-        let (old_root, root) = (root, tree.nest_in_container(layout, root, LayoutKind::Vertical));
+        let (old_root, root) = (
+            root,
+            tree.nest_in_container(layout, root, ContainerKind::Vertical),
+        );
         tree.assert_children_are([old_root], root);
         tree.assert_children_are([a1, a2], old_root);
         assert_eq!(b2, tree.selection(layout));
@@ -1016,9 +1023,9 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
-        let b2 = tree.add_container(a2, LayoutKind::Horizontal);
+        let b2 = tree.add_container(a2, ContainerKind::Horizontal);
         let _c1 = tree.add_window_under(layout, b2, WindowId::new(3, 1));
         let c2 = tree.add_window_under(layout, b2, WindowId::new(3, 2));
         let _b3 = tree.add_window_under(layout, a2, WindowId::new(2, 3));
@@ -1121,9 +1128,9 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
         let a1 = tree.add_window_under(layout, root, WindowId::new(1, 1));
-        let a2 = tree.add_container(root, LayoutKind::Vertical);
+        let a2 = tree.add_container(root, ContainerKind::Vertical);
         let _b1 = tree.add_window_under(layout, a2, WindowId::new(2, 1));
-        let b2 = tree.add_container(a2, LayoutKind::Horizontal);
+        let b2 = tree.add_container(a2, ContainerKind::Horizontal);
         let c1 = tree.add_window_under(layout, b2, WindowId::new(3, 1));
         let _c2 = tree.add_window_under(layout, b2, WindowId::new(3, 2));
         let _b3 = tree.add_window_under(layout, a2, WindowId::new(2, 3));
@@ -1203,7 +1210,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
 
-        let group = tree.add_container(root, LayoutKind::Stacked);
+        let group = tree.add_container(root, ContainerKind::Stacked);
         let _tab1 = tree.add_window_under(layout, group, w(1, 1));
         let tab2 = tree.add_window_under(layout, group, w(1, 2));
         let _tab3 = tree.add_window_under(layout, group, w(1, 3));
@@ -1229,8 +1236,8 @@ mod tests {
         let root = tree.root(layout);
 
         // Create nested group structure
-        let outer_group = tree.add_container(root, LayoutKind::Stacked);
-        let inner_group = tree.add_container(outer_group, LayoutKind::Tabbed);
+        let outer_group = tree.add_container(root, ContainerKind::Stacked);
+        let inner_group = tree.add_container(outer_group, ContainerKind::Tabbed);
         let tab1 = tree.add_window_under(layout, inner_group, w(1, 1));
         let _tab2 = tree.add_window_under(layout, inner_group, w(1, 2));
         let _outer_tab = tree.add_window_under(layout, outer_group, w(2, 1));
@@ -1266,7 +1273,7 @@ mod tests {
         let layout = tree.create_layout();
         let root = tree.root(layout);
 
-        let group = tree.add_container(root, LayoutKind::Stacked);
+        let group = tree.add_container(root, ContainerKind::Stacked);
         let tab1 = tree.add_window_under(layout, group, w(1, 1));
         let tab2 = tree.add_window_under(layout, group, w(1, 2));
         let _tab3 = tree.add_window_under(layout, group, w(1, 3));
@@ -1285,13 +1292,13 @@ mod tests {
         let root = tree.root(layout);
 
         // Create nested structure with groups
-        let container = tree.add_container(root, LayoutKind::Horizontal);
-        let group1 = tree.add_container(container, LayoutKind::Tabbed);
+        let container = tree.add_container(root, ContainerKind::Horizontal);
+        let group1 = tree.add_container(container, ContainerKind::Tabbed);
         let tab1 = tree.add_window_under(layout, group1, w(1, 1));
         let _tab2 = tree.add_window_under(layout, group1, w(1, 2));
 
-        let group2 = tree.add_container(container, LayoutKind::Stacked);
-        let tab3 = tree.add_container(group2, LayoutKind::Horizontal);
+        let group2 = tree.add_container(container, ContainerKind::Stacked);
+        let tab3 = tree.add_container(group2, ContainerKind::Horizontal);
         let tab3_1 = tree.add_window_under(layout, tab3, w(2, 1));
         let _tab3_2 = tree.add_window_under(layout, tab3, w(2, 2));
         let _tab4 = tree.add_window_under(layout, group2, w(2, 3));
@@ -1312,9 +1319,9 @@ mod tests {
         let root = tree.root(layout);
 
         // Create deeply nested groups
-        let outer_group = tree.add_container(root, LayoutKind::Stacked);
-        let middle_container = tree.add_container(outer_group, LayoutKind::Horizontal);
-        let inner_group = tree.add_container(middle_container, LayoutKind::Stacked);
+        let outer_group = tree.add_container(root, ContainerKind::Stacked);
+        let middle_container = tree.add_container(outer_group, ContainerKind::Horizontal);
+        let inner_group = tree.add_container(middle_container, ContainerKind::Stacked);
         let tab1 = tree.add_window_under(layout, inner_group, w(1, 1));
         let tab2 = tree.add_window_under(layout, inner_group, w(1, 2));
         let _other_window = tree.add_window_under(layout, middle_container, w(2, 1));
