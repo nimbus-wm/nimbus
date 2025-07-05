@@ -30,7 +30,7 @@ use crate::actor::layout::{self, LayoutCommand, LayoutEvent, LayoutManager};
 
 use tokio::sync::mpsc;
 
-use crate::actor::raise_manager::{self, RaiseRequest};
+use crate::actor::raise::{self, RaiseRequest};
 use crate::collections::{HashMap, HashSet};
 use crate::config::Config;
 use crate::log::{self, MetricsCommand};
@@ -160,7 +160,7 @@ pub enum ReactorCommand {
     SaveAndExit,
 }
 
-use crate::actor::raise_manager::RaiseManager;
+use crate::actor::raise::RaiseManager;
 
 pub struct Reactor {
     config: Arc<Config>,
@@ -175,7 +175,7 @@ pub struct Reactor {
     in_drag: bool,
     record: Record,
     mouse_tx: Option<mouse::Sender>,
-    raise_manager_tx: raise_manager::Sender,
+    raise_manager_tx: raise::Sender,
 }
 
 #[derive(Debug)]
@@ -458,11 +458,11 @@ impl Reactor {
                 self.raise_window(wid, Quiet::No, None);
             }
             Event::RaiseCompleted { window_id, sequence_id } => {
-                let msg = raise_manager::Event::RaiseCompleted { window_id, sequence_id };
+                let msg = raise::Event::RaiseCompleted { window_id, sequence_id };
                 _ = self.raise_manager_tx.send((Span::current(), msg));
             }
             Event::RaiseTimeout { sequence_id } => {
-                let msg = raise_manager::Event::RaiseTimeout { sequence_id };
+                let msg = raise::Event::RaiseTimeout { sequence_id };
                 _ = self.raise_manager_tx.send((Span::current(), msg));
             }
             Event::Command(Command::Layout(cmd)) => {
@@ -658,7 +658,7 @@ impl Reactor {
             (wid, warp)
         });
 
-        let msg = raise_manager::Event::RaiseRequest(RaiseRequest {
+        let msg = raise::Event::RaiseRequest(RaiseRequest {
             raise_windows: windows_by_app_and_screen.into_values().collect(),
             focus_window: focus_window_with_warp,
             app_handles,
@@ -675,7 +675,7 @@ impl Reactor {
         }
         _ = self.raise_manager_tx.send((
             Span::current(),
-            raise_manager::Event::RaiseRequest(RaiseRequest {
+            raise::Event::RaiseRequest(RaiseRequest {
                 raise_windows: vec![],
                 focus_window: Some((wid, warp)),
                 app_handles: app_handles,
@@ -1075,7 +1075,7 @@ pub mod tests {
         });
         let msg = raise_manager_rx.try_recv().expect("Should have sent an event").1;
         match msg {
-            raise_manager::Event::RaiseRequest(RaiseRequest {
+            raise::Event::RaiseRequest(RaiseRequest {
                 raise_windows,
                 focus_window,
                 app_handles: _,
@@ -1113,7 +1113,7 @@ pub mod tests {
         });
         let msg = raise_manager_rx.try_recv().expect("Should have sent an event").1;
         match msg {
-            raise_manager::Event::RaiseRequest(RaiseRequest { app_handles, .. }) => {
+            raise::Event::RaiseRequest(RaiseRequest { app_handles, .. }) => {
                 assert!(app_handles.contains_key(&1));
                 assert!(app_handles.contains_key(&2));
             }
