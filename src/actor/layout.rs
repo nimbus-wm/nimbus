@@ -60,6 +60,18 @@ pub struct EventResponse {
     pub focus_window: Option<WindowId>,
 }
 
+impl LayoutCommand {
+    fn modifies_layout(&self) -> bool {
+        use LayoutCommand::*;
+        match self {
+            MoveNode(_) | Group(_) | Ungroup => true,
+
+            NextWindow | PrevWindow | MoveFocus(_) | Ascend | Descend | Split(_)
+            | ToggleFocusFloating | ToggleWindowFloating | ToggleFullscreen => false,
+        }
+    }
+}
+
 /// Actor that manages the layouts for each space.
 ///
 /// The LayoutManager is the event-driven layer that sits between the Reactor
@@ -117,8 +129,8 @@ impl LayoutManager {
                 self.debug_tree(space);
                 self.layout_mapping
                     .entry(space)
-                    .or_insert_with(|| SpaceLayoutMapping::new(size))
-                    .create_or_activate_layout(size, &mut self.tree);
+                    .or_insert_with(|| SpaceLayoutMapping::new(size, &mut self.tree))
+                    .activate_size(size, &mut self.tree);
             }
             LayoutEvent::WindowsOnScreenUpdated(space, pid, mut windows) => {
                 self.debug_tree(space);
@@ -255,14 +267,10 @@ impl LayoutManager {
                 "Could not find layout mapping for current space");
             return EventResponse::default();
         };
-        let Some(layout) = mapping.active_layout() else {
-            error!(
-                ?command,
-                ?mapping,
-                "Could not find active layout for current space"
-            );
-            return EventResponse::default();
-        };
+        if command.modifies_layout() {
+            mapping.prepare_modify(&mut self.tree);
+        }
+        let layout = mapping.active_layout();
 
         if let LayoutCommand::ToggleFocusFloating = &command {
             if is_floating {
@@ -350,7 +358,6 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::MoveNode(direction) => {
-                mapping.mark_changed();
                 let selection = self.tree.selection(layout);
                 if !self.tree.move_node(layout, selection, direction) {
                     if let Some(new_space) = next_space(direction) {
@@ -368,14 +375,12 @@ impl LayoutManager {
                 EventResponse::default()
             }
             LayoutCommand::Group(orientation) => {
-                mapping.mark_changed();
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     self.tree.set_container_kind(parent, ContainerKind::group(orientation));
                 }
                 EventResponse::default()
             }
             LayoutCommand::Ungroup => {
-                mapping.mark_changed();
                 if let Some(parent) = self.tree.selection(layout).parent(self.tree.map()) {
                     if self.tree.container_kind(parent).is_group() {
                         self.tree.set_container_kind(
@@ -415,7 +420,7 @@ impl LayoutManager {
     }
 
     fn try_layout(&self, space: SpaceId) -> Option<LayoutId> {
-        self.layout_mapping.get(&space).and_then(|m| m.active_layout())
+        self.layout_mapping.get(&space)?.active_layout().into()
     }
 
     fn layout(&self, space: SpaceId) -> LayoutId {

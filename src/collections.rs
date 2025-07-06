@@ -1,4 +1,6 @@
 use std::borrow::Borrow;
+
+#[allow(unused_imports)]
 pub(crate) use std::collections::{BTreeMap, BTreeSet, hash_map};
 
 // We don't need or want the random state of the default std collections.
