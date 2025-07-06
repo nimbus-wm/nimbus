@@ -6,8 +6,7 @@ import { remarkReadmeImport } from "./src/plugins/remark-readme-import.ts";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://glide-wm.github.io",
-  base: "glide",
+  site: "https://glidewm.org",
   integrations: [
     starlight({
       title: "glide",
