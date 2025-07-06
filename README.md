@@ -7,14 +7,18 @@ Glide is a tiling window manager for macOS. It takes inspiration from window
 managers like i3, Sway, and Hyprland.
 
 #### Status
-
-Glide is in early development and is not recommended for use.
 <!-- GUIDE_EXCLUDE_END -->
 
-## Quick start
+Glide is in "beta" and is recommended for early adopters.
 
-Optional: Copy [glide.default.toml](./glide.default.toml) to
-`$HOME/.glide.toml` and customize it to your needs.
+## Quick start with Cargo
+
+First, [install Rust](https://rustup.rs) and make sure you have the latest Xcode command line tools installed.
+
+Optional: Copy [glide.default.toml] to `$HOME/.glide.toml` and customize it to
+your needs.
+
+Then, run the following:
 
 ```
 git clone https://github.com/glide-wm/glide
@@ -23,7 +27,9 @@ cargo run --release
 ```
 
 Press Alt+Z to start managing the current space. Note: This will resize all your
-windows!
+windows! See [glide.default.toml] for a list of key bindings.
+
+[glide.default.toml]: ./glide.default.toml
 
 ## Save and restore
 
