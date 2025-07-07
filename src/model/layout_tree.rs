@@ -587,6 +587,7 @@ impl Drop for LayoutTree {
 #[derive(Default, Serialize, Deserialize)]
 struct Components {
     selection: Selection,
+    #[serde(alias = "layout")]
     size: Size,
     window: Window,
 }
