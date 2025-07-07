@@ -2,6 +2,7 @@
 //! window manager on certain spaces and launching app threads. It also
 //! controls hotkey registration.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use objc2_app_kit::NSScreen;
 use objc2_core_foundation::CGRect;
 use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
-use tracing::{Span, debug, info, instrument, trace, warn};
+use tracing::{Span, debug, error, info, instrument, trace, warn};
 
 pub type Sender = tokio::sync::mpsc::UnboundedSender<(Span, WmEvent)>;
 type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
@@ -52,6 +53,14 @@ pub enum WmCommand {
 #[serde(rename_all = "snake_case")]
 pub enum WmCmd {
     ToggleSpaceActivated,
+    Exec(ExecCmd),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExecCmd {
+    String(String),
+    Array(Vec<String>),
 }
 
 pub struct Config {
@@ -184,6 +193,9 @@ impl WmController {
                 }
                 self.send_event(Event::SpaceChanged(self.active_spaces(), self.get_windows()));
             }
+            Command(Wm(Exec(cmd))) => {
+                self.exec_cmd(cmd);
+            }
             Command(ReactorCommand(cmd)) => {
                 self.send_event(Event::Command(cmd));
             }
@@ -266,5 +278,41 @@ impl WmController {
         return sys::window_server::get_visible_windows_with_layer(None);
         #[cfg(test)]
         vec![]
+    }
+
+    fn exec_cmd(&self, cmd_args: ExecCmd) {
+        // Spawn so we don't block the main thread.
+        std::thread::spawn(move || {
+            let cmd_args = cmd_args.as_array();
+            let [cmd, args @ ..] = &*cmd_args else {
+                error!("Empty argument list passed to exec");
+                return;
+            };
+            let output = std::process::Command::new(cmd).args(args).output();
+            let output = match output {
+                Ok(o) => o,
+                Err(e) => {
+                    error!("Failed to execute command {cmd:?}: {e:?}");
+                    return;
+                }
+            };
+            if !output.status.success() {
+                error!(
+                    "Exec command exited with status {}: {cmd:?} {args:?}",
+                    output.status
+                );
+                error!("stdout: {}", String::from_utf8_lossy(&*output.stdout));
+                error!("stderr: {}", String::from_utf8_lossy(&*output.stderr));
+            }
+        });
+    }
+}
+
+impl ExecCmd {
+    fn as_array(&self) -> Cow<'_, [String]> {
+        match self {
+            ExecCmd::Array(vec) => Cow::Borrowed(&*vec),
+            ExecCmd::String(s) => s.split(' ').map(|s| s.to_owned()).collect::<Vec<_>>().into(),
+        }
     }
 }

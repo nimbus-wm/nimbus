@@ -71,6 +71,13 @@ mouse_hides_on_focus = true
 "Alt + F" = "toggle_fullscreen"
 
 #
+# Utilities
+#
+
+# Execute an arbitrary command. Accepts an array or space-delimited string as args.
+# "<key>" = { "exec" = ["bash", "-c", "echo 'hello world' >/tmp/test.txt"] }
+
+#
 # Developer commands
 #
 
