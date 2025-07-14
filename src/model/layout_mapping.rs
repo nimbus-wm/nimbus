@@ -79,6 +79,21 @@ impl SpaceLayoutMapping {
         });
     }
 
+    /// Selects the given layout for the current size.
+    ///
+    /// The selection is automatically retained.
+    pub fn select_layout(&mut self, layout: LayoutId) {
+        assert!(self.layouts.contains_key(&layout));
+        self.increment_ref(layout);
+        self.decrement_ref(self.active_layout);
+        self.active_layout = layout;
+        self.retain_layout();
+    }
+
+    pub fn layouts(&self) -> impl ExactSizeIterator<Item = LayoutId> {
+        self.layouts.keys().copied()
+    }
+
     pub fn active_layout(&self) -> LayoutId {
         self.active_layout
     }
@@ -274,5 +289,35 @@ mod tests {
         mapping.retain_layout();
         mapping.activate_size(SIZE_3, &mut tree);
         assert_eq!(mapping.layouts[&layout1], 3);
+    }
+
+    #[test]
+    fn garbage_collection_removes_layouts_when_unused() {
+        let mut tree = LayoutTree::new();
+        let mut mapping = SpaceLayoutMapping::new(SIZE_1, &mut tree);
+        let layout1 = mapping.active_layout();
+        assert_eq!(mapping.layouts().len(), 1);
+        assert_eq!(tree.layouts().len(), 1);
+
+        mapping.retain_layout();
+        mapping.activate_size(SIZE_2, &mut tree);
+        let layout2 = mapping.prepare_modify(&mut tree);
+        assert_eq!(mapping.layouts().len(), 2);
+        assert_eq!(tree.layouts().len(), 2);
+
+        mapping.activate_size(SIZE_1, &mut tree);
+        assert_eq!(mapping.active_layout(), layout1);
+        mapping.select_layout(layout2);
+        assert_eq!(mapping.active_layout(), layout2);
+
+        // At this point no sizes refer to layout1, but garbage collection
+        // should not happen until a new size is activated.
+        assert_eq!(mapping.layouts().len(), 2);
+        assert_eq!(tree.layouts().len(), 2);
+
+        mapping.activate_size(SIZE_2, &mut tree);
+        assert_eq!(mapping.active_layout(), layout2);
+        assert_eq!(mapping.layouts().len(), 1);
+        assert_eq!(tree.layouts().len(), 1);
     }
 }
