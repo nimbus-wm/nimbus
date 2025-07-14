@@ -19,8 +19,8 @@ use crate::sys::screen::SpaceId;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutCommand {
-    NextWindow,
-    PrevWindow,
+    NextLayout,
+    PrevLayout,
     MoveFocus(#[serde(rename = "direction")] Direction),
     Ascend,
     Descend,
@@ -66,7 +66,7 @@ impl LayoutCommand {
         match self {
             MoveNode(_) | Group(_) | Ungroup => true,
 
-            NextWindow | PrevWindow | MoveFocus(_) | Ascend | Descend | Split(_)
+            NextLayout | PrevLayout | MoveFocus(_) | Ascend | Descend | Split(_)
             | ToggleFocusFloating | ToggleWindowFloating | ToggleFullscreen => false,
         }
     }
@@ -321,21 +321,23 @@ impl LayoutManager {
             LayoutCommand::ToggleWindowFloating => unreachable!(),
             LayoutCommand::ToggleFocusFloating => unreachable!(),
 
-            LayoutCommand::NextWindow => {
-                // TODO
-                self.handle_command(
-                    Some(space),
-                    visible_spaces,
-                    LayoutCommand::MoveFocus(Direction::Left),
-                )
+            LayoutCommand::NextLayout => {
+                let layout = mapping.change_layout_index(1);
+                if let Some(wid) = self.focused_window
+                    && let Some(node) = self.tree.window_node(layout, wid)
+                {
+                    self.tree.select(node);
+                }
+                EventResponse::default()
             }
-            LayoutCommand::PrevWindow => {
-                // TODO
-                self.handle_command(
-                    Some(space),
-                    visible_spaces,
-                    LayoutCommand::MoveFocus(Direction::Right),
-                )
+            LayoutCommand::PrevLayout => {
+                let layout = mapping.change_layout_index(-1);
+                if let Some(wid) = self.focused_window
+                    && let Some(node) = self.tree.window_node(layout, wid)
+                {
+                    self.tree.select(node);
+                }
+                EventResponse::default()
             }
             LayoutCommand::MoveFocus(direction) => {
                 let new_focus =

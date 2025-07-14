@@ -98,6 +98,18 @@ impl SpaceLayoutMapping {
         self.active_layout
     }
 
+    pub fn active_layout_index(&self) -> usize {
+        self.layouts.get_index_of(&self.active_layout).unwrap()
+    }
+
+    pub fn change_layout_index(&mut self, offset: i16) -> LayoutId {
+        let cur = self.active_layout_index() as i16;
+        let next = (cur + offset).rem_euclid(self.layouts.len() as i16);
+        let layout = *self.layouts.get_index(next as usize).unwrap().0;
+        self.select_layout(layout);
+        self.active_layout
+    }
+
     /// Call this when the user does anything to indicate that they would like
     /// to continue using this layout on the current screen size.
     pub fn retain_layout(&mut self) {
@@ -319,5 +331,46 @@ mod tests {
         assert_eq!(mapping.active_layout(), layout2);
         assert_eq!(mapping.layouts().len(), 1);
         assert_eq!(tree.layouts().len(), 1);
+    }
+
+    #[test]
+    fn change_index() {
+        let mut tree = LayoutTree::new();
+        let mut mapping = SpaceLayoutMapping::new(SIZE_1, &mut tree);
+
+        // Make three layouts.
+        let layout1 = mapping.active_layout();
+        mapping.retain_layout();
+        mapping.activate_size(SIZE_2, &mut tree);
+        let layout2 = mapping.prepare_modify(&mut tree);
+        mapping.activate_size(SIZE_3, &mut tree);
+        let layout3 = mapping.prepare_modify(&mut tree);
+        mapping.activate_size(SIZE_1, &mut tree);
+
+        // Move forwards.
+        assert_eq!(mapping.active_layout(), layout1);
+        assert_eq!(mapping.active_layout_index(), 0);
+        mapping.change_layout_index(1);
+        assert_eq!(mapping.active_layout(), layout2);
+        assert_eq!(mapping.active_layout_index(), 1);
+        mapping.change_layout_index(1);
+        assert_eq!(mapping.active_layout(), layout3);
+        assert_eq!(mapping.active_layout_index(), 2);
+        mapping.change_layout_index(1);
+        assert_eq!(mapping.active_layout(), layout1);
+        assert_eq!(mapping.active_layout_index(), 0);
+
+        // Move backwards.
+        assert_eq!(mapping.active_layout(), layout1);
+        assert_eq!(mapping.active_layout_index(), 0);
+        mapping.change_layout_index(-1);
+        assert_eq!(mapping.active_layout(), layout3);
+        assert_eq!(mapping.active_layout_index(), 2);
+        mapping.change_layout_index(-1);
+        assert_eq!(mapping.active_layout(), layout2);
+        assert_eq!(mapping.active_layout_index(), 1);
+        mapping.change_layout_index(-1);
+        assert_eq!(mapping.active_layout(), layout1);
+        assert_eq!(mapping.active_layout_index(), 0);
     }
 }
