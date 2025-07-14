@@ -29,6 +29,7 @@ core-foundation = "0.9.4"
 core-graphics = "0.23.2"
 core-graphics-types = "0.1.3"
 dirs = "5.0.1"
+indexmap = { version = "2.10.0", features = ["serde"] }
 livesplit-hotkey = "0.8.0"
 objc2 = "0.6.1"
 objc2-app-kit = { version = "0.3.1", default-features = false, features = [

@@ -42,6 +42,10 @@ impl LayoutTree {
         self.layout_roots.remove(layout).unwrap().remove(&mut self.tree)
     }
 
+    pub fn layouts(&self) -> impl ExactSizeIterator<Item = LayoutId> {
+        self.layout_roots.keys()
+    }
+
     pub fn root(&self, layout: LayoutId) -> NodeId {
         self.layout_roots[layout].id()
     }
