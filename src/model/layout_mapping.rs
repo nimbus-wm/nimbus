@@ -49,7 +49,7 @@ impl SpaceLayoutMapping {
             let removed = self.memory.insert(self.active_size, saved);
             self.increment_ref(saved);
             if let Some(removed) = removed {
-                self.decrement_ref(removed, tree);
+                self.decrement_ref(removed);
             }
         }
 
@@ -59,14 +59,24 @@ impl SpaceLayoutMapping {
         if let Some(&retained) = self.memory.get(&size) {
             debug!("Loading saved layout");
             self.increment_ref(retained);
-            self.decrement_ref(self.active_layout, tree);
+            self.decrement_ref(self.active_layout);
             self.active_layout = retained;
         } else {
             // Keep whatever the active layout was before. No need to adjust refcounts.
             debug!("Reusing active layout");
         }
-
         debug!("Using layout {:?}", self.active_layout);
+
+        // Garbage collect.
+        self.layouts.retain(|&layout, &mut refcount| {
+            if refcount > 0 {
+                true
+            } else {
+                debug!("Garbage collecting {layout:?}");
+                tree.remove_layout(layout);
+                false
+            }
+        });
     }
 
     pub fn active_layout(&self) -> LayoutId {
@@ -102,14 +112,9 @@ impl SpaceLayoutMapping {
         *self.layouts.entry(layout).or_insert(0) += 1;
     }
 
-    fn decrement_ref(&mut self, layout: LayoutId, tree: &mut LayoutTree) {
+    fn decrement_ref(&mut self, layout: LayoutId) {
         let count = self.layouts.entry(layout).or_insert(1);
         *count -= 1;
-        if *count <= 0 {
-            debug!("Garbage collecting {layout:?}");
-            tree.remove_layout(layout);
-            self.layouts.shift_remove(&layout);
-        }
     }
 }
 
