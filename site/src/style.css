@@ -1,0 +1,16 @@
+:root {
+    /* Make the logo bigger and closer to the title. */
+    --sl-nav-pad-y: 0.4rem;
+    --sl-nav-gap: 0.6rem;
+}
+
+:root[data-theme="light"] {
+    /* Match the logo. */
+    --sl-color-text-accent: hsl(214 100% 55% / 1);
+}
+
+.site-title {
+    /* Bigger, less colorful title. */
+    font-size: var(--sl-text-3xl);
+    color: var(--sl-color-white);
+}

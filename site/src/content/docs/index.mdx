@@ -1,0 +1,35 @@
+---
+title: Glide
+description: Get started managing your windows with Glide.
+template: splash
+hero:
+  tagline: A breezy tiling window manager for macOS.
+  actions:
+    - text: Get Started
+      link: ./guides/getting-started/
+      icon: right-arrow
+    - text: Read the code
+      link: https://github.com/glide-wm/glide
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+    <Card title="Keyboard focused" icon="rocket">
+		Bring the responsiveness of tiling window managers like i3, Sway, and Hyprland to macOS. Speed up trackpad use with mouse-follows-focus and focus-follows-mouse.
+	</Card>
+	<Card title="Integrates with Spaces" icon="puzzle">
+		Adopt incrementally, using Mission Control and moving between spaces as you normally would.
+	</Card>
+	<Card title="Adapts to your environment" icon="laptop">
+		Customize your layout as you move between external monitor and on the go.
+	</Card>
+	<Card title="Reliable architecture" icon="setting">
+		Made with years of experience building window managers for macOS.
+	</Card>
+	<Card title="Go ahead, be flashy" icon="sun">
+   	Supports animations, too!
+	</Card>
+</CardGrid>
