@@ -21,6 +21,7 @@ use glide_wm::sys::app::WindowInfo;
 use glide_wm::sys::event::{self, get_mouse_pos};
 use glide_wm::sys::executor::Executor;
 use glide_wm::sys::screen::{self, ScreenCache};
+use glide_wm::sys::space;
 use glide_wm::sys::window_server::{self, WindowServerId, get_window};
 use glide_wm::sys::{self};
 use livesplit_hotkey::{ConsumePreference, Modifiers};
@@ -54,6 +55,8 @@ enum Command {
     Replay(Replay),
     #[command(subcommand)]
     Mouse(Mouse),
+    #[command()]
+    Space,
     #[command()]
     Inspect,
 }
@@ -257,9 +260,42 @@ async fn main() -> anyhow::Result<()> {
             println!("Press enter to exit");
             std::io::stdin().read_line(&mut String::new())?;
         }
+        Command::Space => handle_space_command(),
         Command::Inspect => inspect(MainThreadMarker::new().unwrap()),
     }
     Ok(())
+}
+
+fn handle_space_command() {
+    // Get current space
+    if let Some(current_space) = space::get_active_space() {
+        println!("Current space: {}", current_space.as_u64());
+
+        // Get space name if available
+        if let Some(name) = space::copy_space_name(current_space) {
+            println!("Current space name: {}", name.to_string());
+        }
+
+        // Get space type
+        let space_type = space::get_space_type(current_space);
+        println!("Current space type: {:?}", space_type);
+    } else {
+        println!("Could not get current space");
+    }
+
+    // Get space management mode
+    let management_mode = space::get_space_management_mode();
+    println!("Space management mode: {:?}", management_mode);
+
+    // List all spaces
+    println!("\nAll spaces:");
+    let all_spaces_cf = screen::diagnostic::all_spaces();
+    println!("Raw CFArray: {:?}", all_spaces_cf);
+
+    // List visible spaces
+    println!("\nVisible spaces:");
+    let visible_spaces_cf = screen::diagnostic::visible_spaces();
+    println!("Raw CFArray: {:?}", visible_spaces_cf);
 }
 
 fn inspect(mtm: MainThreadMarker) {
