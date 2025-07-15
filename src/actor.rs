@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod layout;
+pub mod menu_bar;
 pub mod mouse;
 pub mod notification_center;
 pub mod raise;

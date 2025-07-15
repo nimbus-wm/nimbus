@@ -18,7 +18,7 @@ type WeakSender = tokio::sync::mpsc::WeakUnboundedSender<(Span, WmEvent)>;
 type Receiver = tokio::sync::mpsc::UnboundedReceiver<(Span, WmEvent)>;
 
 use crate::actor::app::AppInfo;
-use crate::actor::{self, mouse, reactor};
+use crate::actor::{self, menu_bar, mouse, reactor};
 use crate::collections::HashSet;
 use crate::sys;
 use crate::sys::event::HotkeyManager;
@@ -86,6 +86,8 @@ pub struct WmController {
     login_window_pid: Option<pid_t>,
     login_window_active: bool,
     hotkeys: Option<HotkeyManager>,
+    menu_bar: menu_bar::MenuBarManager,
+    menu_bar_initialized: bool,
     mtm: MainThreadMarker,
 }
 
@@ -96,6 +98,8 @@ impl WmController {
         mouse_tx: mouse::Sender,
     ) -> (Self, Sender) {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mtm = MainThreadMarker::new().unwrap();
+        let menu_bar = menu_bar::MenuBarManager::new(mtm);
         let this = Self {
             config,
             events_tx,
@@ -110,7 +114,9 @@ impl WmController {
             login_window_pid: None,
             login_window_active: false,
             hotkeys: None,
-            mtm: MainThreadMarker::new().unwrap(),
+            menu_bar,
+            menu_bar_initialized: false,
+            mtm,
         };
         (this, sender)
     }
@@ -222,8 +228,24 @@ impl WmController {
     fn handle_space_changed(&mut self, spaces: Vec<Option<SpaceId>>) {
         self.cur_space = spaces;
         let Some(&Some(space)) = self.cur_space.first() else {
+            if self.menu_bar_initialized {
+                self.menu_bar.update_space_id(None);
+            }
             return;
         };
+
+        // Initialize menu bar on first space change if not already initialized
+        if !self.menu_bar_initialized {
+            self.menu_bar.initialize();
+            self.menu_bar_initialized = true;
+        }
+
+        // Update menu bar with current focused space
+        let focused_space = self.get_focused_space();
+        if self.menu_bar_initialized {
+            self.menu_bar.update_space_id(focused_space);
+        }
+
         if self.starting_space.is_none() {
             self.starting_space = Some(space);
             self.register_hotkeys();

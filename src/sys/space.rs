@@ -5,7 +5,6 @@
 //! for programmatic access to desktop spaces.
 
 use std::ffi::c_int;
-use std::num::NonZeroU64;
 
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::TCFType;
