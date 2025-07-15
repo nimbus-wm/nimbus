@@ -32,12 +32,14 @@ dirs = "5.0.1"
 indexmap = { version = "2.10.0", features = ["serde"] }
 livesplit-hotkey = "0.8.0"
 objc2 = "0.6.1"
+# DO NOT SET default-features to false.
 objc2-app-kit = { version = "0.3.1", default-features = true, features = [
     "NSApplication",
     "NSButton",
     "NSControl",
     "NSEvent",
     "NSGraphics",
+    "NSImage",
     "NSRunningApplication",
     "NSResponder",
     "NSScreen",
