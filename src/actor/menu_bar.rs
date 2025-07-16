@@ -51,9 +51,9 @@ impl MenuBarManager {
         };
 
         let title = if let Some(space_id) = space_id {
-            format!("Space {}", space_id.as_u64())
+            format!("{}", space_id.as_u64())
         } else {
-            "Space ?".to_string()
+            "?".to_string()
         };
 
         let ns_title = NSString::from_str(&title);
@@ -83,7 +83,7 @@ impl MenuBarManager {
     fn create_parachute_icon(&self) -> Option<Retained<NSImage>> {
         unsafe {
             // Load the SVG file
-            let svg_data = include_str!("../../site/src/assets/parachute.svg");
+            let svg_data = include_str!("../../site/src/assets/parachute-small.svg");
             let ns_data = NSData::dataWithBytes_length(
                 svg_data.as_ptr() as *const std::ffi::c_void,
                 svg_data.len(),
@@ -93,7 +93,7 @@ impl MenuBarManager {
                 // Set the image size to be appropriate for menu bar (16x16 points)
                 image.setSize(objc2_core_foundation::CGSize { width: 16.0, height: 16.0 });
                 // Set as template image so it follows system appearance
-                image.setTemplate(true);
+                // image.setTemplate(true);
                 return Some(image);
             }
 
