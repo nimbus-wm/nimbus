@@ -311,7 +311,7 @@ unsafe extern "C" {
 bitflags! {
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     #[repr(transparent)]
-    struct CGSSpaceMask: c_int {
+    pub struct CGSSpaceMask: c_int {
         const INCLUDE_CURRENT = 1 << 0;
         const INCLUDE_OTHERS  = 1 << 1;
 

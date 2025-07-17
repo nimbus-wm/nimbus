@@ -55,8 +55,8 @@ enum Command {
     Replay(Replay),
     #[command(subcommand)]
     Mouse(Mouse),
-    #[command()]
-    Space,
+    #[command(subcommand)]
+    Space(Space),
     #[command()]
     Inspect,
 }
@@ -113,6 +113,53 @@ enum Mouse {
     Clicks,
     #[command()]
     Hide,
+}
+
+#[derive(Subcommand, Clone)]
+enum Space {
+    #[command()]
+    List {
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    #[command()]
+    Current,
+    #[command()]
+    Switch { space_ref: String },
+    #[command()]
+    Create {
+        #[arg(short, long)]
+        name: Option<String>,
+        #[arg(short, long)]
+        space_type: Option<String>,
+    },
+    #[command()]
+    Destroy { space_ref: String },
+    #[command()]
+    Rename { space_ref: String, name: String },
+    #[command()]
+    SetLevel { space_ref: String, level: i32 },
+    #[command()]
+    SetType {
+        space_ref: String,
+        space_type: String,
+    },
+    #[command()]
+    Info { space_ref: String },
+    #[command()]
+    Owners { space_ref: String },
+    #[command()]
+    AddWindows {
+        space_ref: String,
+        #[arg(required = true)]
+        window_ids: Vec<u32>,
+    },
+    #[command()]
+    RemoveWindows {
+        space_ref: String,
+        #[arg(required = true)]
+        window_ids: Vec<u32>,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -260,42 +307,308 @@ async fn main() -> anyhow::Result<()> {
             println!("Press enter to exit");
             std::io::stdin().read_line(&mut String::new())?;
         }
-        Command::Space => handle_space_command(),
+        Command::Space(space_cmd) => handle_space_command(space_cmd),
         Command::Inspect => inspect(MainThreadMarker::new().unwrap()),
     }
     Ok(())
 }
 
-fn handle_space_command() {
-    // Get current space
-    if let Some(current_space) = space::get_active_space() {
-        println!("Current space: {}", current_space.as_u64());
-
-        // Get space name if available
-        if let Some(name) = space::copy_space_name(current_space) {
-            println!("Current space name: {}", name.to_string());
+fn parse_space_ref(space_ref: &str, all_spaces: &[screen::SpaceId]) -> Option<screen::SpaceId> {
+    if space_ref.starts_with('@') {
+        // Parse as space ID
+        let space_id_str = &space_ref[1..];
+        if let Ok(space_id) = space_id_str.parse::<u64>() {
+            screen::SpaceId::from_u64(space_id)
+        } else {
+            None
         }
-
-        // Get space type
-        let space_type = space::get_space_type(current_space);
-        println!("Current space type: {:?}", space_type);
     } else {
-        println!("Could not get current space");
+        // Parse as index (1-based)
+        if let Ok(index) = space_ref.parse::<usize>() {
+            if index > 0 && index <= all_spaces.len() {
+                Some(all_spaces[index - 1])
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
+}
 
-    // Get space management mode
-    let management_mode = space::get_space_management_mode();
-    println!("Space management mode: {:?}", management_mode);
+fn handle_space_command(space_cmd: Space) {
+    match space_cmd {
+        Space::List { verbose } => {
+            let current_space = space::get_active_space();
+            let management_mode = space::get_space_management_mode();
+            let all_spaces = space::get_all_spaces();
+            let visible_spaces = space::get_visible_spaces();
 
-    // List all spaces
-    println!("\nAll spaces:");
-    let all_spaces_cf = screen::diagnostic::all_spaces();
-    println!("Raw CFArray: {:?}", all_spaces_cf);
+            println!("Space management mode: {:?}", management_mode);
+            if let Some(current) = current_space {
+                println!("Current space: {}", current.as_u64());
+            }
 
-    // List visible spaces
-    println!("\nVisible spaces:");
-    let visible_spaces_cf = screen::diagnostic::visible_spaces();
-    println!("Raw CFArray: {:?}", visible_spaces_cf);
+            println!("\nAll spaces ({} total):", all_spaces.len());
+            for (i, space_id) in all_spaces.iter().enumerate() {
+                let space_type = space::get_space_type(*space_id);
+                let name = space::copy_space_name(*space_id)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("Space {}", space_id.as_u64()));
+
+                let current_indicator = if Some(*space_id) == current_space {
+                    " (current)"
+                } else {
+                    ""
+                };
+
+                let visible_indicator = if visible_spaces.contains(space_id) {
+                    " [visible]"
+                } else {
+                    ""
+                };
+
+                if verbose {
+                    let level = space::get_space_absolute_level(*space_id);
+                    let compat_id = space::get_space_compat_id(*space_id);
+                    let display = space::copy_managed_display_for_space(*space_id)
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    println!(
+                        "  {}: {} - {:?} (ID: {}, level: {}, compat: {}, display: {}){}{}",
+                        i + 1,
+                        name,
+                        space_type,
+                        space_id.as_u64(),
+                        level,
+                        compat_id,
+                        display,
+                        current_indicator,
+                        visible_indicator
+                    );
+                } else {
+                    println!(
+                        "  {}: {} - {:?} (ID: {}){}{}",
+                        i + 1,
+                        name,
+                        space_type,
+                        space_id.as_u64(),
+                        current_indicator,
+                        visible_indicator
+                    );
+                }
+            }
+        }
+        Space::Current => {
+            if let Some(current_space) = space::get_active_space() {
+                let all_spaces = space::get_all_spaces();
+                let index =
+                    all_spaces.iter().position(|&s| s == current_space).map(|i| i + 1).unwrap_or(0);
+
+                println!("Current space: {} (ID: {})", index, current_space.as_u64());
+                if let Some(name) = space::copy_space_name(current_space) {
+                    println!("Name: {}", name.to_string());
+                }
+                let space_type = space::get_space_type(current_space);
+                println!("Type: {:?}", space_type);
+                let level = space::get_space_absolute_level(current_space);
+                println!("Level: {}", level);
+                let compat_id = space::get_space_compat_id(current_space);
+                println!("Compatibility ID: {}", compat_id);
+                if let Some(display) = space::copy_managed_display_for_space(current_space) {
+                    println!("Display: {}", display.to_string());
+                }
+            } else {
+                println!("Could not get current space");
+            }
+        }
+        Space::Switch { space_ref } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                space::set_current_space(space);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Switched to space {} (ID: {})", index, space.as_u64());
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::Create { name, space_type } => {
+            use core_foundation::dictionary::CFDictionary;
+            use core_foundation::number::CFNumber;
+            use core_foundation::string::CFString;
+
+            let mut options: Vec<(CFString, CFNumber)> = Vec::new();
+
+            if let Some(st) = space_type {
+                let type_num = match st.as_str() {
+                    "user" => 0,
+                    "fullscreen" => 1,
+                    "system" => 2,
+                    _ => {
+                        println!("Invalid space type. Use: user, fullscreen, system");
+                        return;
+                    }
+                };
+                options.push((CFString::new("type"), CFNumber::from(type_num)));
+            }
+
+            let options_dict = if options.is_empty() {
+                None
+            } else {
+                Some(CFDictionary::from_CFType_pairs(&options))
+            };
+
+            if let Some(new_space) = space::create_space(options_dict) {
+                println!("Created space: {}", new_space.as_u64());
+
+                // Set name after creation if provided
+                if let Some(n) = name {
+                    if let Err(err) = space::set_space_name(new_space, &n) {
+                        println!("Warning: Failed to set space name: error {}", err);
+                    }
+                }
+            } else {
+                println!("Failed to create space");
+            }
+        }
+        Space::Destroy { space_ref } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                space::destroy_space(space);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Destroyed space {} (ID: {})", index, space.as_u64());
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::Rename { space_ref, name } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                match space::set_space_name(space, &name) {
+                    Ok(_) => {
+                        let index =
+                            all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                        println!("Renamed space {} (ID: {}) to '{}'", index, space.as_u64(), name);
+                    }
+                    Err(err) => println!("Failed to rename space: error {}", err),
+                }
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::SetLevel { space_ref, level } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                space::set_space_absolute_level(space, level);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Set space {} (ID: {}) level to {}", index, space.as_u64(), level);
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::SetType { space_ref, space_type } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                let st = match space_type.as_str() {
+                    "user" => space::SpaceType::User,
+                    "fullscreen" => space::SpaceType::Fullscreen,
+                    "system" => space::SpaceType::System,
+                    _ => {
+                        println!("Invalid space type. Use: user, fullscreen, system");
+                        return;
+                    }
+                };
+                space::set_space_type(space, st);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Set space {} (ID: {}) type to {:?}", index, space.as_u64(), st);
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::Info { space_ref } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Space {} (ID: {}) info:", index, space.as_u64());
+
+                if let Some(name) = space::copy_space_name(space) {
+                    println!("  Name: {}", name.to_string());
+                }
+
+                let space_type = space::get_space_type(space);
+                println!("  Type: {:?}", space_type);
+
+                let level = space::get_space_absolute_level(space);
+                println!("  Level: {}", level);
+
+                let compat_id = space::get_space_compat_id(space);
+                println!("  Compatibility ID: {}", compat_id);
+
+                if let Some(display) = space::copy_managed_display_for_space(space) {
+                    println!("  Display: {}", display.to_string());
+                }
+
+                let transform = space::get_space_transform(space);
+                println!(
+                    "  Transform: a={}, b={}, c={}, d={}, tx={}, ty={}",
+                    transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty
+                );
+
+                // Temporarily disabled due to segfault
+                // if let Some(values) = space::copy_space_values(space) {
+                //     println!("  Values: {:?}", values);
+                // } else {
+                //     println!("  Values: none");
+                // }
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::Owners { space_ref } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                let owners = space::copy_space_owners(space);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!("Space {} (ID: {}) owners:", index, space.as_u64());
+                for (i, owner) in owners.iter().enumerate() {
+                    println!("  {}: PID {}", i + 1, owner);
+                }
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::AddWindows { space_ref, window_ids } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                space::add_windows_to_spaces(&window_ids, &[space]);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!(
+                    "Added {} windows to space {} (ID: {})",
+                    window_ids.len(),
+                    index,
+                    space.as_u64()
+                );
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+        Space::RemoveWindows { space_ref, window_ids } => {
+            let all_spaces = space::get_all_spaces();
+            if let Some(space) = parse_space_ref(&space_ref, &all_spaces) {
+                space::remove_windows_from_spaces(&window_ids, &[space]);
+                let index = all_spaces.iter().position(|&s| s == space).map(|i| i + 1).unwrap_or(0);
+                println!(
+                    "Removed {} windows from space {} (ID: {})",
+                    window_ids.len(),
+                    index,
+                    space.as_u64()
+                );
+            } else {
+                println!("Invalid space reference: {} (use index or @ID)", space_ref);
+            }
+        }
+    }
 }
 
 fn inspect(mtm: MainThreadMarker) {
