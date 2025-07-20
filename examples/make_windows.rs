@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use accessibility::{AXUIElement, AXUIElementActions, AXUIElementAttributes};
+use glide_wm::sys::space::SpaceId;
 use glide_wm::sys::window_server::{self, WindowServerId};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -140,6 +141,11 @@ fn demo(window_numbers: Vec<WindowServerId>) {
         std::thread::sleep(Duration::from_secs(secs))
     };
 
+    glide_wm::sys::space::add_windows_to_spaces(
+        &[window_numbers[2].as_u32()],
+        &[SpaceId::from_u64(322).unwrap()],
+    );
+
     sleep(2);
 
     let pid = std::process::id() as i32;
@@ -159,6 +165,11 @@ fn demo(window_numbers: Vec<WindowServerId>) {
 
     println!("Making #2 key window");
     window_server::make_key_window(pid, wsid).expect("make_key_window failed");
+
+    glide_wm::sys::space::add_windows_to_spaces(
+        &[window_numbers[2].as_u32()],
+        &[SpaceId::from_u64(3).unwrap()],
+    );
 }
 
 fn main() {
