@@ -505,39 +505,59 @@ impl LayoutTree {
         new_frame: CGRect,
         screen: CGRect,
     ) {
-        let mut count = 0;
-        let mut check_and_resize = |direction, delta, whole| {
-            if delta != 0.0 {
-                count += 1;
-                self.resize(node, f64::from(delta) / f64::from(whole), direction);
-            }
+        let mut check_or_resize = |resize: bool| {
+            let mut count = 0;
+            let mut first_direction: Option<Direction> = None;
+            let mut good = true;
+            let mut check_and_resize = |direction: Direction, delta, whole| {
+                if delta != 0.0 {
+                    count += 1;
+                    if count > 2 {
+                        good = false;
+                    }
+                    if let Some(first) = first_direction {
+                        if first.orientation() == direction.orientation() {
+                            good = false;
+                        }
+                    } else {
+                        first_direction = Some(direction);
+                    }
+                    if resize {
+                        self.resize(node, f64::from(delta) / f64::from(whole), direction);
+                    }
+                }
+            };
+            check_and_resize(
+                Direction::Left,
+                old_frame.min().x - new_frame.min().x,
+                screen.size.width,
+            );
+            check_and_resize(
+                Direction::Right,
+                new_frame.max().x - old_frame.max().x,
+                screen.size.width,
+            );
+            check_and_resize(
+                Direction::Up,
+                old_frame.min().y - new_frame.min().y,
+                screen.size.height,
+            );
+            check_and_resize(
+                Direction::Down,
+                new_frame.max().y - old_frame.max().y,
+                screen.size.height,
+            );
+            good
         };
-        check_and_resize(
-            Direction::Left,
-            old_frame.min().x - new_frame.min().x,
-            screen.size.width,
-        );
-        check_and_resize(
-            Direction::Right,
-            new_frame.max().x - old_frame.max().x,
-            screen.size.width,
-        );
-        check_and_resize(
-            Direction::Up,
-            old_frame.min().y - new_frame.min().y,
-            screen.size.height,
-        );
-        check_and_resize(
-            Direction::Down,
-            new_frame.max().y - old_frame.max().y,
-            screen.size.height,
-        );
-        if count > 2 {
+        if !check_or_resize(false) {
+            // This function doesn't work correctly for anything other than changing one edge or corner at a time.
             warn!(
                 "Only resizing in 2 directions is supported, but was asked \
                 to resize from {old_frame:?} to {new_frame:?}"
             );
+            return;
         }
+        check_or_resize(true);
     }
 
     pub fn print_tree(&self, layout: LayoutId) {
@@ -1151,6 +1171,15 @@ mod tests {
             (WindowId::new(2, 3), rect(1000, 2000, 1000, 1000)),
             (WindowId::new(1, 3), rect(2000, 0, 1000, 3000)),
         ];
+        assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
+
+        // Moves should be rejected and ignored.
+        tree.set_frame_from_resize(
+            c1,
+            rect(1000, 1000, 500, 1000),
+            rect(1000, 1100, 500, 1000),
+            screen,
+        );
         assert_frames_are(tree.calculate_layout(layout, screen), orig.clone());
 
         tree.set_frame_from_resize(a1, rect(0, 0, 1000, 3000), rect(0, 0, 1010, 3000), screen);
