@@ -57,14 +57,14 @@ impl<'a> Animation<'a> {
         }
 
         for &(handle, wid, from, to, is_focus, txid) in &self.windows {
-            handle.send(Request::BeginWindowAnimation(wid)).unwrap();
+            _ = handle.send(Request::BeginWindowAnimation(wid));
             // Resize new windows immediately.
             if is_focus {
                 let frame = CGRect {
                     origin: from.origin,
                     size: to.size,
                 };
-                handle.send(Request::SetWindowFrame(wid, frame, txid)).unwrap();
+                _ = handle.send(Request::SetWindowFrame(wid, frame, txid));
             }
         }
 
@@ -91,22 +91,22 @@ impl<'a> Animation<'a> {
                 // clipped during the animation.
                 if frame * 2 == self.frames || frame == self.frames {
                     rect.size = to.size;
-                    handle.send(Request::SetWindowFrame(wid, rect, txid)).unwrap();
+                    _ = handle.send(Request::SetWindowFrame(wid, rect, txid));
                 } else {
-                    handle.send(Request::SetWindowPos(wid, rect.origin, txid)).unwrap();
+                    _ = handle.send(Request::SetWindowPos(wid, rect.origin, txid));
                 }
             }
         }
 
         for &(handle, wid, ..) in &self.windows {
-            handle.send(Request::EndWindowAnimation(wid)).unwrap();
+            _ = handle.send(Request::EndWindowAnimation(wid));
         }
     }
 
     #[allow(dead_code)]
     pub fn skip_to_end(self) {
         for &(handle, wid, _from, to, _, txid) in &self.windows {
-            handle.send(Request::SetWindowFrame(wid, to, txid)).unwrap();
+            _ = handle.send(Request::SetWindowFrame(wid, to, txid));
         }
     }
 }
