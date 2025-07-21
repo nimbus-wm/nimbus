@@ -21,6 +21,8 @@ use objc2_core_foundation::{CGPoint, CGRect};
 use objc2_foundation::MainThreadMarker;
 use serde::{Deserialize, Serialize};
 
+use crate::sys::app::ProcessSerialNumber;
+
 use super::geometry::{CGRectDef, ToICrate};
 use super::screen::CoordinateConverter;
 
@@ -151,8 +153,6 @@ pub fn get_window_at_point(
 
 unsafe extern "C" {
     fn _AXUIElementGetWindow(elem: AXUIElementRef, wid: *mut CGWindowID) -> AXError;
-
-    fn GetProcessForPID(pid: pid_t, psn: *mut ProcessSerialNumber) -> CGError;
 }
 
 /// Set the key window of the window server and application.
@@ -171,22 +171,14 @@ pub fn make_key_window(pid: pid_t, wsid: WindowServerId) -> Result<(), ()> {
     let mut event2 = event1.clone();
     event2[0x08] = 0x02;
 
-    let mut psn = ProcessSerialNumber::default();
+    let psn = ProcessSerialNumber::for_pid(pid)?;
     let check = |err| if err == 0 { Ok(()) } else { Err(()) };
     unsafe {
-        check(GetProcessForPID(pid, &mut psn))?;
         check(_SLPSSetFrontProcessWithOptions(&psn, wsid.0, kCPSUserGenerated))?;
         check(SLPSPostEventRecordTo(&psn, event1.as_ptr()))?;
         check(SLPSPostEventRecordTo(&psn, event2.as_ptr()))?;
     }
     Ok(())
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct ProcessSerialNumber {
-    high: u32,
-    low: u32,
 }
 
 #[link(name = "SkyLight", kind = "framework")]

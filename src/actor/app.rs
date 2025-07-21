@@ -36,8 +36,8 @@ use tracing::{Instrument, Span, debug, error, info, instrument, trace, warn};
 
 use crate::actor::reactor::{self, Event, Requested, TransactionId};
 use crate::collections::HashMap;
-use crate::sys::app::NSRunningApplicationExt;
 pub use crate::sys::app::{AppInfo, WindowInfo, pid_t};
+use crate::sys::app::{NSRunningApplicationExt, ProcessInfo};
 use crate::sys::event;
 use crate::sys::executor::Executor;
 use crate::sys::geometry::{ToCGType, ToICrate};
@@ -885,13 +885,27 @@ impl State {
 fn app_thread_main(pid: pid_t, info: AppInfo, events_tx: reactor::Sender) {
     let app = AXUIElement::application(pid);
     let Some(running_app) = NSRunningApplication::with_process_id(pid) else {
-        debug!(?pid, "Making NSRunningApplication failed; exiting app thread");
+        info!(?pid, "Making NSRunningApplication failed; exiting app thread");
         return;
     };
+    let bundle_id = unsafe { running_app.bundleIdentifier() };
+
+    let Ok(process_info) = ProcessInfo::for_pid(pid) else {
+        info!(?pid, ?bundle_id, "Could not get ProcessInfo; exiting app thread");
+        return;
+    };
+    if process_info.is_xpc {
+        // XPC processes are not supposed to have windows so at best they are
+        // extra work and noise. Worse, Apple's QuickLookUIService reports
+        // having standard windows (these seem to be for Finder previews), but
+        // they are non-standard and unmanageable.
+        info!(?pid, ?bundle_id, "Filtering out XPC process");
+        return;
+    }
 
     // Set up the observer callback.
     let Ok(observer) = Observer::new(pid) else {
-        debug!(?pid, "Making observer failed; exiting app thread");
+        info!(?pid, ?bundle_id, "Making observer failed; exiting app thread");
         return;
     };
     let (notifications_tx, notifications_rx) = channel();
