@@ -22,10 +22,18 @@ use crate::sys::geometry::ToICrate;
 #[repr(transparent)]
 pub struct SpaceId(NonZeroU64);
 
-#[cfg(test)]
 impl SpaceId {
+    #[cfg(test)]
     pub fn new(id: u64) -> SpaceId {
         SpaceId(NonZeroU64::new(id).unwrap())
+    }
+
+    pub fn from_u64(id: u64) -> Option<SpaceId> {
+        NonZeroU64::new(id).map(SpaceId)
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0.get()
     }
 }
 
@@ -303,7 +311,7 @@ unsafe extern "C" {
 bitflags! {
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     #[repr(transparent)]
-    struct CGSSpaceMask: c_int {
+    pub struct CGSSpaceMask: c_int {
         const INCLUDE_CURRENT = 1 << 0;
         const INCLUDE_OTHERS  = 1 << 1;
 
