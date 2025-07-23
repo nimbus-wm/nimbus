@@ -22,6 +22,7 @@ use crate::actor::{self, mouse, reactor};
 use crate::collections::HashSet;
 use crate::sys;
 use crate::sys::event::HotkeyManager;
+use crate::sys::menu_bar::StatusIcon;
 use crate::sys::screen::{CoordinateConverter, NSScreenExt, ScreenId, SpaceId};
 use crate::sys::window_server::WindowServerInfo;
 
@@ -87,6 +88,7 @@ pub struct WmController {
     login_window_active: bool,
     hotkeys: Option<HotkeyManager>,
     mtm: MainThreadMarker,
+    status_icon: Option<StatusIcon>,
 }
 
 impl WmController {
@@ -111,6 +113,7 @@ impl WmController {
             login_window_active: false,
             hotkeys: None,
             mtm: MainThreadMarker::new().unwrap(),
+            status_icon: None,
         };
         (this, sender)
     }
@@ -132,6 +135,9 @@ impl WmController {
         use self::WmEvent::*;
         match event {
             AppEventsRegistered => {
+                let mut icon = StatusIcon::new(self.mtm);
+                icon.update_space_id(self.cur_space.first().copied().flatten());
+                self.status_icon.replace(icon);
                 for (pid, info) in sys::app::running_apps(None) {
                     self.new_app(pid, info);
                 }
@@ -224,6 +230,9 @@ impl WmController {
         let Some(&Some(space)) = self.cur_space.first() else {
             return;
         };
+        if let Some(icon) = &mut self.status_icon {
+            icon.update_space_id(Some(space));
+        }
         if self.starting_space.is_none() {
             self.starting_space = Some(space);
             self.register_hotkeys();
